@@ -1,4 +1,4 @@
-// Thistledown: the game loop, movement, and what happens at each place.
+// AgentTown: the game loop, movement, and what happens at each place.
 // Every decision shown comes from the town's real services (see src/town.js).
 import {
   TILE, COLS, ROWS, BOARD, KEY_SPOT, POND, SPAWN, BURGLAR_START,
@@ -200,7 +200,7 @@ const SCRIPTS = {
 async function townHall() {
   const J = (text, o = {}) => say({ face: '🦉', who: 'Registrar Juniper', where: 'Town Hall · Registry A (United States)', text, ...o });
   if (!S.principal) {
-    const r = await J("Welcome to Thistledown! I'm Juniper, the registrar.\n\nBefore an agent can act for you here, the registry needs to know **who stands behind it**. That's you, the person at the keyboard. What's your name? Only this registry keeps it.", {
+    const r = await J("Welcome to AgentTown! I'm Juniper, the registrar.\n\nBefore an agent can act for you here, the registry needs to know **who stands behind it**. That's you, the person at the keyboard. What's your name? Only this registry keeps it.", {
       input: { label: 'Your name', placeholder: 'e.g. Robin Ash' },
       choices: [{ label: 'Verify me', value: 'go', primary: true }, { label: 'Not yet', value: null, cancel: true }],
     });
@@ -463,7 +463,7 @@ async function frontDoor() {
       const c = await api.post('/api/door', { account: 'you', useKey: true });
       await refresh();
       bubble(player, c);
-      await card(c, { note: 'In Thistledown a key is a bearer token. Whoever holds it could be anyone, so on its own it opens nothing.' });
+      await card(c, { note: 'In AgentTown a key is a bearer token. Whoever holds it could be anyone, so on its own it opens nothing.' });
       continue;
     }
     const req = await api.post('/api/knock');
@@ -560,7 +560,7 @@ async function keyFound() {
   try {
     const r = await say({
       face: '🔑', who: 'A key tag', where: 'The lower street',
-      text: "Something glints on the path: a key tag reading **Hearth & Key · maple**. It must be Maple's spare.\n\nIn Thistledown a key works like an API token: it says which home it's for, not who is holding it.",
+      text: "Something glints on the path: a key tag reading **Hearth & Key · maple**. It must be Maple's spare.\n\nIn AgentTown a key works like an API token: it says which home it's for, not who is holding it.",
       choices: [{ label: 'Pick it up', value: true, primary: true }, { label: 'Leave it', value: false, cancel: true }],
     });
     if (r.value) {
@@ -578,7 +578,7 @@ async function keyFound() {
 
 function noticeBoard() {
   return say({
-    face: '📋', who: 'Notice board', where: 'Thistledown',
+    face: '📋', who: 'Notice board', where: 'AgentTown',
     html: `<ul class="notices">
       <li><b>Town Hall</b>: verified once, agents registered in a blink.</li>
       <li><b>Records Office</b>: grants, and a receipt for everything.</li>
@@ -595,7 +595,7 @@ function pond() {
   const text = !S.agent ? "You see a small round creature with no badge. Nobody here knows who it answers to yet."
     : S.agent.status === 'revoked' ? `You see ${S.agent.name}, antenna glowing red. Revoked.`
       : S.badge ? `You see ${S.agent.name}, badge on, antenna glowing green.` : `You see ${S.agent.name}, badge tucked away.`;
-  return say({ face: '🪷', who: 'The pond', where: 'Thistledown', text });
+  return say({ face: '🪷', who: 'The pond', where: 'AgentTown', text });
 }
 
 async function toggleBadge() {
@@ -634,7 +634,7 @@ async function nightfall() {
   player.y = home.front.y + 4;
   player.facing = { x: 1, y: 0 };
   camFocus = { x: home.front.x + 50, y: home.front.y - 10 };
-  toast('Night falls on Thistledown…', 'info');
+  toast('Night falls on AgentTown…', 'info');
   const res = await api.post('/api/night');
   await wait(1500);
   npcs = res.results.map((r, i) => ({
@@ -886,7 +886,7 @@ function frame(now) {
 
 function welcome() {
   return say({
-    face: '🌼', who: 'Welcome to Thistledown', where: 'where every agent answers to someone',
+    face: '🌼', who: 'Welcome to AgentTown', where: 'where every agent answers to someone',
     text: "You're playing an **agent**: the little round one in the middle. You, at the keyboard, are its **principal**: the person who answers for what it does.\n\nYour **phone** (bottom right) is where places ask the principal for an OK. Approvals use a real passkey on this device.\n\nWalk with **WASD** or the **arrow keys**, or click where you want to go. Press **E** to talk and **B** to take your badge off. Start at **Town Hall**, up the lane.",
     choices: [{ label: "Let's go", value: true, primary: true }],
   }).then(closeDialog);

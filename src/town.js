@@ -1,4 +1,4 @@
-// Thistledown's side of the game: one in-process federation from aaf-reference,
+// AgentTown's side of the game: one in-process federation from aaf-reference,
 // the player as principal, the player's agent, and the places in town, each a
 // real relying party with its own policy. Every game action is a real
 // presentation to a real service, so what the player sees is that service's
@@ -20,7 +20,7 @@ const HELPER_LIFETIME_SECONDS = 240;
 
 export const SHOPS = {
   bramble: {
-    id: 'bramblebooks.thistledown.test', name: 'Bramble Books', category: 'books',
+    id: 'bramblebooks.agenttown.test', name: 'Bramble Books', category: 'books',
     items: [
       { id: 'guide', name: 'Pocket guide to mushrooms', price: 12 },
       { id: 'atlas', name: 'Atlas of old maps', price: 34 },
@@ -28,7 +28,7 @@ export const SHOPS = {
     ],
   },
   kettle: {
-    id: 'copperkettle.thistledown.test', name: 'Copper Kettle Goods', category: 'home',
+    id: 'copperkettle.agenttown.test', name: 'Copper Kettle Goods', category: 'home',
     items: [
       { id: 'kettle', name: 'Copper kettle', price: 28 },
       { id: 'lantern', name: 'Brass lantern', price: 45 },
@@ -46,7 +46,7 @@ const HOME_CONTENTS = {
 const attempt = (p) => p.catch((err) => ({ decision: 'refused', classification: null, reasons: [err.message], code: err.code ?? null }));
 
 export async function createTown({ origin, portOffset = 7000, quiet = true }) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aaf-town-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenttown-'));
   const federation = await startFederationInProcess({ dataDir, portOffset, quiet });
   const world = createWorld({ trust: federation.trustList, keysDir: federation.paths.keysDir });
   const { regA, ledgerline } = world;
@@ -67,7 +67,7 @@ export async function createTown({ origin, portOffset = 7000, quiet = true }) {
   let homes;
   const accountOf = (rp, p) => p.account ?? rp.accounts.byToken(p.account_token)?.id;
   const hearth = await world.relyingParty({
-    id: 'hearth.thistledown.test', name: 'Hearth & Key (homes)',
+    id: 'hearth.agenttown.test', name: 'Hearth & Key (homes)',
     accounts: { rpId: new URL(origin).hostname, origin },
     rules: {
       'home.enter': [{ label: 'a home: its owner, or an agent the owner let in', require: { accountability: 'agent_or_human', account: 'owner' } }],
@@ -274,7 +274,7 @@ export async function createTown({ origin, portOffset = 7000, quiet = true }) {
       if (s.grant) throw new HttpError(409, 'already_granted', 'Your agent already has a grant.');
       const b = BUDGETS.includes(Number(budget)) ? Number(budget) : 50;
       const permissions = [{ action: 'commerce.purchase', constraints: { max_amount: money(b), categories: CATEGORIES } }, { action: 'home.*' }];
-      const res = await s.principal.grant(s.agent, { rk: ledgerline, permissions, delegation: { allowed: true, max_depth: 1 }, purpose: 'Errands around Thistledown', validForDays: 30 });
+      const res = await s.principal.grant(s.agent, { rk: ledgerline, permissions, delegation: { allowed: true, max_depth: 1 }, purpose: 'Errands around AgentTown', validForDays: 30 });
       s.grant = { budget: b, id: res.grant_id, permissions: permissions.map(toRar).map(describePermission) };
       return s.grant;
     },

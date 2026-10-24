@@ -1,4 +1,4 @@
-# Thistledown
+# AgentTown
 
 A cozy town where you play an accountable agent. It is a launch demo for the *Accountable Agents* framework, and it is a separate project from the framework's reference implementation.
 

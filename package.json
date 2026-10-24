@@ -1,7 +1,7 @@
 {
-  "name": "aaf-town",
+  "name": "agenttown",
   "version": "0.1.0",
-  "description": "Thistledown: a cozy town where you play an accountable agent. Every door, shop and records office is a real relying party in the Accountable Agents Framework reference implementation.",
+  "description": "AgentTown: a cozy town where you play an accountable agent. Every door, shop and records office is a real relying party in the Accountable Agents Framework reference implementation.",
   "type": "module",
   "private": true,
   "engines": {

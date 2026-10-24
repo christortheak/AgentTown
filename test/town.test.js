@@ -1,11 +1,11 @@
-// A full day in Thistledown through the game's API, with a software
+// A full day in AgentTown through the game's API, with a software
 // authenticator that sends exactly what a browser sends from the game's origin.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SoftwareAuthenticator } from 'aaf-reference/src/lib/webauthn.js';
 import { startServer } from '../src/server.js';
 
-test('a day in Thistledown', { timeout: 60000 }, async () => {
+test('a day in AgentTown', { timeout: 60000 }, async () => {
   const game = await startServer({ port: 4499, portOffset: 7500, quiet: true });
   const call = async (method, p, body) => {
     const res = await fetch(game.url + p, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -18,7 +18,7 @@ test('a day in Thistledown', { timeout: 60000 }, async () => {
     return post(`/api/approvals/${rid}/approve`, { credential: you.get(o.publicKey, game.origin) });
   };
   try {
-    assert.match(await (await fetch(game.url + '/')).text(), /Thistledown/);
+    assert.match(await (await fetch(game.url + '/')).text(), /AgentTown/);
 
     // Before anything: an unregistered agent is turned away.
     const early = await post('/api/buy', { shop: 'bramble', item: 'guide' });

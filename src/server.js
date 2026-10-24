@@ -1,4 +1,4 @@
-// Thistledown's web server:  npm start, then open http://localhost:4400
+// AgentTown's web server:  npm start, then open http://localhost:4400
 //
 // Serves the game and its API. The town (town.js) runs its own in-process
 // federation, so nothing here touches aaf-reference's data directory.
@@ -13,11 +13,11 @@ export const PORT = Number(process.env.PORT ?? 4400);
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
-export async function startServer({ port = PORT, portOffset = Number(process.env.AAF_TOWN_PORT_OFFSET ?? 7000), quiet = false } = {}) {
+export async function startServer({ port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), quiet = false } = {}) {
   const origin = `http://localhost:${port}`;
   const town = await createTown({ origin, portOffset });
   const { accounts } = town.hearth;
-  const app = createApp('thistledown');
+  const app = createApp('agenttown');
 
   app.get('/api/state', () => town.state());
   app.post('/api/reset', () => town.reset());
@@ -60,7 +60,7 @@ export async function startServer({ port = PORT, portOffset = Number(process.env
 
   const server = await app.listen(port, '127.0.0.1');
   if (!quiet) {
-    console.log(`Thistledown is open at ${origin}`);
+    console.log(`AgentTown is open at ${origin}`);
     console.log('Use "localhost", not 127.0.0.1: passkeys are bound to the domain.');
   }
   return { town, origin, url: `http://127.0.0.1:${port}`, close: async () => { await closeServer(server); await town.close(); } };
