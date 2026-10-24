@@ -1,0 +1,3 @@
+node_modules/
+*.nosync/
+.DS_Store

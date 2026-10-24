@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Thistledown</title>
+<meta name="description" content="A cozy town where you play an accountable agent, built on the Accountable Agents Framework reference implementation.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<canvas id="world" aria-label="The town of Thistledown"></canvas>
+
+<section id="quest" class="panel">
+  <header id="questHead">
+    <div><h1>Thistledown</h1><p id="questNext">Opening the town…</p></div>
+    <span id="questCount" class="count"></span>
+  </header>
+  <div class="fold">
+    <ol id="questList"></ol>
+    <button id="restart" class="quiet small">Start over</button>
+  </div>
+</section>
+
+<section id="record" class="panel">
+  <header id="recordHead"><h2>Your record</h2><span class="hint">what the registry holds</span></header>
+  <div id="recordBody" class="fold"></div>
+</section>
+
+<section id="phone" class="panel">
+  <header id="phoneHead"><h2>📱 Your phone</h2><span class="hint">you're the principal</span></header>
+  <ul id="phoneList" class="fold"></ul>
+</section>
+
+<div id="keys" class="panel"><kbd>WASD</kbd> walk · click to go · <kbd>E</kbd> talk · <kbd>B</kbd> badge</div>
+
+<div id="dialog" class="dialog" hidden>
+  <div id="dlgFace" class="face"></div>
+  <div class="body">
+    <div class="who"><b id="dlgWho"></b><span id="dlgWhere"></span></div>
+    <div id="dlgText" class="text"></div>
+    <label id="dlgInput" class="input" hidden><span id="dlgInputLabel"></span><input id="dlgInputField" maxlength="40" autocomplete="off" spellcheck="false"></label>
+    <div id="dlgChoices" class="choices"></div>
+  </div>
+</div>
+
+<div id="cardWrap" class="card-wrap" hidden><article id="card" class="idcard"></article></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/game.js"></script>
+</body>
+</html>

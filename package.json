@@ -1,0 +1,18 @@
+{
+  "name": "aaf-town",
+  "version": "0.1.0",
+  "description": "Thistledown: a cozy town where you play an accountable agent. Every door, shop and records office is a real relying party in the Accountable Agents Framework reference implementation.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\""
+  },
+  "dependencies": {
+    "aaf-reference": "file:../aaf-reference"
+  },
+  "license": "Apache-2.0"
+}
