@@ -17,9 +17,11 @@
   </header>
   <div class="fold">
     <ol id="questList"></ol>
-    <button id="restart" class="quiet small">Start over</button>
+    <button id="restart" class="quiet small">Leave town</button>
   </div>
 </section>
+
+<section id="rolePanel" class="panel" hidden></section>
 
 <section id="mapCard" class="panel">
   <canvas id="minimap" aria-label="Map of AgentTown"></canvas>
@@ -47,6 +49,8 @@
 </nav>
 
 <div id="outage" class="banner" hidden>📡 Registry A can't be reached from the shops. Places are deferring, not refusing.</div>
+
+<div id="join" class="overlay" hidden><div class="deck join" id="joinBox" role="dialog" aria-label="Join AgentTown"></div></div>
 
 <div id="palette" class="overlay" hidden>
   <div class="deck" role="dialog" aria-label="Action deck">

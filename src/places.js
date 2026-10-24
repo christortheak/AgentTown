@@ -52,17 +52,26 @@ export const PLACE_DEFS = {
     name: 'Bridge Toll', keeper: { face: '🦆', who: 'Dabble' }, action: 'payments.authorize',
     policy: { aaf: 'off', x402: 0.5 },
   },
+  exchange: {
+    name: 'Thistle Exchange', keeper: { face: '🐂', who: 'Bullock' }, action: 'trading.order',
+    symbols: [{ id: 'MOON', name: 'Moonflower futures', price: 12 }, { id: 'COPR', name: 'Copper', price: 8 }, { id: 'GRAN', name: 'Grain', price: 5 }],
+    policy: { aaf: 'required' },
+  },
 };
 
-export const HOME_ACCOUNTS = ['you', 'maple', 'hazel', 'ivy'];
+/** How many fills by how many fresh badges, in how long, look like a pump. */
+const SURVEILLANCE = { windowMs: 30000, minTrades: 4, minBadges: 3, quietMs: 60000 };
+
+/** The houses in Hearthside a homeowner can take; each player with an agent also gets a home of their own. */
+export const HOUSES = { maple: "Maple's", hazel: "Hazel's", ivy: "Ivy's" };
 const HOME_CONTENTS = {
-  you: ['Your journal', 'Box of old letters', "Grandma's teapot", 'Jar of buttons'],
   maple: ['Prize-winning carrot seeds', "Maple's diary"],
   hazel: ['A shelf of field guides', 'Knitting basket'],
   ivy: ['Unpacked boxes'],
 };
+const PLAYER_HOME = ['Your journal', 'Box of old letters', "Grandma's teapot", 'Jar of buttons'];
 
-export async function createPlaces({ world, origin, config = {}, worldid, x402, emit }) {
+export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {} }) {
   const live = world.trust;
   const down = world.regA ? world.trust.withUrlOverrides({ [world.regA.id]: 'http://127.0.0.1:9' }) : live;
   const outage = { until: 0 };
@@ -95,13 +104,47 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   for (const id of ['bramble', 'kettle', 'bakery', 'cafe']) {
     await add(id, PLACE_DEFS[id], sale, { 'commerce.purchase': async (p) => ({ item: p.item, receipt: `${id.slice(0, 2).toUpperCase()}-${Math.floor(Math.random() * 1e5)}` }) });
   }
+  const evidenceOf = (place, e) => ({ ppid: e.ppid, registry: e.registry?.id ?? e.registry ?? null, sealed_ref: e.sealed_ref ?? e.sealedRef ?? null, rp: place.rp.id, place: place.name });
   await add('bank', PLACE_DEFS.bank, (place) => ({
     'payments.authorize': [OPEN(place), { label: 'a payment (Bank Secrecy Act)', require: { accountability: 'established', authorization: true } }],
-  }), { 'payments.authorize': async (p) => ({ payment: `PAY-${Math.floor(Math.random() * 1e6)}`, payee: p.payee }) }, {
-    onDecision: ({ decision, evidence }) => {
-      if (decision.decision === 'deny' && evidence.ppid) {
-        emit({ kind: 'sar', place: 'First Ledger Bank', placeId: 'bank', tone: 'warn', text: `First Ledger Bank flagged a refused payment as a SAR candidate (file within 30 days); it holds the PPID, the chain and the authority shown` });
+    'banking.open_account': [{ label: 'opening an account (know your customer)', require: { accountability: 'disclosed' } }],
+  }), {
+    'payments.authorize': async (p) => ({ payment: `PAY-${Math.floor(Math.random() * 1e6)}`, payee: p.payee }),
+    'banking.open_account': async (p, v) => ({ account: `FLB-${Math.floor(Math.random() * 1e6)}`, holder: v.identity?.legal_name ?? null }),
+  }, {
+    onDecision: ({ decision, evidence, action }) => {
+      if (action === 'payments.authorize' && decision.decision === 'deny' && evidence.ppid) {
+        emit({ kind: 'sar', place: 'First Ledger Bank', placeId: 'bank', tone: 'warn', text: `First Ledger Bank flagged a refused payment as a SAR candidate and sent it to the police; it holds the PPID, the chain and the authority shown` });
+        alert({ kind: 'sar', placeId: 'bank', title: 'Suspicious payment refused at First Ledger Bank', evidence: [evidenceOf(places.bank, evidence)] });
       }
+    },
+  });
+
+  // The exchange: orders fill at the going price and move it. Surveillance
+  // watches for many fresh badges piling into one symbol: a likely pump.
+  const market = { prices: Object.fromEntries(PLACE_DEFS.exchange.symbols.map((s) => [s.id, s.price])), opening: {}, trades: [], lastAlert: {} };
+  market.opening = { ...market.prices };
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const surveil = (symbol) => {
+    const now = Date.now();
+    const recent = market.trades.filter((t) => t.symbol === symbol && t.side === 'buy' && t.ppid && now - t.at < SURVEILLANCE.windowMs);
+    const badges = new Map(recent.map((t) => [t.ppid, t]));
+    if (recent.length < SURVEILLANCE.minTrades || badges.size < SURVEILLANCE.minBadges || now - (market.lastAlert[symbol] ?? 0) < SURVEILLANCE.quietMs) return;
+    market.lastAlert[symbol] = now;
+    const change = Math.round((market.prices[symbol] / market.opening[symbol] - 1) * 100);
+    emit({ kind: 'alert', place: 'Thistle Exchange', placeId: 'exchange', tone: 'warn', text: `Thistle Exchange surveillance: ${badges.size} fresh badges bought ${symbol} ${recent.length} times in 30 s (price ${change >= 0 ? '+' : ''}${change}%). It can't tell whether they share a principal, so it reported them to the police` });
+    alert({ kind: 'pump', placeId: 'exchange', title: `Possible pump in ${symbol} at Thistle Exchange`, evidence: [...badges.values()].map((t) => evidenceOf(places.exchange, t)) });
+  };
+  await add('exchange', PLACE_DEFS.exchange, (place) => ({
+    'trading.order': [OPEN(place), { label: 'an order', require: { accountability: 'established', authorization: true } }],
+  }), {
+    'trading.order': async (p, v) => {
+      const price = market.prices[p.symbol];
+      market.trades.push({ at: Date.now(), symbol: p.symbol, side: p.side, qty: p.qty, price, ppid: v.ppid ?? null, registry: v.registry?.id ?? null, sealed_ref: v.sealedRef ?? null });
+      if (market.trades.length > 500) market.trades.shift();
+      market.prices[p.symbol] = round2(price * (1 + (p.side === 'buy' ? 1 : -1) * 0.03 * Math.min(p.qty, 10) / 5));
+      surveil(p.symbol);
+      return { item: `${p.side === 'buy' ? 'bought' : 'sold'} ${p.qty} ${p.symbol} at $${price}`, symbol: p.symbol, side: p.side, qty: p.qty, price, filled: round2(price * p.qty) };
     },
   });
   await add('forge', PLACE_DEFS.forge, (place) => ({
@@ -143,6 +186,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     onAccountMisuse: async ({ rp, verification, account }) => {
       const owner = rp.accounts.get(account)?.owner ?? account;
       await rp.fileIncident({ ppid: verification.ppid, registry: verification.registry, summary: `An agent tried the key to ${owner}'s home without the owner's authorization` });
+      alert({ kind: 'break-in', placeId: 'hearth', title: 'Attempted break-ins in Hearthside', evidence: [{ ppid: verification.ppid, registry: verification.registry?.id ?? null, sealed_ref: verification.sealedRef ?? null, rp: rp.id, place: `${owner}'s door` }] });
     },
   });
   places.hearth = hearth;
@@ -157,12 +201,32 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   places.reader = reader;
 
   /** Fresh accounts (no passkey, a new bearer token) and contents for some homes. */
-  const resetHomes = (keys, accounts = HOME_ACCOUNTS) => {
+  const resetHomes = (keys, accounts = Object.keys(HOUSES), owner) => {
     for (const a of accounts) {
-      homes[a] = [...HOME_CONTENTS[a]];
-      hearth.rp.accounts.create(a, a === 'you' ? 'You' : a[0].toUpperCase() + a.slice(1));
+      homes[a] = [...(HOME_CONTENTS[a] ?? PLAYER_HOME)];
+      hearth.rp.accounts.create(a, owner ?? HOUSES[a]?.replace("'s", '') ?? 'A resident');
       keys[a] = hearth.rp.accounts.issueToken(a);
     }
+  };
+
+  /**
+   * A person takes over a house: its old passkeys and the agents they let in
+   * no longer count, but the old keys (bearer tokens) still exist, lost or not.
+   */
+  const claimed = new Map(); // house account -> owner name
+  const takeHouse = (account, owner) => {
+    const acc = hearth.rp.accounts.get(account);
+    acc.passkeys.clear();
+    acc.delegations = [];
+    acc.pendingRegistration = null;
+    acc.owner = owner;
+    if (owner) claimed.set(account, owner);
+    else claimed.delete(account);
+  };
+
+  /** A person runs a place: its policy is theirs to set. */
+  const claimPlace = (id, keeper) => {
+    places[id].human = keeper;
   };
 
   /** What a place decided, what it checked and learned, and the receipt for its activity-log entry. */
@@ -174,7 +238,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       decision: r.decision, classification: r.classification ?? null, reasons: r.reasons ?? [],
       approval_request: r.approval_request ?? null, result: r.result ?? null,
       checks: ev?.checks ?? [], learned: ev ? whatWasLearned(ev) : [], ppid: ev?.ppid ?? null, chain_length: ev?.chain_length ?? null,
-      registry: ev?.registry ?? null,
+      registry: ev?.registry ?? null, sealed_ref: ev?.sealed_ref ?? null, account: ev?.account_gate?.account ?? null, txn: r.txn ?? null,
       receipt: receipt ? { log: receipt.log_id, index: receipt.index, verified: world.verifyReceipt(receipt).ok } : null,
       steps, policy: describePolicy(place),
     };
@@ -245,8 +309,19 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return cardFrom(place, action, by.name, r, steps);
   }
 
+  /** A place reports a customer's agent to the registry that issued its badge, which relays it to the principal. */
+  async function report(placeId, card, summary) {
+    const place = places[placeId];
+    const registry = card.registry && world.trust.registry(card.registry);
+    if (!card.ppid || !registry) throw new HttpError(409, 'nothing_to_report', 'That visitor showed no badge, so there is nobody to report it to.');
+    return place.rp.fileIncident({ ppid: card.ppid, sealedRef: card.sealed_ref ?? undefined, registry, summary });
+  }
+
   return {
-    places, hearth, reader, outage, visit, cardFrom, describePolicy, resetHomes,
+    places, hearth, reader, outage, visit, cardFrom, describePolicy, resetHomes, takeHouse, claimPlace, report,
+    isClaimed: (account) => claimed.has(account),
+    market: () => PLACE_DEFS.exchange.symbols.map((s) => ({ id: s.id, name: s.name, price: market.prices[s.id], change: Math.round((market.prices[s.id] / market.opening[s.id] - 1) * 100) })),
+    quote: (symbol) => market.prices[symbol],
     priceOf: (placeId, itemId) => PLACE_DEFS[placeId]?.items?.find((i) => i.id === itemId) ?? null,
     purchase: (placeId, item) => ({ item: item.name, amount: money(item.price), category: item.category ?? PLACE_DEFS[placeId].category }),
     setPolicy(placeId, patch) {

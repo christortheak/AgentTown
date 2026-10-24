@@ -30,12 +30,12 @@ const RESIDENTS = [
   {
     id: 'oak', name: 'Oak-courier', body: '#e8c39e', home: 'bakery', disclose: true, budget: 200, wallet: 40,
     principal: { type: 'legal_person', identity: { legal_name: 'Oakleaf Bakery LLC', jurisdiction: 'US-NY', registration_number: 'NY-4410982' }, assurance: 'high', method: 'KYB: registry extract' },
-    routine: ['supplies', 'bank', 'base'],
+    routine: ['supplies', 'bank', 'trade', 'base'],
   },
   {
     id: 'wren', name: 'Wren-runner', body: '#c9d7ff', home: 'lab', disclose: true, provenance: true, budget: 300, wallet: 40,
     principal: { type: 'legal_person', identity: { legal_name: 'Wren Labs Inc.', jurisdiction: 'US-MA', registration_number: 'MA-0918842' }, assurance: 'high', method: 'KYB: registry extract' },
-    routine: ['forge-small', 'base', 'forge-large', 'base'],
+    routine: ['forge-small', 'trade', 'forge-large', 'base'],
   },
   {
     id: 'rook', name: 'Rook-skiff', body: '#a8e6cf', home: 'rook', registry: 'harbor', budget: 80, wallet: 30,
@@ -122,6 +122,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
           { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden'] } },
           { action: 'payments.authorize', constraints: { max_amount: money(def.budget) } },
           { action: 'compute.provision', constraints: { max_units: { value: 64, unit: 'gpu_hours' } } },
+          { action: 'trading.order', constraints: { max_amount: money(def.budget) } },
           { action: 'home.*' },
         ],
         purpose: 'Errands around AgentTown',
@@ -167,7 +168,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       }
       case 'bank': {
         await walk(npc, 'bank');
-        const bill = Math.random() > 0.2 ? PLACE_DEFS.bank.bills[0] : PLACE_DEFS.bank.bills[1];
+        const bill = pick(PLACE_DEFS.bank.bills.filter((b) => b.amount <= npc.budget));
         return act(npc, 'bank', 'payments.authorize', { payee: bill.name, amount: money(bill.amount) });
       }
       case 'forge-small':
@@ -192,11 +193,18 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       }
       case 'home': {
         await walk(npc, npc.home);
+        if (npc.account && places.isClaimed(npc.account)) return walk(npc, 'square');
         if (npc.account) await act(npc, 'hearth', 'home.enter', { account: npc.account });
         npc.hidden = true;
         await sleep(between(6000, 12000));
         npc.hidden = false;
         return null;
+      }
+      case 'trade': {
+        await walk(npc, 'exchange');
+        const symbol = pick(PLACE_DEFS.exchange.symbols).id;
+        const qty = 2;
+        return act(npc, 'exchange', 'trading.order', { symbol, side: Math.random() > 0.5 ? 'buy' : 'sell', qty, amount: money(Math.round(places.quote(symbol) * qty * 100) / 100) });
       }
       case 'square':
         await walk(npc, 'square');
@@ -293,18 +301,21 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   // ---- The rogue swarm ----------------------------------------------------------
 
   let gloam = null;
+  let gloamReady = null; // prepared once, however many cues arrive while it's under way
   async function prepareSwarm() {
     const principal = await world.verifiedPrincipal({
       type: 'legal_person', identity: { legal_name: 'Gloam Holdings Ltd', jurisdiction: 'US-DE', registration_number: 'DE-7710455' }, assurance: 'high', method: 'KYB: registry extract', registry: world.regA,
     });
     const root = world.agent('gloam-root');
     await principal.registerAgent(root, { label: 'gloam-root', records: world.records(), lineage: { max_depth: 1 } });
-    await principal.grant(root, { rk: world.authRk, permissions: [{ action: 'benchmark.run' }] });
+    await principal.grant(root, {
+      rk: world.authRk, permissions: [{ action: 'benchmark.run' }, { action: 'trading.order', constraints: { max_amount: money(400) } }], delegation: { allowed: true, max_depth: 1 },
+    });
     gloam = { principal, root, running: false };
   }
 
   async function swarm() {
-    if (!gloam) await prepareSwarm();
+    await (gloamReady ??= prepareSwarm());
     if (gloam.running) return { ok: false, text: 'The swarm is already loose.' };
     gloam.running = true;
     const mill = placeFront(map, 'millGate');
@@ -318,6 +329,8 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         emit({ kind: 'registry', actor: 'gloam-root', place: world.regA.name, placeId: 'townhall', tone: 'bad', text: `${world.regA.name} refused a sub-agent: ${err.message}` });
         continue;
       }
+      // Each one may trade a little: together they can move a market.
+      await gloam.root.delegate(child, { permissions: [{ action: 'trading.order', constraints: { max_amount: money(150) } }], validForDays: 1 }).catch(() => {});
       const npc = spawn({ id: `gloam-${i}-${Date.now()}`, name: `gloam-${i}`, kind: 'swarm', look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `gloam-${i}` });
       x402.wallet(npc.wallet, 20);
       children.push(npc);
@@ -339,13 +352,17 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       x402.wallet(npc.wallet, 50);
       bots.push(npc);
     }
-    const stolen = [keys.you, keys.hazel, keys.maple];
+    const stolen = Object.values(keys);
     const raid = async (npc, rounds) => {
       for (let r = 0; r < rounds && alive(npc); r++) {
-        const target = pick(['fair', 'toll', 'bramble', 'bank', 'home', 'hazel', 'kettle']);
+        // Badged swarm agents start by piling into MOON at the exchange: a pump.
+        const target = r === 0 && npc.kind === 'swarm' ? 'exchange' : pick(['fair', 'toll', 'bramble', 'bank', 'home', 'hazel', 'kettle', 'exchange']);
         await walk(npc, target);
         if (!alive(npc)) break;
-        if (target === 'fair') await act(npc, 'fair', 'fair.claim', {});
+        if (target === 'exchange') {
+          const qty = 5;
+          await act(npc, 'exchange', 'trading.order', { symbol: 'MOON', side: 'buy', qty, amount: money(Math.round(places.quote('MOON') * qty * 100) / 100) });
+        } else if (target === 'fair') await act(npc, 'fair', 'fair.claim', {});
         else if (target === 'toll') await act(npc, 'toll', 'payments.authorize', { payee: 'Bridge Toll', amount: money(0.5) });
         else if (target === 'bramble') await act(npc, 'bramble', 'commerce.purchase', places.purchase('bramble', PLACE_DEFS.bramble.items[2]));
         else if (target === 'kettle') await act(npc, 'kettle', 'commerce.purchase', places.purchase('kettle', PLACE_DEFS.kettle.items[3]));
@@ -385,8 +402,8 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   // ---- The player's sub-agents ---------------------------------------------------
 
-  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry }) {
-    const npc = spawn({ id, name, kind: 'helper', look: LOOKS.helper, agent, worldIdentity, wallet, follow: true, owner: 'you', ephemeralUntil, registry, speed: 120, pos: { x: 0, y: 0 } });
+  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner }) {
+    const npc = spawn({ id, name, kind: 'helper', look: LOOKS.helper, agent, worldIdentity, wallet, follow: true, owner, ephemeralUntil, registry, speed: 120, pos: { x: 0, y: 0 } });
     x402.wallet(wallet, 5);
     return npc;
   }
@@ -433,7 +450,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       const scrap = spawn({ id: 'scrap', name: 'Scrap (no badge)', kind: 'bot', look: LOOKS.bot, pos: placeFront(map, 'wildsEdge'), hidden: true, speed: 90, wallet: 'scrap' });
       x402.wallet('scrap', 50);
       botLife(scrap);
-      prepareSwarm().catch((err) => emit({ kind: 'info', tone: 'warn', text: `The swarm could not be prepared: ${err.message}` }));
+      (gloamReady ??= prepareSwarm()).catch((err) => emit({ kind: 'info', tone: 'warn', text: `The swarm could not be prepared: ${err.message}` }));
     },
     setResidentsActive(on) {
       residentsActive = on;
@@ -459,6 +476,6 @@ export function eventFromCard(card, npc) {
   return {
     kind: 'check', who: npc?.id ?? null, actor: card.actor, place: card.place, placeId: card.placeId,
     decision: card.decision, classification: card.classification, tone: card.decision === 'allow' ? 'ok' : card.decision === 'deny' || card.decision === 'refused' ? 'bad' : 'warn',
-    text: `${card.place} → ${card.actor}: ${label}`, mine: npc?.owner === 'you', card,
+    text: `${card.place} → ${card.actor}: ${label}`, owner: npc?.owner ?? null, card,
   };
 }

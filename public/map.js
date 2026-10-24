@@ -29,6 +29,8 @@ export const BUILDINGS = [
   { id: 'records', name: 'Records Office', district: 'civic', x: 22, y: 6, w: 7, h: 5, door: 25, roof: '#4f7fbf', wall: '#f6ead2', kind: 'office' },
   { id: 'townhall', name: 'Town Hall', district: 'civic', x: 33, y: 4, w: 10, h: 7, door: 37, doorW: 2, roof: '#c8524a', wall: '#fbf1dc', kind: 'hall' },
   { id: 'court', name: 'Courthouse', district: 'civic', x: 47, y: 5, w: 8, h: 6, door: 50, doorW: 2, roof: '#ddd5c4', wall: '#f1ece0', kind: 'court' },
+  { id: 'exchange', name: 'Thistle Exchange', district: 'civic', x: 3, y: 4, w: 8, h: 6, door: 6, doorW: 2, roof: '#3d5a80', wall: '#efe9dc', kind: 'bank' },
+  { id: 'police', name: 'Police Station', district: 'civic', x: 13, y: 5, w: 6, h: 5, door: 15, roof: '#2c3e66', wall: '#e8edf5', kind: 'office' },
   // Market Lane
   { id: 'bramble', name: 'Bramble Books', district: 'market', x: 4, y: 18, w: 5, h: 5, door: 6, roof: '#7a5aa6', wall: '#f3e7d3', kind: 'shop' },
   { id: 'kettle', name: 'Copper Kettle', district: 'market', x: 10, y: 18, w: 5, h: 5, door: 12, roof: '#d9822b', wall: '#fbeedb', kind: 'shop' },
@@ -91,7 +93,7 @@ const LAMPS = [
   // along the main road
   [5, 26], [11, 26], [17, 26], [25, 26], [29, 26], [47, 26], [53, 26], [59, 26], [65, 26], [71, 26],
   // Civic Row
-  [23, 14], [28, 14], [34, 14], [42, 14], [48, 14], [55, 14], [61, 14], [67, 14], [72, 14],
+  [5, 14], [11, 14], [17, 14], [23, 14], [28, 14], [34, 14], [42, 14], [48, 14], [55, 14], [61, 14], [67, 14], [72, 14],
   // the square's corners
   [32, 20], [44, 20], [32, 28], [44, 28],
   // the harbor
@@ -112,7 +114,9 @@ export function buildTown() {
 
   // Roads.
   fill(PATH, 2, 24, COLS - 1, 25); // the main road, leaving by the east gate
-  fill(PATH, 20, 12, 72, 13); // Civic Row
+  fill(PATH, 4, 12, 72, 13); // Civic Row, from the Exchange to the Works
+  fill(PATH, 6, 10, 7, 11); // up to the Exchange
+  fill(PATH, 15, 10, 15, 11); // up to the Police Station
   fill(PATH, 37, 11, 38, 19); // the avenue, north of the square
   fill(PATH, 30, 14, 30, 23); // lane to Market Lane
   fill(PATH, 45, 14, 45, 23); // lane to Hearthside

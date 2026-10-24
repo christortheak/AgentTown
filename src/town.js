@@ -1,35 +1,41 @@
 // AgentTown on the server: the federation (local or external), the places and
-// their policies, the inhabitants, the player, the town ledger, and the
-// director's cues for live demos and videos.
+// their policies, the simulated inhabitants, the people playing, police and
+// courts, the town ledger, and the director's cues for live demos and videos.
 import { loadConfig, connectFederation } from './federation.js';
 import { buildWorld } from './world.js';
 import { createPlaces, PLACE_DEFS } from './places.js';
 import { createSim } from './sim.js';
-import { createPlayer } from './player.js';
+import { createSessions } from './sessions.js';
+import { createJustice } from './justice.js';
 import { createWorldId } from './worldid.js';
 import { createX402 } from './x402.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
 export async function createTown({ origin, portOffset = 7000, config = loadConfig(), residents = true, timeScale = 1 }) {
   const fed = await connectFederation({ federation: config.federation, portOffset });
-  const world = buildWorld({ trust: fed.trust, keysDir: fed.keysDir });
+  const world = buildWorld({ trust: fed.trust, keysDir: fed.keysDir, adminTokens: fed.adminTokens });
 
   // The town ledger: everything anyone did, newest last.
   const ledger = { seq: 0, items: [] };
   const emit = (e) => {
     const item = { ...e, seq: ++ledger.seq, at: Date.now() };
     ledger.items.push(item);
-    if (ledger.items.length > 400) ledger.items.shift();
+    if (ledger.items.length > 600) ledger.items.shift();
     return item;
   };
 
+  let sessions = null;
+  const justice = createJustice({ world, emit, people: () => sessions?.counts() ?? { police: 0, judge: 0 }, timeScale });
   const worldid = createWorldId();
   const x402 = createX402();
-  const places = await createPlaces({ world, origin, config: config.places, worldid, x402, emit });
+  const places = await createPlaces({
+    world, origin, config: config.places, worldid, x402, emit,
+    alert: (a) => justice.fileCase({ kind: a.kind, placeId: a.placeId, title: a.title, evidence: a.evidence, by: PLACE_DEFS[a.placeId]?.name ?? 'Hearth & Key' }),
+  });
   const keys = {};
   places.resetHomes(keys);
   const sim = createSim({ world, places, emit, worldid, x402, origin, keys, timeScale });
-  const player = createPlayer({ world, places, sim, worldid, x402, emit, keys });
+  sessions = createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin });
   if (residents) await sim.start();
   emit({ kind: 'director', tone: 'info', text: `AgentTown is open. Federation: ${fed.kind} (${world.registries.map((r) => r.name).join(', ')})` });
 
@@ -71,37 +77,40 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       registries: world.registries.map((r) => ({ id: r.id, name: r.name })),
       places: Object.keys(PLACE_DEFS).map((id) => {
         const pl = places.places[id];
-        return { id, name: pl.name, accepts: pl.policy.accepts, aaf: pl.policy.aaf, worldid: Boolean(pl.policy.worldid), x402: pl.policy.x402, summary: places.describePolicy(pl) };
+        return { id, name: pl.name, keeper: pl.human?.name ?? null, accepts: pl.policy.accepts, aaf: pl.policy.aaf, worldid: Boolean(pl.policy.worldid), x402: pl.policy.x402, summary: places.describePolicy(pl) };
       }),
     };
   }
 
+  const npcOptions = () => [
+    ...sim.snapshot().filter((n) => n.status !== 'gone').map((n) => ({ value: n.id, label: n.name, hint: n.kind })),
+    ...sessions.people().filter((x) => x.role === 'agent').map((x) => ({ value: x.id, label: x.name, hint: 'an agent (a person playing)' })),
+  ];
+
   return {
-    world, places, sim, player, ledger, keys,
+    world, places, sim, sessions, justice, ledger, keys,
     info: () => ({
       federation: fed.kind, trust_anchor: fed.trustAnchorUrl,
       registries: world.registries.map((r) => ({ id: r.id, name: r.name, url: r.url })),
       record_keepers: world.trust.recordKeepers.map((r) => ({ id: r.id, name: r.name, url: r.url, roles: r.roles })),
       identity_verifier: world.kyc?.id ?? null, court: world.court?.name ?? null,
     }),
-    actions() {
-      const npcs = sim.snapshot().filter((n) => n.status !== 'gone').map((n) => ({ value: n.id, label: n.name, hint: n.kind }));
-      return player.catalog().map((a) => ({ ...a, params: a.params?.map((pm) => (pm.options === 'npcs' ? { ...pm, options: npcs } : pm)) }));
+    actions(s) {
+      return sessions.actions(s, npcOptions()).map((a) => ({ ...a, params: a.params?.map((pm) => (pm.options === 'npcs' ? { ...pm, options: npcOptions() } : pm)) }));
     },
-    world_(since = 0) {
-      return { now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), events: ledger.items.filter((e) => e.seq > since).slice(-60), director: directorState() };
+    world_(since = 0, s = null) {
+      return {
+        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id),
+        events: ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(-80), director: directorState(), market: places.market(),
+      };
     },
     async direct(event, params = {}) {
       const cue = director[event];
       if (!cue) throw new HttpError(404, 'unknown_cue', `no director cue ${event}`);
       return cue(params);
     },
-    reset() {
-      player.reset();
-      places.resetHomes(keys, ['you']);
-      return { ok: true };
-    },
     async close() {
+      sessions.stop();
       sim.stop();
       await world.close();
       await fed.close();

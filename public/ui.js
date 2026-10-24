@@ -108,7 +108,8 @@ document.addEventListener('keydown', (e) => {
 // Result cards: a place's ID check, or a registry's or record keeper's answer
 // ---------------------------------------------------------------------------
 
-export function card(c, { note } = {}) {
+/** Show a result card; resolves with the value of the button pressed (extra `buttons`, or nothing for Okay). */
+export function card(c, { note, buttons } = {}) {
   const service = c.type === 'service';
   const d = c.stamp ?? (service && c.decision === 'allow' ? { label: 'Done', tone: 'ok' } : DECISIONS[c.decision]) ?? { label: c.decision, tone: 'info' };
   const checks = c.checks ?? [];
@@ -129,21 +130,31 @@ export function card(c, { note } = {}) {
     ${c.policy ? `<p class="policy"><b>${esc(c.place)} asks for</b> ${esc(c.policy)}</p>` : ''}
     ${!service ? (c.receipt ? `<footer>Logged at ${esc(c.receipt.log.replace('https://', ''))}, entry #${esc(c.receipt.index)} · receipt ${c.receipt.verified ? 'verified ✓' : 'did NOT verify'}</footer>` : '<footer>Nothing was logged: there was no accountable agent to log against.</footer>') : ''}
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`;
-  return showCard(html);
+  return showCard(html, buttons);
 }
 
-/** Any card-shaped panel. */
-export function showCard(html) {
+/** Any card-shaped panel, with optional extra buttons [{ label, value, tone? }] beside Okay. */
+export function showCard(html, buttons = []) {
   closeDialog();
   const wrap = $('cardWrap');
   $('card').innerHTML = html;
+  const actions = $('card').querySelector('.actions');
+  for (const b of buttons) {
+    const el = document.createElement('button');
+    el.className = b.tone === 'danger' ? 'danger' : '';
+    el.textContent = b.label;
+    el.disabled = Boolean(b.disabled);
+    el.onclick = () => done(b.value);
+    actions?.prepend(el);
+  }
   wrap.hidden = false;
   $('card').scrollTop = 0;
+  let done;
   return new Promise((resolve) => {
-    const done = () => {
+    done = (value) => {
       wrap.hidden = true;
       document.removeEventListener('keydown', onKey, true);
-      resolve();
+      resolve(value);
     };
     const onKey = (e) => {
       if (e.key === 'Enter' || e.key === 'Escape') {
@@ -153,7 +164,7 @@ export function showCard(html) {
       }
     };
     document.addEventListener('keydown', onKey, true);
-    $('cardOk').onclick = done;
+    $('cardOk').onclick = () => done();
     wrap.onclick = (e) => {
       if (e.target === wrap) done();
     };

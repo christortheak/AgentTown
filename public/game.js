@@ -9,6 +9,7 @@ import { route, routeLength, pointAlong, tileOf } from './route.js';
 import * as api from './api.js';
 import { say, busy, closeDialog, dialogOpen, card, showCard, renderHud, renderPhone, renderLedger, toast, esc, DECISIONS } from './ui.js';
 import { openPalette, paletteOpen } from './palette.js';
+import { showJoin, renderRolePanel, caseCard, policeButtons } from './roles.js';
 
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
@@ -149,10 +150,17 @@ function npcLook(n) {
   return { ...n.look, revoked: gone };
 }
 
+const ROLE_TAGS = { agent: '', shopkeeper: 'shopkeeper', homeowner: 'homeowner', police: 'police', judge: 'judge' };
+/** Other people playing, drawn like everyone else. */
+const personAsNpc = (p) => ({
+  id: p.id, name: ROLE_TAGS[p.role] ? `${p.name} · ${ROLE_TAGS[p.role]}` : p.name, kind: 'person', role: p.role,
+  look: p.look, pos: p.pos, move: null, follow: false, status: p.look?.revoked ? 'revoked' : 'active', owner: null,
+});
+
 function updateSprites(dt) {
   const seen = new Set();
-  let followIndex = 0;
-  for (const n of W.npcs) {
+  const followers = new Map(); // leader id -> how many follow it so far
+  for (const n of [...W.npcs, ...(W.people ?? []).map(personAsNpc)]) {
     seen.add(n.id);
     let s = sprites.get(n.id);
     if (!s) {
@@ -164,8 +172,14 @@ function updateSprites(dt) {
     s.alpha = Math.min(1, (s.alpha ?? 0) + dt * 2);
     if (n.status === 'gone') s.alpha = Math.max(0, s.alpha - dt * 3);
     if (n.follow) {
-      const target = trail[Math.max(0, trail.length - 14 - followIndex * 10)] ?? { x: player.x - 18 - followIndex * 14, y: player.y + 6 };
-      followIndex++;
+      // Sub-agents trail whoever spawned them: you, or another player.
+      const mine = n.owner === S?.me?.id;
+      const leader = mine ? player : sprites.get(n.owner) ?? s;
+      const followIndex = followers.get(n.owner) ?? 0;
+      followers.set(n.owner, followIndex + 1);
+      const target = mine
+        ? trail[Math.max(0, trail.length - 14 - followIndex * 10)] ?? { x: player.x - 18 - followIndex * 14, y: player.y + 6 }
+        : { x: leader.x - 18 - followIndex * 14, y: leader.y + 6 };
       const d = Math.hypot(target.x - s.x, target.y - s.y);
       if (d > 2) {
         const step = Math.min(d, (d > 200 ? 400 : 140) * dt);
@@ -198,7 +212,7 @@ function updateSprites(dt) {
     }
     if (s.walking) s.phase += dt * 12;
     const near = Math.hypot(s.x - player.x, s.y - player.y) < 110;
-    s.label = n.kind === 'helper' ? `${n.name}${n.busy ? ' …' : ''}` : near || n.bubble ? n.name : null;
+    s.label = n.kind === 'helper' || n.kind === 'person' ? `${n.name}${n.busy ? ' …' : ''}` : near || n.bubble ? n.name : null;
     if (n.bubble && s.bubbleShown !== n.bubble.at) {
       s.bubbleShown = n.bubble.at;
       bubble(s, n.bubble.decision);
@@ -231,13 +245,15 @@ const KEEPERS = {
   lab: { face: '🧪', who: 'Wren Labs.', text: 'Their agent rents big jobs at the Forge: they disclose who they are, and publish a bill of materials.' },
   rook: { face: '⛵', who: 'Rook & Daughters,', text: 'a French firm registered with the Harbor Registry.' },
   mill: { face: '🌫️', who: 'The Old Mill.', text: 'Something about this place feels wrong.' },
+  police: { face: '👮', who: 'The desk sergeant:', text: 'bring us a badge number, and we can ask the court who stands behind it.' },
 };
 
 function greetingFor(id) {
   const policy = W.director?.places.find((p) => p.id === id);
   if (policy) {
-    const shop = { bramble: ['🐻', 'Bram'], kettle: ['🦊', 'Fennel'], bakery: ['🐭', 'Crumb'], cafe: ['🦢', 'Odile'], bank: ['🐢', 'Teller Shell'], forge: ['🦫', 'Forgemaster Bea'], fair: ['🐿️', 'Nutmeg'], toll: ['🦆', 'Dabble'] }[id];
-    return { face: shop[0], who: `${shop[1]}:`, text: `welcome to ${policy.name}. Here we ask for ${policy.summary}.` };
+    const shop = { bramble: ['🐻', 'Bram'], kettle: ['🦊', 'Fennel'], bakery: ['🐭', 'Crumb'], cafe: ['🦢', 'Odile'], bank: ['🐢', 'Teller Shell'], forge: ['🦫', 'Forgemaster Bea'], fair: ['🐿️', 'Nutmeg'], toll: ['🦆', 'Dabble'], exchange: ['🐂', 'Bullock'] }[id] ?? ['🏪', 'The keeper'];
+    const who = policy.keeper ? `${policy.keeper} (a person playing):` : `${shop[1]}:`;
+    return { face: shop[0], who, text: `welcome to ${policy.name}. Here we ask for ${policy.summary}.` };
   }
   return KEEPERS[id] ?? null;
 }
@@ -327,6 +343,8 @@ async function run(action, params) {
   interacting = true;
   try {
     if (action.place && !(await walkToPlace(action.place))) return;
+    const walkTarget = action.params?.flatMap((pm) => (Array.isArray(pm.options) ? pm.options : [])).find((o) => o.walk && Object.values(params).includes(o.value))?.walk;
+    if (walkTarget && !(await walkToPlace(walkTarget))) return;
     if (action.id.startsWith('mischief.') && params.at && !(await walkToPlace(params.at))) return;
     if (action.client === 'passkey') return await setUpPasskey();
     if (action.client === 'night') return await nightfall();
@@ -432,7 +450,7 @@ async function talkTo(s) {
   interacting = true;
   try {
     const n = s.npc;
-    const kinds = { resident: 'a resident’s agent', helper: 'your sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer' };
+    const kinds = { person: 'someone playing', resident: 'a resident’s agent', helper: 'a sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer' };
     const r = await say({ face: '🔍', who: n.name, where: kinds[n.kind] ?? '', text: n.busy ? `Out on an errand: ${n.busy}.` : n.status !== 'active' ? `Status: ${n.status}.` : 'Ask to see their badge?', choices: [{ label: 'Ask to see their badge', value: true, primary: true }, { label: 'Leave them be', value: false, cancel: true }] });
     closeDialog();
     if (!r.value) return;
@@ -679,16 +697,33 @@ mini.addEventListener('pointerdown', (e) => {
 // ---------------------------------------------------------------------------
 
 let helperWasActive = new Set();
+const knockStatus = new Map();
+const isAgent = () => S?.me?.role === 'agent';
+const PERSON = { shopkeeper: { body: '#ffe1a8', badge: 'none' }, homeowner: { body: '#d7f0ff', badge: 'none' }, police: { body: '#c9d6ff', bulb: '#4f7fbf', glow: true, badge: 'on', badgeColor: '#ffe08a', badgeMark: '#2c3e66' }, judge: { body: '#3b3346', badge: 'none' } };
+
 async function refresh() {
   try {
     S = await api.get('/api/state');
-  } catch {
+  } catch (err) {
+    if (err instanceof api.NoSession) location.reload();
+    return;
+  }
+  document.body.dataset.role = S.me.role;
+  document.getElementById('quest').hidden = !isAgent();
+  document.getElementById('record').hidden = !isAgent();
+  document.getElementById('rolePanel').hidden = isAgent();
+  document.getElementById('phone').hidden = !(isAgent() || S.me.role === 'homeowner');
+  if (!isAgent()) {
+    if (!document.getElementById('rolePanel').contains(document.activeElement)) renderRolePanel(S);
+    player.look = PERSON[S.me.role];
+    player.label = `${S.me.name} · ${S.me.role}`;
+    if (S.phone && renderPhone(S)) toast('Your phone buzzed', 'warn');
     return;
   }
   renderHud(S, counts);
   if (renderPhone(S)) toast('Your phone buzzed', 'warn');
   player.look = playerLook();
-  player.label = S.agent ? S.agent.name : null;
+  player.label = S.agent ? S.agent.name : S.me.name;
   document.getElementById('badgeBtn').classList.toggle('on', S.badge);
   const active = new Set(S.helpers.filter((h) => h.status === 'active').map((h) => h.id));
   for (const id of helperWasActive) {
@@ -696,7 +731,16 @@ async function refresh() {
     if (h && !active.has(id) && h.status === 'expired') toast(`${h.name}'s registration lapsed: ephemeral sub-agents expire on their own`, 'info');
   }
   helperWasActive = active;
+  for (const k of S.knocks ?? []) {
+    if (knockStatus.get(k.request_id) === 'waiting' && k.status !== 'waiting') toast(k.status === 'approved' ? `${k.label} let your agent in. Knock again to go in.` : `${k.label} said no.`, k.status === 'approved' ? 'ok' : 'warn');
+    knockStatus.set(k.request_id, k.status);
+  }
+  if (S.principal?.banned && !banNoticed) {
+    banNoticed = true;
+    toast('A court banned you: your verification is withdrawn and your agents are suspended', 'bad');
+  }
 }
+let banNoticed = false;
 
 async function poll() {
   try {
@@ -707,10 +751,12 @@ async function poll() {
   clockOffset = W.now - Date.now();
   if (W.events.length) {
     for (const e of W.events) {
+      e.mine = Boolean(S?.me && e.owner === S.me.id);
       if (e.mine && e.card && sprites.get(e.who)?.npc.kind === 'helper') toast(e.text, e.tone);
       if (e.mine && e.placeId === 'toll' && e.decision === 'allow') counts.tolls++;
       if (e.mine && e.placeId === 'cafe' && e.decision === 'allow') counts.euCafe = true;
       if (e.kind === 'director' && /stirs/.test(e.text)) counts.swarm = true;
+      if (e.kind === 'justice' && !isAgent() && S?.me && ['police', 'judge'].includes(S.me.role)) refresh();
     }
     ledger = [...ledger, ...W.events].slice(-200);
     seq = W.seq;
@@ -720,10 +766,71 @@ async function poll() {
   document.getElementById('outage').hidden = !W.director?.outage_until;
 }
 
+/** A visit's ID card, with what your role can do about it. */
+async function visitCard(ev) {
+  const role = S?.me?.role;
+  const c = ev.card;
+  const buttons = [];
+  if (c.ppid && ((role === 'shopkeeper' && c.placeId === S.me.claim) || (role === 'homeowner' && c.account === S.me.claim))) {
+    buttons.push({ label: 'File with the police', value: 'police.file' }, { label: 'Report to its registry', value: role === 'shopkeeper' ? 'shop.report' : 'door.report' });
+  }
+  if (c.ppid && role === 'police') buttons.push({ label: 'Open a case about this badge', value: 'case.open' });
+  const choice = await card(c, { buttons });
+  if (choice) await doRole(choice, { seq: ev.seq });
+}
+
+async function doRole(action, params) {
+  try {
+    const out = await api.post('/api/do', { action, params });
+    if (out.type === 'service') await card(out);
+    else if (out.type === 'toggle' && out.policy) toast(`Now asking for: ${out.policy}`, 'info');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+  await refresh();
+}
+
 document.getElementById('ledgerList').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-seq]');
   const ev = li && ledger.find((x) => String(x.seq) === li.dataset.seq);
-  if (ev?.card && !busyNow()) card(ev.card);
+  if (ev?.card && !busyNow()) visitCard(ev);
+});
+
+// The role panel: a shopkeeper's counter, a homeowner's door, the case board, the docket.
+const rolePanel = document.getElementById('rolePanel');
+rolePanel.addEventListener('click', async (e) => {
+  if (busyNow()) return;
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const seqEl = e.target.closest('[data-seq]');
+  const caseEl = e.target.closest('[data-case]');
+  const petEl = e.target.closest('[data-petition]');
+  if (act === 'leave') return leaveTown();
+  if (act === 'passkey') return setUpPasskey().then(refresh);
+  if (act === 'locks') return doRole('door.locks', {});
+  if (seqEl) {
+    const list = S.customers ?? S.door ?? [];
+    const ev = list.find((x) => String(x.seq) === seqEl.dataset.seq);
+    if (ev) return visitCard(ev);
+  }
+  if (caseEl) {
+    const c = S.cases.find((x) => x.id === caseEl.dataset.case);
+    const kind = await caseCard(c, { buttons: policeButtons(c) });
+    if (kind) await doRole('case.petition', { case: c.id, kind });
+  }
+  if (petEl) {
+    const p = S.petitions.find((x) => x.id === petEl.dataset.petition);
+    const c = S.cases.find((x) => x.id === p.case);
+    const pendingNow = p.status === 'pending';
+    const grant = await caseCard(c, { petition: p, buttons: pendingNow ? [{ label: 'Deny', value: 'deny' }, { label: `Grant: ${p.kind}`, value: 'grant', tone: p.kind === 'ban' ? 'danger' : undefined }] : [] });
+    if (grant) await doRole('petition.rule', { petition: p.id, grant: grant === 'grant' });
+  }
+});
+rolePanel.addEventListener('change', async (e) => {
+  const k = e.target.dataset.k;
+  if (!k) return;
+  const v = k === 'accepts' ? (e.target.value === '*' ? null : [e.target.value]) : k === 'aaf' ? (e.target.checked ? 'required' : 'off') : k === 'x402' ? (e.target.checked ? 0.5 : null) : e.target.checked;
+  e.target.blur();
+  await doRole('shop.policy', { patch: { [k]: v } });
 });
 
 document.getElementById('phoneList').addEventListener('click', async (e) => {
@@ -757,18 +864,14 @@ for (const id of ['phone', 'record', 'quest', 'ledger']) {
 }
 if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone']) document.getElementById(id).classList.add('open');
 
-document.getElementById('restart').addEventListener('click', async () => {
-  const r = await say({ face: '🌼', who: 'Start over?', text: "This forgets your verification, your agent, its sub-agents and everything they did, and empties your phone. You'll need a new passkey on your door. (Your old one stays in your password manager; delete it there.) The rest of the town carries on.", choices: [{ label: 'Start over', value: true, primary: true }, { label: 'Keep playing', value: false, cancel: true }] });
+async function leaveTown() {
+  const r = await say({ face: '🌼', who: 'Leave town?', text: "You'll let go of your role and everything that came with it. You can join again straight away, as anyone, under any name; the rest of the town carries on. (A passkey you made here stays in your password manager; delete it there.)", choices: [{ label: 'Leave town', value: true, primary: true }, { label: 'Stay', value: false, cancel: true }] });
   closeDialog();
   if (!r.value) return;
-  await api.post('/api/reset');
-  pending.clear();
-  lastApproval = null;
-  Object.assign(counts, { errands: 0, tolls: 0, euCafe: false, swarm: false, mischief: 0 });
-  Object.assign(player, { x: SPOTS.spawn.x, y: SPOTS.spawn.y, path: null });
-  await refresh();
-  welcome();
-});
+  await api.leave();
+  location.reload();
+}
+document.getElementById('restart').addEventListener('click', leaveTown);
 
 // ---------------------------------------------------------------------------
 // The key on the street, and the welcome
@@ -796,26 +899,29 @@ async function keyFound() {
   }
 }
 
+const INTROS = {
+  agent: "You're playing an **agent**: the little round one. You, at the keyboard, are its **principal**: the person who answers for what it does.\n\nWalk with **WASD** or the **arrow keys**, or click where you want to go. Press **Q** for the **action deck**: everything you can do in town is in it, wherever you are. Some actions will be refused; that's the point. Press **E** to talk to a place, click anyone to ask for their badge, and **B** to take your own badge off.\n\nPlay it straight, or try to get away with something: the police and the courts are watching. Start at **Town Hall**, up the avenue.",
+  shopkeeper: "You run this place. Your panel (top left) is your counter: choose which registries you trust and what you ask for, and watch every customer's ID check as it happens.\n\nClick a customer to see exactly what they proved. If one misbehaves, report it to its registry (its principal hears about it) or file it with the police.",
+  homeowner: "This house is yours. Put a passkey on your door first. When an agent knocks, your **phone** (bottom right) shows who stands behind it, never who they are, and you decide with your passkey.\n\nYour door log shows every visit. Lost keys are dangerous: change the locks any time.",
+  police: "You investigate. Places send cases to your **case board**: suspicious payments, attempted break-ins, odd trading at the Exchange. You can open a case from any line in the town ledger.\n\nBadges don't say who anyone is. To find out, ask the court: it can order a registry to identify the principal, delete rogue agents, or ban a principal.",
+  judge: "You rule. Petitions from the police arrive on your **docket**. Each one asks you to order a registry to identify who stands behind a badge, to delete a principal's agents, or to ban a principal outright.\n\nEvery order runs on the framework: identifying is logged in the registry's transparency log, deleting revokes a whole lineage, banning withdraws a verification.",
+};
+
 async function welcome() {
   interacting = true;
   try {
-    const r = await say({
-      face: '🌼', who: 'Welcome to AgentTown', where: 'where every agent answers to someone',
-      text: "You're playing an **agent**: the little round one by the fountain. You, at the keyboard, are its **principal**: the person who answers for what it does.\n\nEveryone else in town is a real agent too, running errands for their own principals. Every door, shop and office makes real checks.\n\nWhat's your name? Only Town Hall's registry will keep it.",
-      input: { label: 'Your name', placeholder: 'e.g. Robin Ash' },
-      choices: [{ label: 'Enroll at Town Hall', value: true, primary: true }],
-    });
-    await api.post('/api/enroll', { name: r.input || 'Robin Ash' });
-    await say({
-      face: '🌼', who: 'How to play', where: 'press Q any time',
-      text: "Walk with **WASD** or the **arrow keys**, or click where you want to go. Press **Q** for the **action deck**: everything you can do in town is in it, wherever you are. Some actions will be refused; that's the point. Press **E** to talk to a place, click anyone to ask for their badge, and **B** to take your own badge off.\n\nYour **phone** (bottom right) is where places ask you for an OK. The **town ledger** (bottom left) shows everything everyone does. Start at **Town Hall**, up the avenue.",
-      choices: [{ label: "Let's go", value: true, primary: true }],
-    });
+    await say({ face: '🌼', who: `Welcome, ${S.me.name}`, where: S.me.claimName ?? 'AgentTown', text: INTROS[S.me.role], choices: [{ label: "Let's go", value: true, primary: true }] });
   } finally {
     closeDialog();
     interacting = false;
     await refresh();
   }
+}
+
+/** Where each role starts. */
+function startingPoint() {
+  const at = { shopkeeper: S.me.claim, homeowner: S.me.claim, police: 'police', judge: 'court' }[S.me.role];
+  return at ? placeFront(town, at) : SPOTS.spawn;
 }
 
 // ---------------------------------------------------------------------------
@@ -870,7 +976,7 @@ function update(dt) {
   }
   updateSprites(dt);
 
-  if (S && !S.found_key && !busyNow()) {
+  if (S?.me?.role === 'agent' && !S.found_key && !busyNow()) {
     const near = Math.hypot(player.x - (KEY_SPOT.x + 0.5) * TILE, player.y - (KEY_SPOT.y + 0.6) * TILE) < 18;
     if (near && !keyPrompted) {
       keyPrompted = true;
@@ -939,10 +1045,21 @@ function frame(now) {
 
 addEventListener('resize', resize);
 resize();
+requestAnimationFrame(frame);
+let joinedNow = false;
+if (!api.hasSession()) {
+  await showJoin();
+  joinedNow = true;
+}
 await refresh();
+if (!S) {
+  await showJoin();
+  joinedNow = true;
+  await refresh();
+}
+Object.assign(player, startingPoint());
 await poll();
 updateCamera(0, true);
-requestAnimationFrame(frame);
 setInterval(poll, 500);
 setInterval(() => { if (!document.hidden && !interacting) refresh(); }, 2500);
-if (!S?.principal) welcome();
+if (joinedNow) welcome();

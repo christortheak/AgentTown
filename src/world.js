@@ -18,7 +18,7 @@ import { startRelyingParty } from 'aaf-reference/src/rp/server.js';
 const hasKeys = (keysDir, id) => Boolean(keysDir && fs.existsSync(path.join(keysDir, `${fileNameFor(id)}.json`)));
 const prefer = (list, hint) => list.find((e) => e.id.includes(hint)) ?? null;
 
-export function buildWorld({ trust, keysDir }) {
+export function buildWorld({ trust, keysDir, adminTokens = {} }) {
   const registries = trust.registries;
   if (!registries.length) throw new Error('the federation has no registries');
   const regA = prefer(registries, 'registry-a') ?? registries[0];
@@ -42,6 +42,9 @@ export function buildWorld({ trust, keysDir }) {
     kyc: verifierEntry ? new IdentityVerifier({ id: verifierEntry.id, keys: loadKeys(verifierEntry.id, keysDir) }) : null,
     court: courtEntry ? new ResolutionAuthority({ id: courtEntry.id, name: courtEntry.name, keys: loadKeys(courtEntry.id, keysDir) }) : null,
     registryName: (id) => registries.find((r) => r.id === id)?.name ?? id,
+
+    /** The operator token for a registry, if this town may instruct its operator (court orders). */
+    adminToken: (id) => adminTokens[id] ?? (id && hasKeys(keysDir, id) ? loadKeys(id, keysDir).adminToken : null),
 
     /** Record pointers for a registration: authorization and provenance, and activity. */
     records(provenanceId) {

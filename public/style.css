@@ -262,3 +262,50 @@ summary { cursor: pointer; font-size: 13px; font-weight: 800; color: var(--muted
   .face { width: 46px; height: 46px; font-size: 26px; }
   .text { font-size: 14px; }
 }
+
+/* ---- Joining, and the panels for each role --------------------------------------------------- */
+
+.deck.join { padding: 0 18px 16px; max-height: 88vh; overflow: auto; }
+.deck.join header { padding: 16px 0 8px; }
+.deck.join h5 { margin: 14px 0 6px; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 8px; }
+.role { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; border-radius: 16px; box-shadow: none; }
+.role span { font-size: 26px; }
+.role b { font-size: 13px; }
+.role small { font-size: 11px; color: var(--muted); }
+.role.sel, .claims .sel { border-color: var(--green); background: #eef8ea; box-shadow: 0 0 0 3px rgba(90, 166, 90, 0.2); }
+.blurb { margin: 12px 2px; font-size: 14px; line-height: 1.45; }
+.claims { display: flex; flex-wrap: wrap; gap: 6px; }
+.claims button { font-size: 13px; padding: 6px 12px; box-shadow: none; }
+.deck.join .input { margin-top: 14px; }
+.deck.join .actions { margin-top: 14px; }
+.err { color: var(--bad); font-weight: 700; font-size: 13px; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+
+#rolePanel { top: 14px; left: 14px; width: 330px; max-height: calc(100vh - 34vh - 44px); overflow: auto; padding: 12px 14px; }
+#rolePanel[hidden], #quest[hidden], #record[hidden], #phone[hidden] { display: none; }
+#rolePanel header { cursor: default; }
+#rolePanel header p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+#rolePanel h5 { margin: 12px 0 4px; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+#rolePanel h5 .muted { text-transform: none; letter-spacing: 0; font-weight: 600; }
+#rolePanel .btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+#rolePanel .btns button { font-size: 13px; padding: 6px 12px; }
+#rolePanel > button[data-act="leave"] { margin-top: 10px; }
+.policy-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 8px 0; font-size: 12.5px; font-weight: 700; }
+.policy-row select { font: 600 12px var(--font); padding: 3px 6px; border-radius: 8px; border: 1.5px solid var(--frame); background: #fff; color: var(--ink); }
+.policy-row input { accent-color: var(--green); }
+.ticker { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0; font-size: 12.5px; }
+.ticker em { font-style: normal; font-weight: 800; }
+.ticker .up { color: var(--ok); }
+.ticker .down { color: var(--bad); }
+.rows { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12.5px; }
+.rows li { display: flex; gap: 8px; align-items: baseline; padding: 5px 6px; border-radius: 8px; line-height: 1.3; cursor: pointer; }
+.rows li:hover { background: var(--paper-2); }
+.rows li.muted { cursor: default; }
+.rows li i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--info); transform: translateY(1px); }
+.rows li.ok i { background: var(--ok); }
+.rows li.bad i { background: var(--bad); }
+.rows li.warn i { background: #e0a526; }
+body:not([data-role="agent"]) #badgeBtn { display: none; }
+.idcard .actions { flex-wrap: wrap; gap: 8px; }
+.idcard .actions button { font-size: 13px; }
