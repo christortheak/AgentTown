@@ -1,0 +1,16 @@
+{
+  "federation": {
+    "trustAnchor": "./trust-anchor.json",
+    "urlOverrides": {
+      "https://registry-a.aaf.test": "http://192.168.1.20:4101",
+      "https://registry-b.aaf.test": "http://192.168.1.21:4102"
+    },
+    "authorityKeys": "./authority-keys"
+  },
+  "places": {
+    "cafe": { "accepts": ["https://registry-b.aaf.test"] },
+    "bank": { "accepts": ["https://registry-a.aaf.test"] },
+    "fair": { "aaf": "required", "worldid": true },
+    "toll": { "aaf": "off", "x402": 0.5 }
+  }
+}

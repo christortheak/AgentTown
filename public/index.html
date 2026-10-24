@@ -21,17 +21,45 @@
   </div>
 </section>
 
+<section id="mapCard" class="panel">
+  <canvas id="minimap" aria-label="Map of AgentTown"></canvas>
+</section>
+
 <section id="record" class="panel">
-  <header id="recordHead"><h2>Your record</h2><span class="hint">what the registry holds</span></header>
+  <header id="recordHead"><h2>Your record</h2><span class="hint">tap to open</span></header>
   <div id="recordBody" class="fold"></div>
 </section>
 
+<section id="ledger" class="panel">
+  <header id="ledgerHead"><h2>Town ledger</h2><span class="hint">everything everyone does</span></header>
+  <ol id="ledgerList" class="fold"></ol>
+</section>
+
 <section id="phone" class="panel">
-  <header id="phoneHead"><h2>📱 Your phone</h2><span class="hint">you're the principal</span></header>
+  <header id="phoneHead"><h2>📱 Your phone <span id="phoneCount" class="count"></span></h2><span class="hint">you're the principal</span></header>
   <ul id="phoneList" class="fold"></ul>
 </section>
 
-<div id="keys" class="panel"><kbd>WASD</kbd> walk · click to go · <kbd>E</kbd> talk · <kbd>B</kbd> badge</div>
+<nav id="dock">
+  <button id="deckBtn" class="primary"><span>⚡</span> Actions <kbd>Q</kbd></button>
+  <button id="badgeBtn"><span>🪪</span> Badge <kbd>B</kbd></button>
+  <button id="directorBtn" title="Director: cues and policies for demos">🎬</button>
+</nav>
+
+<div id="outage" class="banner" hidden>📡 Registry A can't be reached from the shops. Places are deferring, not refusing.</div>
+
+<div id="palette" class="overlay" hidden>
+  <div class="deck" role="dialog" aria-label="Action deck">
+    <header><h3 id="paletteTitle">What would you like to do?</h3><button id="paletteClose" class="quiet small">Esc</button></header>
+    <input id="paletteSearch" placeholder="Search every action in town…" autocomplete="off" spellcheck="false">
+    <div id="paletteBody"></div>
+  </div>
+</div>
+
+<div id="director" class="panel" hidden>
+  <header><h2>🎬 Director</h2><button id="directorClose" class="quiet small">Close</button></header>
+  <div id="directorBody"></div>
+</div>
 
 <div id="dialog" class="dialog" hidden>
   <div id="dlgFace" class="face"></div>

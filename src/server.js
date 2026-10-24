@@ -1,7 +1,8 @@
 // AgentTown's web server:  npm start, then open http://localhost:4400
 //
-// Serves the game and its API. The town (town.js) runs its own in-process
-// federation, so nothing here touches aaf-reference's data directory.
+// Serves the game and its API. By default the town runs its own in-process
+// federation, so nothing here touches aaf-reference's data directory; set
+// AGENTTOWN_CONFIG to use an external federation (see town.config.example.json).
 // Open it at "localhost", not 127.0.0.1: passkeys are bound to the domain.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,34 +14,23 @@ export const PORT = Number(process.env.PORT ?? 4400);
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
-export async function startServer({ port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), quiet = false } = {}) {
-  const origin = `http://localhost:${port}`;
-  const town = await createTown({ origin, portOffset });
-  const { accounts } = town.hearth;
+export async function startServer({ port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), host = process.env.HOST ?? '127.0.0.1', origin = process.env.ORIGIN, quiet = false, residents = true, timeScale = 1, config } = {}) {
+  const townOrigin = origin ?? `http://localhost:${port}`;
+  const town = await createTown({ origin: townOrigin, portOffset, residents, timeScale, ...(config ? { config } : {}) });
+  const { accounts } = town.places.hearth.rp;
   const app = createApp('agenttown');
 
-  app.get('/api/state', () => town.state());
+  app.get('/api/info', () => town.info());
+  app.get('/api/state', () => town.player.state());
+  app.get('/api/actions', () => ({ actions: town.actions() }));
+  app.get('/api/world', ({ query }) => {
+    town.player.setPos({ x: Number(query.x), y: Number(query.y) });
+    return town.world_(Number(query.since ?? 0));
+  });
+  app.post('/api/enroll', ({ body }) => town.player.enroll(body ?? {}));
+  app.post('/api/do', ({ body }) => town.player.run(body?.action, body?.params ?? {}));
+  app.post('/api/director', ({ body }) => town.direct(body?.cue, body?.params ?? {}));
   app.post('/api/reset', () => town.reset());
-
-  app.post('/api/enroll', ({ body }) => town.enroll(body ?? {}));
-  app.post('/api/agent', ({ body }) => town.registerAgent(body ?? {}));
-  app.post('/api/badge', ({ body }) => town.setBadge(body ?? {}));
-  app.post('/api/revoke', () => town.revoke());
-  app.post('/api/helper', ({ body }) => town.hireHelper(body ?? {}));
-  app.post('/api/helper/hire', () => town.helperHiresHelper());
-  app.post('/api/court', () => town.courtOrder());
-
-  app.post('/api/grant', ({ body }) => town.grant(body ?? {}));
-  app.post('/api/helper/fund', ({ body }) => town.fundHelper(body ?? {}));
-  app.get('/api/receipts', () => town.receipts());
-
-  app.post('/api/buy', ({ body }) => town.buy(body ?? {}));
-  app.post('/api/key', () => town.pickUpKey());
-  app.post('/api/door', ({ body }) => town.door(body ?? {}));
-  app.post('/api/discard', ({ body }) => town.discard(body ?? {}));
-  app.post('/api/knock', () => town.knockInPerson());
-  app.post('/api/enter', ({ body }) => town.enterInPerson(body ?? {}));
-  app.post('/api/night', () => town.night());
 
   // Your front door's passkey ceremonies, handled by Hearth & Key's accounts.
   app.post('/api/passkey/options', () => accounts.passkeyRegistrationOptions('you'));
@@ -58,12 +48,14 @@ export async function startServer({ port = PORT, portOffset = Number(process.env
     return typed(page(file), type);
   });
 
-  const server = await app.listen(port, '127.0.0.1');
+  const server = await app.listen(port, host);
   if (!quiet) {
-    console.log(`AgentTown is open at ${origin}`);
+    const info = town.info();
+    console.log(`AgentTown is open at ${townOrigin}`);
+    console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
     console.log('Use "localhost", not 127.0.0.1: passkeys are bound to the domain.');
   }
-  return { town, origin, url: `http://127.0.0.1:${port}`, close: async () => { await closeServer(server); await town.close(); } };
+  return { town, origin: townOrigin, url: `http://127.0.0.1:${port}`, close: async () => { await closeServer(server); await town.close(); } };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

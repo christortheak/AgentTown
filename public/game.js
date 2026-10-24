@@ -1,28 +1,37 @@
-// AgentTown: the game loop, movement, and what happens at each place.
-// Every decision shown comes from the town's real services (see src/town.js).
+// AgentTown: the game loop, movement, the people in town, and how actions run.
+// Every decision shown comes from the town's real services (see src/).
 import {
-  TILE, COLS, ROWS, BOARD, KEY_SPOT, POND, SPAWN, BURGLAR_START,
-  buildTown, findPath, drawGround, drawWater, drawTree, drawLamp, drawBoard, drawBuilding, drawKey, drawAgent, drawBubble, drawNight,
+  TILE, COLS, ROWS, BOARD, KEY_SPOT, POND, FOUNTAIN, SPOTS,
+  buildTown, findPath, placeFront, drawGround, drawWater, drawTree, drawLamp, drawBoard, drawFountain, drawBuilding,
+  drawKey, drawAgent, drawBubble, drawNight, drawMinimap, minimapScale,
 } from './map.js';
+import { route, routeLength, pointAlong, tileOf } from './route.js';
 import * as api from './api.js';
-import { say, busy, closeDialog, dialogOpen, card, showCard, renderHud, renderPhone, toast, esc, DECISIONS, CLASSIFICATIONS } from './ui.js';
+import { say, busy, closeDialog, dialogOpen, card, showCard, renderHud, renderPhone, renderLedger, toast, esc, DECISIONS } from './ui.js';
+import { openPalette, paletteOpen } from './palette.js';
 
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
 const town = buildTown();
-const home = town.buildings.find((b) => b.id === 'home');
+const byId = Object.fromEntries(town.buildings.map((b) => [b.id, b]));
 
-let S = null; // the town's latest state, from the server
-const pending = new Map(); // approval request id -> what to do once you approve it
-const lastCards = {}; // shop -> the last ID check there (what that shop knows about you)
+let S = null; // your state, from the server
+let A = []; // the action catalog
+let W = { npcs: [], director: null }; // everyone else
+let ledger = [];
+let seq = 0;
+let clockOffset = 0;
+const counts = { errands: 0, tolls: 0, euCafe: false, swarm: false, mischief: 0 };
+const pending = new Map(); // approval request id -> the action to retry once approved
 let t = 0;
 
 // ---------------------------------------------------------------------------
-// View
+// View: the ground is drawn once into 16×16-tile chunks
 // ---------------------------------------------------------------------------
 
 const view = { scale: 1, dpr: 1, w: 0, h: 0, x: 0, y: 0 };
-let groundCache = null;
+const CHUNK = 16;
+let chunks = new Map();
 let camFocus = null;
 
 function resize() {
@@ -31,19 +40,32 @@ function resize() {
   canvas.height = Math.round(innerHeight * view.dpr);
   canvas.style.width = `${innerWidth}px`;
   canvas.style.height = `${innerHeight}px`;
-  view.scale = Math.max(0.55, Math.min(innerWidth / (24 * TILE), innerHeight / (15 * TILE), 3));
+  view.scale = Math.max(0.55, Math.min(innerWidth / (26 * TILE), innerHeight / (16 * TILE), 3));
   view.w = innerWidth / view.scale;
   view.h = innerHeight / view.scale;
-  const k = view.scale * view.dpr;
-  groundCache = document.createElement('canvas');
-  groundCache.width = Math.ceil(COLS * TILE * k);
-  groundCache.height = Math.ceil(ROWS * TILE * k);
-  const g = groundCache.getContext('2d');
-  g.scale(k, k);
-  drawGround(g, town);
+  chunks = new Map();
+  drawMinimapBase();
 }
-addEventListener('resize', resize);
-resize();
+
+function chunk(cx, cy) {
+  const key = `${cx},${cy}`;
+  let c = chunks.get(key);
+  if (c) return c;
+  const k = view.scale * view.dpr;
+  const size = CHUNK * TILE;
+  c = document.createElement('canvas');
+  c.width = Math.ceil(size * k);
+  c.height = Math.ceil(size * k);
+  const g = c.getContext('2d');
+  g.scale(k, k);
+  g.translate(-cx * size, -cy * size);
+  g.beginPath();
+  g.rect(cx * size, cy * size, size, size);
+  g.clip();
+  drawGround(g, town, Math.max(0, cx * CHUNK - 1), Math.max(0, cy * CHUNK - 1), Math.min(COLS, (cx + 1) * CHUNK + 1), Math.min(ROWS, (cy + 1) * CHUNK + 1));
+  chunks.set(key, c);
+  return c;
+}
 
 function updateCamera(dt, snap = false) {
   const target = camFocus ?? player;
@@ -56,22 +78,21 @@ function updateCamera(dt, snap = false) {
 }
 
 // ---------------------------------------------------------------------------
-// Characters
+// You, and everyone else
 // ---------------------------------------------------------------------------
 
-const player = { x: SPAWN.x, y: SPAWN.y, facing: { x: 0, y: 1 }, walking: false, phase: 0, path: null, then: null, look: {}, seed: 0 };
-const helper = { x: SPAWN.x, y: SPAWN.y, facing: { x: 0, y: 1 }, walking: false, phase: 0, look: { scale: 0.72, body: '#cdeed8', bulb: '#5fd38a', glow: true, badge: 'on' }, seed: 2, shown: false };
+const player = { x: SPOTS.spawn.x, y: SPOTS.spawn.y, facing: { x: 0, y: 1 }, walking: false, phase: 0, path: null, then: null, look: {}, seed: 0, speed: 125 };
 const trail = [];
-let npcs = [];
+const sprites = new Map(); // npc id -> what we draw
+const npcRoutes = new Map();
 const bubbles = [];
 
 function playerLook() {
   if (!S?.agent) return { body: '#fff1d6', bulb: '#cfc6b8', badge: 'none' };
-  if (S.agent.status === 'revoked') return { body: '#fff1d6', bulb: '#e05a4f', glow: true, badge: S.badge ? 'on' : 'none', badgeColor: '#f3c1bd', badgeMark: '#c8524a' };
+  if (S.agent.status === 'revoked') return { body: '#fff1d6', bulb: '#e05a4f', glow: true, badge: S.badge ? 'on' : 'none', revoked: true };
   return { body: '#fff1d6', bulb: S.badge ? '#5fd38a' : '#f2c14e', glow: S.badge, badge: S.badge ? 'on' : 'none' };
 }
 
-const tileOf = (p) => ({ x: Math.floor(p.x / TILE), y: Math.floor((p.y - 4) / TILE) });
 const solidAt = (x, y) => {
   const tx = Math.floor(x / TILE);
   const ty = Math.floor(y / TILE);
@@ -97,18 +118,138 @@ function follow(w, dt, speed) {
   w.walking = true;
 }
 
-function walkTo(point, then = null) {
+function walkTo(point, then = null, speed = 125) {
   const path = findPath(town, tileOf(player), tileOf(point));
-  if (!path) return;
+  if (!path) return false;
   path.push({ x: point.x, y: point.y });
   player.path = path;
   player.then = then;
+  player.speed = speed;
+  return true;
 }
 
-const bubble = (who, c) => {
-  const d = DECISIONS[c.decision] ?? { icon: '•', label: c.decision, tone: 'info' };
+/** Walk to a place; resolves true on arrival, false if you walked off instead. */
+function walkToPlace(id) {
+  return new Promise((resolve) => {
+    const front = placeFront(town, id);
+    if (Math.hypot(front.x - player.x, front.y - player.y) < 40) return resolve(true);
+    if (!walkTo(front, () => resolve(true), 190)) resolve(false);
+    player.cancel = () => resolve(false);
+  });
+}
+
+const serverNow = () => Date.now() + clockOffset;
+const bubble = (who, decision) => {
+  const d = DECISIONS[decision] ?? { icon: '•', label: decision, tone: 'info' };
   bubbles.push({ who, text: `${d.icon} ${d.label}`, tone: d.tone, t0: t });
 };
+
+function npcLook(n) {
+  const gone = n.status === 'revoked' || n.status === 'expired';
+  return { ...n.look, revoked: gone };
+}
+
+function updateSprites(dt) {
+  const seen = new Set();
+  let followIndex = 0;
+  for (const n of W.npcs) {
+    seen.add(n.id);
+    let s = sprites.get(n.id);
+    if (!s) {
+      s = { id: n.id, x: n.pos.x, y: n.pos.y, facing: { x: 0, y: 1 }, phase: Math.random() * 6, seed: Math.random() * 6, alpha: 0 };
+      sprites.set(n.id, s);
+    }
+    s.npc = n;
+    s.look = npcLook(n);
+    s.alpha = Math.min(1, (s.alpha ?? 0) + dt * 2);
+    if (n.status === 'gone') s.alpha = Math.max(0, s.alpha - dt * 3);
+    if (n.follow) {
+      const target = trail[Math.max(0, trail.length - 14 - followIndex * 10)] ?? { x: player.x - 18 - followIndex * 14, y: player.y + 6 };
+      followIndex++;
+      const d = Math.hypot(target.x - s.x, target.y - s.y);
+      if (d > 2) {
+        const step = Math.min(d, (d > 200 ? 400 : 140) * dt);
+        s.facing = { x: (target.x - s.x) / d, y: (target.y - s.y) / d };
+        s.x += s.facing.x * step;
+        s.y += s.facing.y * step;
+        s.walking = true;
+      } else s.walking = false;
+    } else if (n.move) {
+      let r = npcRoutes.get(n.id);
+      if (!r || r.key !== n.move.start) {
+        const pts = route(town, n.move.from, n.move.to);
+        r = { key: n.move.start, pts, len: routeLength(pts) };
+        npcRoutes.set(n.id, r);
+      }
+      const f = Math.min(1, Math.max(0, (serverNow() - n.move.start) / Math.max(1, n.move.end - n.move.start)));
+      const p = pointAlong(r.pts, f * r.len);
+      s.x = p.x;
+      s.y = p.y;
+      s.facing = { x: p.fx, y: p.fy };
+      s.walking = f < 1;
+    } else {
+      const d = Math.hypot(n.pos.x - s.x, n.pos.y - s.y);
+      if (d > 1) {
+        const step = Math.min(d, 160 * dt);
+        s.x += ((n.pos.x - s.x) / d) * step;
+        s.y += ((n.pos.y - s.y) / d) * step;
+        s.walking = d > 4;
+      } else s.walking = false;
+    }
+    if (s.walking) s.phase += dt * 12;
+    const near = Math.hypot(s.x - player.x, s.y - player.y) < 110;
+    s.label = n.kind === 'helper' ? `${n.name}${n.busy ? ' …' : ''}` : near || n.bubble ? n.name : null;
+    if (n.bubble && s.bubbleShown !== n.bubble.at) {
+      s.bubbleShown = n.bubble.at;
+      bubble(s, n.bubble.decision);
+    }
+  }
+  for (const id of sprites.keys()) if (!seen.has(id)) sprites.delete(id);
+}
+
+// ---------------------------------------------------------------------------
+// Places and what the keepers say
+// ---------------------------------------------------------------------------
+
+const PLACES = [
+  ...town.buildings.map((b) => ({ id: b.id, name: b.name, front: b.front, rect: { x: b.x * TILE, y: b.y * TILE, w: b.w * TILE, h: b.h * TILE } })),
+  { id: 'board', name: 'Notice board', front: { x: (BOARD.x + 0.5) * TILE, y: (BOARD.y + 1.6) * TILE }, rect: { x: BOARD.x * TILE - 4, y: (BOARD.y - 0.4) * TILE, w: TILE + 8, h: 1.4 * TILE } },
+  { id: 'pond', name: 'Pond', front: { x: (POND.x + POND.w / 2) * TILE, y: (POND.y + POND.h + 0.6) * TILE }, rect: { x: POND.x * TILE, y: POND.y * TILE, w: POND.w * TILE, h: POND.h * TILE } },
+];
+const placeName = (id) => PLACES.find((p) => p.id === id)?.name ?? id;
+
+const KEEPERS = {
+  townhall: { face: '🦉', who: 'Registrar Juniper:', text: 'we verify people once, then register their agents in a blink.' },
+  records: { face: '🦔', who: 'Archivist Moss:', text: 'I keep what each agent may do, and a receipt for everything it does.' },
+  court: { face: '⚖️', who: 'The clerk:', text: 'bring a badge number, and a judge can order a registry to say who stands behind it.' },
+  harbor: { face: '🦭', who: 'The harbor clerk:', text: 'Registry B, for the EU side. Register a sub-agent here and its chain runs through two registries.' },
+  orb: { face: '🔮', who: 'The Orb:', text: 'proof that you are a unique human, without your name. (Simulated World ID.)' },
+  home: { face: '🏡', who: 'Your front door,', text: 'with a Hearth & Key lock.' },
+  maple: { face: '🐰', who: "Maple's cottage.", text: "A note says she's at the market." },
+  hazel: { face: '🏠', who: "Hazel's house.", text: 'Her agent Fern runs her errands.' },
+  ivy: { face: '📦', who: "Ivy's house.", text: 'Empty, until a newcomer moves in.' },
+  lab: { face: '🧪', who: 'Wren Labs.', text: 'Their agent rents big jobs at the Forge: they disclose who they are, and publish a bill of materials.' },
+  rook: { face: '⛵', who: 'Rook & Daughters,', text: 'a French firm registered with the Harbor Registry.' },
+  mill: { face: '🌫️', who: 'The Old Mill.', text: 'Something about this place feels wrong.' },
+};
+
+function greetingFor(id) {
+  const policy = W.director?.places.find((p) => p.id === id);
+  if (policy) {
+    const shop = { bramble: ['🐻', 'Bram'], kettle: ['🦊', 'Fennel'], bakery: ['🐭', 'Crumb'], cafe: ['🦢', 'Odile'], bank: ['🐢', 'Teller Shell'], forge: ['🦫', 'Forgemaster Bea'], fair: ['🐿️', 'Nutmeg'], toll: ['🦆', 'Dabble'] }[id];
+    return { face: shop[0], who: `${shop[1]}:`, text: `welcome to ${policy.name}. Here we ask for ${policy.summary}.` };
+  }
+  return KEEPERS[id] ?? null;
+}
+
+function nearestPlace(radius = 38) {
+  let best = null;
+  for (const p of PLACES) {
+    const d = Math.hypot(p.front.x - player.x, p.front.y - player.y);
+    if (d < radius && (!best || d < best.d)) best = { ...p, d };
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------------------
 // Input
@@ -116,501 +257,230 @@ const bubble = (who, c) => {
 
 const keys = new Set();
 const MOVE = { arrowup: [0, -1], w: [0, -1], arrowdown: [0, 1], s: [0, 1], arrowleft: [-1, 0], a: [-1, 0], arrowright: [1, 0], d: [1, 0] };
-let scene = false; // true while the night plays out
+let scene = false;
+let interacting = false;
+const busyNow = () => dialogOpen() || paletteOpen() || scene || interacting || !document.getElementById('director').hidden;
 
 addEventListener('keydown', (e) => {
-  if (dialogOpen() || scene || e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   const k = e.key.toLowerCase();
+  if (k === 'escape' && !document.getElementById('director').hidden) return toggleDirector(false);
+  if (busyNow()) return;
   if (MOVE[k]) {
     keys.add(k);
-    player.path = null;
-    player.then = null;
+    if (player.path) {
+      player.path = null;
+      player.then = null;
+      player.cancel?.();
+    }
     e.preventDefault();
   } else if (k === 'e' || k === ' ' || k === 'enter') {
     e.preventDefault();
     const p = nearestPlace();
     if (p) interact(p);
+    else deck();
+  } else if (k === 'q' || k === 'tab' || k === '/') {
+    e.preventDefault();
+    deck();
   } else if (k === 'b') {
-    toggleBadge();
+    run({ id: 'badge', label: 'badge' }, {});
   }
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => keys.clear());
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (dialogOpen() || scene) return;
+  if (busyNow()) return;
   const wx = e.clientX / view.scale + view.x;
   const wy = e.clientY / view.scale + view.y;
+  for (const s of sprites.values()) {
+    if (Math.hypot(s.x - wx, s.y - 14 - wy) < 16 && s.npc.status !== 'gone') return talkTo(s);
+  }
   const hit = PLACES.find((p) => wx >= p.rect.x && wx <= p.rect.x + p.rect.w && wy >= p.rect.y && wy <= p.rect.y + p.rect.h);
-  if (hit) return walkTo(hit.front, hit);
-  if (!S?.found_key && Math.hypot(wx - (KEY_SPOT.x + 0.5) * TILE, wy - (KEY_SPOT.y + 0.5) * TILE) < 20) return walkTo({ x: (KEY_SPOT.x + 0.5) * TILE, y: (KEY_SPOT.y + 0.6) * TILE });
+  if (hit) return walkTo(hit.front, () => interact(hit));
   walkTo({ x: wx, y: wy });
 });
 
 // ---------------------------------------------------------------------------
-// Places
+// Running actions
 // ---------------------------------------------------------------------------
 
-const PLACES = [
-  ...town.buildings.map((b) => ({ id: b.id, name: b.name, front: b.front, rect: { x: b.x * TILE, y: b.y * TILE, w: b.w * TILE, h: b.h * TILE } })),
-  { id: 'board', name: 'Notice board', front: { x: (BOARD.x + 0.5) * TILE, y: (BOARD.y + 1.6) * TILE }, rect: { x: BOARD.x * TILE - 4, y: (BOARD.y - 0.4) * TILE, w: TILE + 8, h: 1.4 * TILE } },
-  { id: 'pond', name: 'Pond', front: { x: (POND.x + 2.5) * TILE, y: (POND.y + POND.h + 0.6) * TILE }, rect: { x: POND.x * TILE, y: POND.y * TILE, w: POND.w * TILE, h: POND.h * TILE } },
-];
-
-function nearestPlace() {
-  let best = null;
-  for (const p of PLACES) {
-    const d = Math.hypot(p.front.x - player.x, p.front.y - player.y);
-    if (d < 34 && (!best || d < best.d)) best = { ...p, d };
-  }
-  return best;
+async function deck(here = nearestPlace(60)) {
+  if (paletteOpen()) return;
+  A = (await api.get('/api/actions')).actions;
+  const choice = await openPalette({
+    actions: A,
+    here: here && A.some((a) => a.place === here.id) ? { id: here.id, name: here.name } : null,
+    greeting: here ? greetingFor(here.id) : null,
+    placeName,
+    nearby: (options) => [...options].sort((a, b) => dist(a.value) - dist(b.value)).map((o) => ({ ...o, hint: `${o.hint} · ${Math.round(dist(o.value) / TILE)} steps` })),
+  });
+  if (choice) await run(choice.action, choice.params);
 }
+const dist = (id) => {
+  const s = sprites.get(id);
+  return s ? Math.hypot(s.x - player.x, s.y - player.y) : 1e9;
+};
 
-let interacting = false;
-async function interact(place) {
+async function run(action, params) {
   if (interacting) return;
   interacting = true;
-  keys.clear();
-  player.walking = false;
-  player.facing = { x: 0, y: -1 };
   try {
-    await SCRIPTS[place.id]();
-  } catch (err) {
-    await say({ face: '⚠️', who: 'Something went wrong', text: err.message });
-  } finally {
+    if (action.place && !(await walkToPlace(action.place))) return;
+    if (action.id.startsWith('mischief.') && params.at && !(await walkToPlace(params.at))) return;
+    if (action.client === 'passkey') return await setUpPasskey();
+    if (action.client === 'night') return await nightfall();
+    if (action.client === 'receipts') return await showReceipts();
+    if (action.id.startsWith('mischief.')) counts.mischief++;
+    if (action.id === 'helper.errand') counts.errands++;
+    const keeper = action.place ? greetingFor(action.place) : null;
+    busy(`${action.label}`, keeper?.face ?? '⏳');
+    const out = await api.post('/api/do', { action: action.id, params });
     closeDialog();
+    await present(out, action);
+  } catch (err) {
+    closeDialog();
+    toast(err.message, 'bad');
+  } finally {
     interacting = false;
     await refresh();
   }
 }
 
-const SCRIPTS = {
-  townhall: townHall,
-  records: recordsOffice,
-  bramble: () => shop('bramble'),
-  kettle: () => shop('kettle'),
-  home: frontDoor,
-  maple: maplesCottage,
-  board: noticeBoard,
-  pond,
-};
-
-// ---- Town Hall: Registry A ------------------------------------------------
-
-async function townHall() {
-  const J = (text, o = {}) => say({ face: '🦉', who: 'Registrar Juniper', where: 'Town Hall · Registry A (United States)', text, ...o });
-  if (!S.principal) {
-    const r = await J("Welcome to AgentTown! I'm Juniper, the registrar.\n\nBefore an agent can act for you here, the registry needs to know **who stands behind it**. That's you, the person at the keyboard. What's your name? Only this registry keeps it.", {
-      input: { label: 'Your name', placeholder: 'e.g. Robin Ash' },
-      choices: [{ label: 'Verify me', value: 'go', primary: true }, { label: 'Not yet', value: null, cancel: true }],
-    });
-    if (!r.value) return;
-    busy('VerityCheck is checking your ID', '🦉');
-    await api.post('/api/enroll', { name: r.input });
-    await refresh();
-    await J(`All done, ${S.principal.name}. VerityCheck verified you at **IAL2**.\n\nThat was the slow step, and you only do it once. Shops will never learn your name from your agent. Only this registry can say who you are, and only when a court orders it.`, { choices: [{ label: 'Next', value: true, primary: true }] });
-  }
-  if (!S.agent || S.agent.status === 'revoked') {
-    const again = S.agent?.status === 'revoked';
-    const r = await J(again
-      ? "Let's register a fresh agent. The revoked one stays revoked, and what it did stays on record.\n\nWhat shall we call the new one?"
-      : "Now let's register your agent. That's the little one you're steering around town.\n\nWhat shall we call it?", {
-      input: { label: "Your agent's name", value: again ? '' : 'Pip' },
-      choices: [{ label: 'Register', value: 'go', primary: true }, { label: 'Not yet', value: null, cancel: true }],
-    });
-    if (!r.value) return;
-    busy('Registering', '🦉');
-    const res = await api.post('/api/agent', { name: r.input || 'Pip' });
-    await refresh();
-    await J(`Registered in **${res.issuance_ms} ms**. That's the fast step, because you're already verified.\n\nHere's ${S.agent.name}'s badge. Every place sees a **different badge number**, so shops can't compare notes about you. Press **B** to take it off and see what happens.\n\nNext stop: the Records Office, to say what ${S.agent.name} may do.`);
+async function present(out, action) {
+  if (out.type === 'toggle') {
+    if ('badge' in out) toast(out.badge ? 'Badge on: places see who stands behind you (but not your name)' : 'Badge off: places see an unlabeled agent', out.badge ? 'ok' : 'warn');
     return;
   }
-  for (;;) {
-    const helperAlive = S.helper?.status === 'active';
-    const choices = [];
-    if (!helperAlive) choices.push({ label: 'Hire a helper (a sub-agent)', value: 'helper' });
-    else choices.push({ label: `Ask ${S.helper.name} to hire a helper of its own`, value: 'deeper' });
-    if (S.events.includes('night') && !S.events.includes('court')) choices.push({ label: "Take last night's visitors to court", value: 'court', primary: true });
-    choices.push({ label: `Revoke ${S.agent.name} (my device was stolen)`, value: 'revoke' });
-    choices.push({ label: 'Bye', value: null, cancel: true });
-    const r = await J(`Hello again, ${S.principal.name}. What can the registry do for you?`, { choices });
-    if (!r.value) return;
-
-    if (r.value === 'helper') {
-      const h = await J(`A helper is a **sub-agent**. ${S.agent.name} registers it, so its chain leads back to you. It's **ephemeral**: it lapses on its own in four minutes.\n\nWhat's its name?`, {
-        input: { label: "Helper's name", value: 'Sprout' },
-        choices: [{ label: 'Register helper', value: 'go', primary: true }, { label: 'Never mind', value: null, cancel: true }],
-      });
-      if (!h.value) continue;
-      busy(`${S.agent.name} is registering a helper`, '🦉');
-      const res = await api.post('/api/helper', { name: h.input || 'Sprout' });
-      await refresh();
-      if (!res.ok) {
-        await J(`The registry refused: "${res.reasons.join('; ')}".`);
-        continue;
-      }
-      helper.x = player.x + 18;
-      helper.y = player.y + 6;
-      await J(`${S.helper.name} is registered under ${S.agent.name}. It can't spend anything yet: authority lives at the **Records Office**, so ask the archivist to give it a budget.`);
-      return;
-    }
-    if (r.value === 'deeper') {
-      busy(`${S.helper.name} is trying to register a helper of its own`, '🦉');
-      const res = await api.post('/api/helper/hire');
-      await J(res.ok ? 'Registered. (That should not have happened!)' : `Refused: "${res.reasons[0]}".\n\nWhen you registered ${S.agent.name}, you gave its lineage a **depth budget of one**. A helper's helper would be two levels down.`);
-      continue;
-    }
-    if (r.value === 'court') {
-      busy('The court is considering your petition', '⚖️');
-      const c = await api.post('/api/court');
-      await refresh();
-      await showCard(courtHtml(c));
-      return;
-    }
-    if (r.value === 'revoke') {
-      const sure = await J(`Revoking ${S.agent.name} cuts it off at once, everywhere that checks its badge. Any helper goes with it. Go ahead?`, {
-        choices: [{ label: `Revoke ${S.agent.name}`, value: true, primary: true }, { label: 'Keep it', value: false, cancel: true }],
-      });
-      if (!sure.value) continue;
-      busy('Revoking', '🦉');
-      const res = await api.post('/api/revoke');
-      await refresh();
-      await J(`${S.agent.name} is revoked${res.cascades_to ? ', and so is its helper' : ''}. Places that check live status refuse it from now on: try a shop and see. You can register a new agent here any time.`);
-      return;
-    }
-  }
+  if (out.type === 'check') bubble(player, out.decision);
+  const req = out.pending ?? out.pendingRequest;
+  if (req) pending.set(req.request_id, req.retry);
+  await card(out, { note: req && !out.story ? 'Check your phone (bottom right): you are the principal, so the lock asks you.' : undefined });
+  if (out.decision === 'allow' && out.result?.items && action?.id !== 'home.discard') await inside(out.result.items);
 }
 
-function courtHtml(c) {
-  return `
-    <header><div><span class="eyebrow">Court order</span><h3>${esc(c.court)}</h3></div><div class="stamp info">Resolved</div></header>
-    <p>The court ordered <b>${esc(c.registry)}</b> to say who stands behind one of the badges at your door last night.</p>
-    <section><h4>Who stands behind it</h4><ul class="learned"><li><b>${esc(c.principal.name)}</b>, an organization registered in ${esc(c.principal.jurisdiction)} (no. ${esc(c.principal.registration_number)})</li></ul></section>
-    <section><h4>The agent wearing that badge</h4><ul class="learned">${c.agents.map((a) => `<li>${esc(a.label)} (registration ${esc(a.status)})</li>`).join('')}</ul></section>
-    <p class="note">${esc(c.related_at_hearth)} of its badges were seen at Hearth & Key last night. Neither you nor Hearth & Key knew this name until a court asked. The lookup itself went into the registry's transparency log (now ${esc(c.transparency_log_size)} entries), so lookups of identity can be audited too.</p>
-    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`;
-}
-
-// ---- Records Office: Ledgerline (authority) and Tessera (activity) ---------
-
-async function recordsOffice() {
-  const M = (text, o = {}) => say({ face: '🦔', who: 'Archivist Moss', where: 'Records Office · Ledgerline (authority) · Tessera (activity)', text, ...o });
-  if (!S.agent) return M("I keep two kinds of record: what each agent **may** do, and what it **has** done.\n\nNeither means much until your agent is registered. Town Hall first, then come back.");
-  if (S.agent.status === 'revoked') return M(`${S.agent.name} is revoked, so I can't record new authority for it. Register a new agent at Town Hall.`);
-  if (!S.grant) {
-    const choices = S.budgets.map((b) => ({ label: `Up to $${b} a purchase`, value: b, primary: b === 50 }));
-    choices.push({ label: 'Not now', value: null, cancel: true });
-    const r = await M(`What may ${S.agent.name} do for you? Sign a grant and I'll keep it on record.\n\nEvery grant here covers **buying books and home goods**, **entering your home**, and **passing part of this to one helper**. You choose the spending limit.`, { choices });
-    if (!r.value) return;
-    busy('Ledgerline is checking your signature', '🦔');
-    await api.post('/api/grant', { budget: r.value });
+async function retry(rid) {
+  const r = pending.get(rid);
+  pending.delete(rid);
+  if (!r || scene) return;
+  interacting = true;
+  try {
+    const out = await api.post('/api/do', { action: r.action, params: r.params });
+    if (r.action === 'home.discard' && out.decision === 'allow') lastApproval = r.params.approvalRef;
+    await present(out, { id: r.action });
+    if (r.action === 'home.discard' && out.decision === 'allow') await inside(out.result.items);
+  } finally {
+    interacting = false;
     await refresh();
-    await M(`Signed and deposited. ${S.agent.name} may now spend up to **$${S.grant.budget} a purchase** on books and home goods, and nothing else.\n\nA shop sees only the part of the grant that covers what ${S.agent.name} asks it for, never the rest.`);
-    return;
-  }
-  for (;;) {
-    const choices = [];
-    if (S.helper?.status === 'active' && !S.helper.budget) choices.push({ label: `Give ${S.helper.name} a budget`, value: 'fund', primary: true });
-    choices.push({ label: 'Show my activity receipts', value: 'receipts' });
-    choices.push({ label: 'What do you keep, exactly?', value: 'explain' });
-    choices.push({ label: 'Bye', value: null, cancel: true });
-    const r = await M(`Hello, ${S.principal.name}. ${S.agent.name}'s grant is on file.`, { choices });
-    if (!r.value) return;
-    if (r.value === 'fund') {
-      const b = S.grant.budget;
-      const amounts = [Math.round(b / 5), Math.round(b / 2.5), b * 2];
-      const r2 = await M(`How much may ${S.helper.name} spend? It can only get a slice of what ${S.agent.name} already has.`, {
-        choices: [...amounts.map((v) => ({ label: `$${v} a purchase${v > b ? ` (more than ${S.agent.name} has)` : ''}`, value: v })), { label: 'Never mind', value: null, cancel: true }],
-      });
-      if (!r2.value) continue;
-      busy('Ledgerline is checking the delegation', '🦔');
-      const res = await api.post('/api/helper/fund', { budget: r2.value });
-      await refresh();
-      await M(res.ok
-        ? `Recorded. ${S.helper.name} may spend up to **$${res.budget} a purchase**. Send it shopping: at a shop, choose ${S.helper.name} as the buyer.`
-        : `Refused: "${res.reasons[0]}".\n\nA helper can't be given more than ${S.agent.name} has. Pick a smaller amount.`);
-      continue;
-    }
-    if (r.value === 'receipts') {
-      const rr = await api.get('/api/receipts');
-      closeDialog();
-      await showCard(receiptsHtml(rr));
-      continue;
-    }
-    await M("**Ledgerline** holds grants: what each agent may do, signed by whoever stands behind it. When a shop asks, Ledgerline issues a credential for that shop alone, showing only the part that matters there.\n\n**Tessera** holds activity logs. The agent and the place it dealt with each write their own account of what happened. Every entry gets a signed receipt, so nobody can quietly rewrite it later.");
-  }
-}
-
-function receiptsHtml(rr) {
-  const rows = rr.receipts.map((r) => {
-    const d = DECISIONS[r.decision] ?? { tone: 'info', label: r.decision };
-    return `<li><span class="stamp-sm ${d.tone}">${esc(d.label)}</span> ${esc(r.place)} · <code>${esc(r.action)}</code><small>entry #${esc(r.index)} · receipt ${r.verified ? 'verified ✓' : 'failed'}</small></li>`;
-  }).join('');
-  return `
-    <header><div><span class="eyebrow">Tessera Logs · activity</span><h3>Your receipts</h3></div><div class="stamp info">${esc(rr.total)} entries</div></header>
-    <p>Each time a place decided something about your agent, it wrote a signed entry to your agent's activity log and kept a receipt. These are the latest.</p>
-    ${rows ? `<ul class="receipts">${rows}</ul>` : '<p class="muted">Nothing yet. Go and do something!</p>'}
-    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`;
-}
-
-// ---- Shops ------------------------------------------------------------------
-
-async function shop(key) {
-  const def = S.shops[key];
-  const keeper = key === 'bramble' ? { face: '🐻', who: 'Bram' } : { face: '🦊', who: 'Fennel' };
-  const K = (text, o = {}) => say({ ...keeper, where: def.name, text, ...o });
-  for (;;) {
-    const choices = def.items.map((it) => ({ label: `${it.name} · $${it.price}`, value: it.id }));
-    if (lastCards[key]) choices.push({ label: 'What do you know about me?', value: 'know' });
-    choices.push({ label: 'Just looking', value: null, cancel: true });
-    const r = await K(key === 'bramble'
-      ? 'Welcome to Bramble Books! Everything is priced per volume. What can I find for you?'
-      : 'Copper Kettle Goods, welcome! Kettles, lanterns, seeds, clocks. What catches your eye?', { choices });
-    if (!r.value) return;
-    if (r.value === 'know') {
-      await showKnown(key, def);
-      continue;
-    }
-    let by = 'agent';
-    if (S.helper?.status === 'active' && S.agent?.status === 'active') {
-      const w = await K('Who is buying?', { choices: [{ label: S.agent.name, value: 'agent', primary: true }, { label: `${S.helper.name} (your helper)`, value: 'helper' }] });
-      by = w.value;
-    }
-    busy(`${keeper.who} is checking the badge`, keeper.face);
-    const c = await api.post('/api/buy', { shop: key, item: r.value, by });
-    if (c.ppid && by === 'agent') lastCards[key] = c;
-    bubble(by === 'helper' ? helper : player, c);
-    await refresh();
-    await card(c, { note: shopNote(c, keeper.who) });
-    if (c.decision === 'allow') toast(`Bought: ${c.result?.item}`, 'ok');
-  }
-}
-
-function shopNote(c, keeper) {
-  if (c.classification === 'UNLABELED') return `No badge, no sale. ${keeper} has no way to tell whether anyone would answer for this purchase.`;
-  if (c.decision === 'allow' && c.chain_length === 2) return 'The shop can see a chain: a helper, acting for an agent, acting for a verified person. It still does not learn who that person is.';
-  return null;
-}
-
-async function showKnown(key, def) {
-  const c = lastCards[key];
-  const other = Object.entries(lastCards).find(([k]) => k !== key)?.[1];
-  closeDialog();
-  await showCard(`
-    <header><div><span class="eyebrow">${esc(def.name)}'s notebook</span><h3>What they know about you</h3></div></header>
-    <ul class="learned">${c.learned.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
-    <p class="note">${other
-      ? `${esc(other.place)} knows your agent by a different number (<code>…${esc(other.ppid.split(':').pop().slice(-8))}</code> there, <code>…${esc(c.ppid.split(':').pop().slice(-8))}</code> here). Nothing either shop holds can be matched against the other's.`
-      : 'Buy something at the other shop, then compare: it will know your agent by a different number.'}</p>
-    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`);
-}
-
-// ---- Your house: Hearth & Key, with your passkey ------------------------------
-
-async function frontDoor() {
-  const H = (text, o = {}) => say({ face: '🏡', who: 'Your front door', where: 'Hearth & Key smart lock', text, ...o });
-  if (!S.home.passkey) {
-    const r = await H("Your house has a Hearth & Key lock, but no passkey on it yet.\n\nWith a passkey, the lock opens only for **you**, confirmed by Touch ID, Face ID or your device PIN, or for **agents you've approved**. A key on its own opens nothing.", {
-      choices: [{ label: 'Set up a passkey', value: true, primary: true }, { label: 'Later', value: false, cancel: true }],
-    });
-    if (!r.value) return;
-    const problem = api.passkeysUsable();
-    if (problem) return H(problem);
-    busy('Waiting for your passkey', '🏡');
-    try {
-      await api.registerPasskey();
-    } catch (e) {
-      return H(e.name === 'NotAllowedError' ? 'The passkey prompt was dismissed. Try again whenever you like.' : e.message);
-    }
-    await refresh();
-    toast('Passkey set on your front door', 'ok');
-  }
-  for (;;) {
-    const choices = [];
-    if (S.badge) choices.push({ label: `Send ${S.agent.name} in`, value: 'agent', primary: true });
-    else {
-      choices.push({ label: 'Knock and confirm with your passkey', value: 'knock', primary: true });
-      choices.push({ label: 'Just use your house key', value: 'key' });
-    }
-    choices.push({ label: 'Leave', value: null, cancel: true });
-    const text = S.badge
-      ? `Your front door. ${S.agent.name} is wearing its badge.`
-      : `Your front door. ${S.agent ? `${S.agent.name} isn't wearing its badge, so` : "You haven't registered an agent, so"} the lock treats this as a **person** at the door, not an agent.`;
-    const r = await H(text, { choices });
-    if (!r.value) return;
-
-    if (r.value === 'agent') {
-      busy('The lock is checking the badge', '🏡');
-      const c = await api.post('/api/door', { account: 'you' });
-      await refresh();
-      if (c.decision === 'step_up' && c.approval_request) {
-        pending.set(c.approval_request.request_id, async () => {
-          const again = await api.post('/api/door', { account: 'you' });
-          await refresh();
-          await card(again, { note: again.decision === 'allow' ? `You approved this agent with your passkey, so the lock now knows ${S.agent.name}. A copy of your key would not have done it.` : null });
-          if (again.decision === 'allow') await inside(again.result.items);
-        });
-        await card(c, { note: 'This agent has never been to your door, so the lock asked you. Your phone (bottom right) shows who stands behind the agent. Approve with your passkey.' });
-        return;
-      }
-      bubble(player, c);
-      await card(c);
-      if (c.decision === 'allow') return inside(c.result.items);
-      continue;
-    }
-    if (r.value === 'key') {
-      busy('The lock is looking at your key', '🏡');
-      const c = await api.post('/api/door', { account: 'you', useKey: true });
-      await refresh();
-      bubble(player, c);
-      await card(c, { note: 'In AgentTown a key is a bearer token. Whoever holds it could be anyone, so on its own it opens nothing.' });
-      continue;
-    }
-    const req = await api.post('/api/knock');
-    pending.set(req.request_id, async () => {
-      const c = await api.post('/api/enter', { requestId: req.request_id });
-      await refresh();
-      await card(c, { note: 'Your passkey approved exactly this: opening this door, once, just now.' });
-      if (c.decision === 'allow') await inside(c.result.items);
-    });
-    await refresh();
-    return H('The lock sent a request to your phone (bottom right). Approve it with your passkey.');
   }
 }
 
 let lastApproval = null;
 async function inside(items) {
-  const I = (text, o = {}) => say({ face: '🛋️', who: 'Inside your house', where: 'Hearth & Key', text, ...o });
   for (;;) {
     const choices = [{ label: 'Throw something out', value: 'toss' }];
     if (lastApproval) choices.push({ label: 'Reuse your last approval for something else', value: 'reuse' });
     if (!S.events.includes('night')) choices.push({ label: 'Rest until night', value: 'night', primary: true });
     choices.push({ label: 'Go back outside', value: null, cancel: true });
-    const r = await I(`Cozy. On the shelf: ${items.join(', ')}.`, { choices });
-    if (!r.value) return;
+    const r = await say({ face: '🛋️', who: 'Inside your house', where: 'Hearth & Key', text: `Cozy. On the shelf: ${items.join(', ')}.`, choices });
+    if (!r.value) return closeDialog();
     if (r.value === 'night') {
       closeDialog();
       return nightfall();
     }
-    const what = await I('Which one?', { choices: [...items.map((i) => ({ label: i, value: i })), { label: 'Never mind', value: null, cancel: true }] });
+    const what = await say({ face: '🛋️', who: 'Which one?', text: '', choices: [...items.map((i) => ({ label: i, value: i })), { label: 'Never mind', value: null, cancel: true }] });
     if (!what.value) continue;
     busy('The lock is checking', '🛋️');
+    const out = await api.post('/api/do', { action: 'home.discard', params: r.value === 'reuse' ? { item: what.value, approvalRef: lastApproval } : { item: what.value } });
     if (r.value === 'reuse') {
-      const c = await api.post('/api/discard', { item: what.value, approvalRef: lastApproval });
-      if (c.approval_request) await api.declineRequest(c.approval_request.request_id);
+      if (out.approval_request) await api.declineRequest(out.approval_request.request_id);
       await refresh();
-      await card(c, { note: 'Not with that approval. Each approval covers one exact act, once: that one was for something else, and it is used up. This would need a fresh approval on your phone.' });
+      await card(out, { note: 'Not with that approval. Each approval covers one exact act, once: that one was for something else, and it is used up.' });
       continue;
     }
-    const c = await api.post('/api/discard', { item: what.value });
     await refresh();
-    if (c.decision === 'step_up' && c.approval_request) {
-      const rid = c.approval_request.request_id;
-      pending.set(rid, async () => {
-        const done = await api.post('/api/discard', { item: what.value, approvalRef: rid });
-        await refresh();
-        await card(done, { note: done.decision === 'allow' ? 'Thrown out. Your approval named exactly this item, and now it is used up.' : null });
-        if (done.decision === 'allow') {
-          lastApproval = rid;
-          await inside(done.result.items);
-        }
-      });
-      await card(c, { note: 'Throwing things out needs your passkey every time, even from an agent you trust. Check your phone.' });
-      return;
-    }
-    await card(c);
+    await present(out, { id: 'home.discard' });
+    if (out.pending) return;
   }
 }
 
-// ---- Maple's cottage, and her lost key ------------------------------------------
-
-async function maplesCottage() {
-  const M = (text, o = {}) => say({ face: '🐰', who: "Maple's cottage", where: 'Hearth & Key smart lock', text, ...o });
-  for (;;) {
-    const choices = [{ label: 'Knock', value: 'knock', primary: true }];
-    if (S.found_key) choices.push({ label: "Try Maple's key", value: 'key' });
-    choices.push({ label: 'Leave', value: null, cancel: true });
-    const r = await M("Maple's cottage. A note on the door says she's at the market today.", { choices });
-    if (!r.value) return;
-    busy(r.value === 'key' ? 'Trying the key' : 'Knocking', '🐰');
-    const c = await api.post('/api/door', { account: 'maple', useKey: r.value === 'key' });
-    await refresh();
-    bubble(player, c);
-    if (r.value === 'knock') {
-      const who = c.approval_request?.details?.accountability;
-      await card(c, {
-        stamp: c.declined_by ? { label: 'Maple said no', tone: 'bad' } : undefined,
-        note: c.declined_by && who
-          ? `The lock asked Maple. Her phone buzzed at the market and told her a ${String(who.type).replace('_', ' ')} verified ${who.assurance} stands behind this agent, but not who. She doesn't know you, so she declined.`
-          : null,
-      });
-    } else {
-      await card(c, { note: S.badge
-        ? "Your agent tried a key it had no business using, while wearing its badge. Hearth & Key reported it to the registry, and the registry told the person behind the agent: you. Check your phone."
-        : "No badge, so the lock treats this as someone holding a key. A key alone opens nothing. And with no badge there's nobody to report it to." });
-    }
-  }
-}
-
-let keyPrompted = false;
-async function keyFound() {
-  interacting = true;
-  keys.clear();
-  player.path = null;
+async function setUpPasskey() {
+  if (S.home.passkey) return toast('Your door already has a passkey.', 'info');
+  const problem = api.passkeysUsable();
+  if (problem) return say({ face: '🏡', who: 'Your front door', text: problem }).then(closeDialog);
+  busy('Waiting for your passkey', '🔑');
   try {
-    const r = await say({
-      face: '🔑', who: 'A key tag', where: 'The lower street',
-      text: "Something glints on the path: a key tag reading **Hearth & Key · maple**. It must be Maple's spare.\n\nIn AgentTown a key works like an API token: it says which home it's for, not who is holding it.",
-      choices: [{ label: 'Pick it up', value: true, primary: true }, { label: 'Leave it', value: false, cancel: true }],
-    });
-    if (r.value) {
-      await api.post('/api/key');
-      toast("You picked up Maple's key", 'info');
-    }
+    await api.registerPasskey();
+    closeDialog();
+    toast('Passkey set on your front door', 'ok');
+  } catch (e) {
+    closeDialog();
+    toast(e.name === 'NotAllowedError' ? 'The passkey prompt was dismissed.' : e.message, 'bad');
+  }
+}
+
+function showReceipts() {
+  const rows = ledger.filter((e) => e.mine && e.card?.receipt).slice(-12).reverse();
+  return showCard(`
+    <header><div><span class="eyebrow">Activity log</span><h3>Your receipts</h3></div><div class="stamp info">${rows.length} shown</div></header>
+    <p>Each time a place decided something about your agent, it wrote a signed entry to the activity log and kept a receipt.</p>
+    ${rows.length ? `<ul class="receipts">${rows.map((e) => `<li><span class="stamp-sm ${e.tone}">${esc(DECISIONS[e.decision]?.label ?? e.decision)}</span>${esc(e.card.place)} · <code>${esc(e.card.action)}</code><small>${esc(e.card.receipt.log.replace('https://', ''))} #${esc(e.card.receipt.index)} · ${e.card.receipt.verified ? 'verified ✓' : 'failed'}</small></li>`).join('')}</ul>` : '<p class="muted">Nothing yet.</p>'}
+    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`);
+}
+
+async function talkTo(s) {
+  interacting = true;
+  try {
+    const n = s.npc;
+    const kinds = { resident: 'a resident’s agent', helper: 'your sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer' };
+    const r = await say({ face: '🔍', who: n.name, where: kinds[n.kind] ?? '', text: n.busy ? `Out on an errand: ${n.busy}.` : n.status !== 'active' ? `Status: ${n.status}.` : 'Ask to see their badge?', choices: [{ label: 'Ask to see their badge', value: true, primary: true }, { label: 'Leave them be', value: false, cancel: true }] });
+    closeDialog();
+    if (!r.value) return;
+    const out = await api.post('/api/do', { action: 'id.ask', params: { npc: n.id } });
+    await card(out);
+  } catch (err) {
+    toast(err.message, 'bad');
   } finally {
     closeDialog();
     interacting = false;
-    await refresh();
   }
 }
 
-// ---- Everything else ----------------------------------------------------------
+async function interact(place) {
+  if (place.id === 'board') return noticeBoard();
+  if (place.id === 'pond') return say({ face: '🪷', who: 'The pond', text: S?.agent ? `You see ${S.agent.name}, ${S.badge ? 'badge on' : 'badge tucked away'}.` : 'You see a small round creature with no badge.' }).then(closeDialog);
+  if (!A.some((a) => a.place === place.id)) {
+    const k = greetingFor(place.id);
+    return say({ face: k?.face ?? '🏠', who: place.name, text: k ? `${k.who} ${k.text}` : '' }).then(closeDialog);
+  }
+  return deck(place);
+}
 
-function noticeBoard() {
-  return say({
-    face: '📋', who: 'Notice board', where: 'AgentTown',
+async function noticeBoard() {
+  const info = await api.get('/api/info');
+  await say({
+    face: '📋', who: 'Notice board', where: 'Town Square',
     html: `<ul class="notices">
-      <li><b>Town Hall</b>: verified once, agents registered in a blink.</li>
-      <li><b>Records Office</b>: grants, and a receipt for everything.</li>
-      <li><b>Bramble Books</b> &amp; <b>Copper Kettle</b>: open all day. Badges, please.</li>
-      <li><b>Hearth &amp; Key</b> reminds residents: put a passkey on your door.</li>
-      <li><b>Lost</b>: one key tag, somewhere on the lower street. —M.</li>
-      <li><b>Night watch</b>: strangers seen about after dark.</li>
+      <li>Press <b>Q</b> for the action deck: everything you can do in town, wherever you are.</li>
+      <li><b>Civic Row</b> (north): Town Hall, the Records Office, the Courthouse, the Orb.</li>
+      <li><b>Market Lane</b> (west): books, kettles, bread, the bank. <b>The Works</b> (north-east): the Compute Forge.</li>
+      <li><b>Hearthside</b> (east): homes. Hearth &amp; Key reminds residents to put a passkey on their door.</li>
+      <li><b>The Harbor</b> (south, over the toll bridge): the EU registry and Café Lumière.</li>
+      <li>Lost: one key tag, somewhere in Hearthside. —M. Avoid the Old Mill after dark.</li>
+      <li class="muted">This town's federation: ${esc(info.federation)}, trust anchor ${esc(info.trust_anchor)}; registries: ${info.registries.map((r) => esc(r.name)).join(', ')}.</li>
     </ul>`,
     choices: [{ label: 'Close', value: null, primary: true }],
   });
-}
-
-function pond() {
-  const text = !S.agent ? "You see a small round creature with no badge. Nobody here knows who it answers to yet."
-    : S.agent.status === 'revoked' ? `You see ${S.agent.name}, antenna glowing red. Revoked.`
-      : S.badge ? `You see ${S.agent.name}, badge on, antenna glowing green.` : `You see ${S.agent.name}, badge tucked away.`;
-  return say({ face: '🪷', who: 'The pond', where: 'AgentTown', text });
-}
-
-async function toggleBadge() {
-  if (!S?.agent) return toast('No badge yet. Register your agent at Town Hall.', 'warn');
-  const res = await api.post('/api/badge', { on: !S.badge });
-  await refresh();
-  toast(res.badge ? 'Badge on: places see who stands behind you (but not your name)' : 'Badge off: places see an unlabeled agent', res.badge ? 'ok' : 'warn');
+  closeDialog();
 }
 
 // ---------------------------------------------------------------------------
-// Night
+// Night: visitors with a copy of your key
 // ---------------------------------------------------------------------------
 
 let night = 0;
 let nightTarget = 0;
+let visitors = [];
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const goTo = (w, x, y) => new Promise((resolve) => {
   const path = findPath(town, tileOf(w), tileOf({ x, y })) ?? [];
@@ -619,12 +489,8 @@ const goTo = (w, x, y) => new Promise((resolve) => {
   w.arrive = resolve;
 });
 
-const VISITOR_LOOKS = {
-  badge: { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050' },
-  none: { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55' },
-};
-
 async function nightfall() {
+  const home = byId.home;
   scene = true;
   document.body.classList.add('scene');
   nightTarget = 1;
@@ -635,32 +501,33 @@ async function nightfall() {
   player.facing = { x: 1, y: 0 };
   camFocus = { x: home.front.x + 50, y: home.front.y - 10 };
   toast('Night falls on AgentTown…', 'info');
-  const res = await api.post('/api/night');
-  await wait(1500);
-  npcs = res.results.map((r, i) => ({
-    x: BURGLAR_START.x + i * 6, y: BURGLAR_START.y + (i % 2) * 8, facing: { x: -1, y: 0 }, walking: false, phase: i, seed: i,
-    look: r.ppid ? VISITOR_LOOKS.badge : VISITOR_LOOKS.none,
-    label: r.ppid ? `badge …${r.ppid.split(':').pop().slice(-6)}` : 'no badge',
-    result: r,
-  }));
-  const queue = npcs.map((v, i) => wait(i * 500).then(() => goTo(v, (32.8 + i * 1.3) * TILE, (i % 2 ? 11.7 : 10.6) * TILE)));
-  await Promise.all(queue);
-  for (const v of npcs) {
-    await goTo(v, home.front.x + 6, home.front.y + 2);
-    v.facing = { x: 0, y: -1 };
-    await wait(350);
-    bubble(v, v.result);
-    await wait(1100);
-    goTo(v, 38.5 * TILE, 11.6 * TILE);
+  try {
+    const res = await api.post('/api/do', { action: 'night' });
+    await wait(1500);
+    const start = SPOTS.burglarStart;
+    visitors = res.results.map((r, i) => ({
+      x: start.x + i * 6, y: start.y + (i % 2) * 8, facing: { x: -1, y: 0 }, walking: false, phase: i, seed: i,
+      look: r.ppid ? { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050' } : { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55' },
+      label: r.ppid ? `badge …${r.ppid.split(':').pop().slice(-6)}` : 'no badge', result: r,
+    }));
+    await Promise.all(visitors.map((v, i) => wait(i * 500).then(() => goTo(v, home.front.x + (2 + i * 1.3) * TILE, home.front.y + (i % 2 ? 1.2 : 0.2) * TILE))));
+    for (const v of visitors) {
+      await goTo(v, home.front.x + 6, home.front.y + 2);
+      v.facing = { x: 0, y: -1 };
+      await wait(350);
+      bubble(v, v.result.decision);
+      await wait(1100);
+      goTo(v, start.x + 3 * TILE, start.y);
+    }
+    await wait(2000);
+    visitors = [];
+    await showCard(nightHtml(res));
+  } finally {
+    nightTarget = 0;
+    camFocus = null;
+    scene = false;
+    document.body.classList.remove('scene');
   }
-  await wait(2200);
-  npcs = [];
-  await showCard(nightHtml(res));
-  nightTarget = 0;
-  camFocus = null;
-  scene = false;
-  document.body.classList.remove('scene');
-  await refresh();
 }
 
 function nightHtml(res) {
@@ -674,30 +541,190 @@ function nightHtml(res) {
     <header><div><span class="eyebrow">While you slept</span><h3>Last night at your door</h3></div><div class="stamp ${res.got_in ? 'bad' : 'ok'}">${res.got_in ? 'Someone got in' : 'Nobody got in'}</div></header>
     <p>Four visitors came with a copy of your house key.</p>
     <ul class="receipts">${rows}</ul>
-    <p class="note">Hearth & Key reported each visitor who wore a badge to the registry that issued it, and the registry passed ${esc(res.incidents_relayed)} reports on to whoever stands behind them. You didn't learn who that is, and neither did Hearth & Key. A court can find out: ask at Town Hall.</p>
+    <p class="note">Hearth & Key reported each visitor who wore a badge to the registry that issued it, and the registry passed ${esc(res.incidents_relayed)} reports on to whoever stands behind them. You didn't learn who that is, and neither did Hearth & Key. A court can find out: visit the Courthouse.</p>
     <p class="note">The visitor with no badge was refused too, but there was nobody to report it to.</p>
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Good morning</button></div>`;
 }
 
 // ---------------------------------------------------------------------------
-// State from the server
+// Director: cues for demos, and each place's policy
 // ---------------------------------------------------------------------------
 
-let helperWasActive = false;
+function toggleDirector(show = document.getElementById('director').hidden) {
+  const el = document.getElementById('director');
+  el.hidden = !show;
+  if (show) renderDirector();
+}
+
+function renderDirector() {
+  const d = W.director;
+  if (!d) return;
+  const regOpts = (accepts) => {
+    const all = !accepts;
+    return [`<option value="*" ${all ? 'selected' : ''}>Any registry</option>`, ...d.registries.map((r) => `<option value="${esc(r.id)}" ${!all && accepts.length === 1 && accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`)].join('');
+  };
+  document.getElementById('directorBody').innerHTML = `
+    <div class="cues">
+      <button data-cue="swarm" ${d.swarm ? 'disabled' : ''}>🌫️ Rogue swarm from the Old Mill</button>
+      <button data-cue="outage" ${d.outage_until ? 'disabled' : ''}>📡 Registry A outage (45 s)</button>
+      <button data-cue="newcomer">🧳 A newcomer arrives</button>
+      <button data-cue="night">🌙 Night at your house</button>
+      <button data-cue="residents" data-on="${d.residents ? '0' : '1'}">${d.residents ? '⏸ Pause residents' : '▶️ Resume residents'}</button>
+    </div>
+    <h5>What each place asks for</h5>
+    <table class="policies">
+      <thead><tr><th>Place</th><th>Registries</th><th title="An accountable agent with authority">Badge</th><th title="Simulated World ID: one per person">World ID</th><th title="Simulated x402 payment">x402</th></tr></thead>
+      <tbody>${d.places.map((p) => `<tr data-place="${p.id}">
+        <td>${esc(p.name)}</td>
+        <td><select data-k="accepts">${regOpts(p.accepts)}</select></td>
+        <td><input type="checkbox" data-k="aaf" ${p.aaf === 'required' ? 'checked' : ''}></td>
+        <td><input type="checkbox" data-k="worldid" ${p.worldid ? 'checked' : ''}></td>
+        <td><input type="checkbox" data-k="x402" ${p.x402 ? 'checked' : ''}></td>
+      </tr>`).join('')}</tbody>
+    </table>
+    <p class="muted small">In a live demo, each shopkeeper sets their own row. World ID and x402 are simulated in this town; the framework checks are real.</p>`;
+}
+
+document.getElementById('directorBody').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-cue]');
+  if (!b) return;
+  const cue = b.dataset.cue;
+  toggleDirector(false);
+  if (cue === 'night') return run({ id: 'night', label: 'Night', place: 'home', client: 'night' }, {});
+  if (cue === 'swarm') counts.swarm = true;
+  const res = await api.post('/api/director', { cue, params: cue === 'residents' ? { on: b.dataset.on === '1' } : {} });
+  toast(res.text ?? 'Done', res.ok === false ? 'warn' : 'info');
+  if (cue === 'swarm') {
+    camPeek(placeFront(town, 'millGate'));
+  }
+});
+document.getElementById('directorBody').addEventListener('change', async (e) => {
+  const row = e.target.closest('[data-place]');
+  if (!row) return;
+  const k = e.target.dataset.k;
+  const v = k === 'accepts' ? (e.target.value === '*' ? null : [e.target.value]) : k === 'aaf' ? (e.target.checked ? 'required' : 'off') : k === 'x402' ? (e.target.checked ? 0.5 : null) : e.target.checked;
+  const res = await api.post('/api/director', { cue: 'policy', params: { place: row.dataset.place, patch: { [k]: v } } });
+  toast(res.text, 'info');
+  await poll();
+});
+document.getElementById('directorBtn').addEventListener('click', () => toggleDirector());
+document.getElementById('directorClose').addEventListener('click', () => toggleDirector(false));
+document.getElementById('deckBtn').addEventListener('click', () => !busyNow() && deck());
+document.getElementById('badgeBtn').addEventListener('click', () => !busyNow() && run({ id: 'badge', label: 'badge' }, {}));
+
+/** Glance at a spot for a few seconds, then come back. */
+function camPeek(point) {
+  camFocus = point;
+  setTimeout(() => {
+    if (!scene) camFocus = null;
+  }, 3500);
+}
+
+// ---------------------------------------------------------------------------
+// The minimap
+// ---------------------------------------------------------------------------
+
+const mini = document.getElementById('minimap');
+const miniCtx = mini.getContext('2d');
+let miniBase = null;
+function drawMinimapBase() {
+  const w = mini.clientWidth || 220;
+  const h = mini.clientHeight || 150;
+  const dpr = view.dpr || 1;
+  mini.width = w * dpr;
+  mini.height = h * dpr;
+  miniBase = document.createElement('canvas');
+  miniBase.width = mini.width;
+  miniBase.height = mini.height;
+  const g = miniBase.getContext('2d');
+  g.scale(dpr, dpr);
+  drawMinimap(g, town, w, h);
+}
+const MINI_DOTS = { helper: '#5fd38a', resident: '#f2a541', swarm: '#9b6cff', bot: '#7d8590', newcomer: '#ff8fab' };
+function renderMinimap() {
+  if (!miniBase) return;
+  const w = mini.clientWidth || 220;
+  const h = mini.clientHeight || 150;
+  const dpr = view.dpr || 1;
+  const { s, ox, oy } = minimapScale(town, w, h);
+  miniCtx.setTransform(1, 0, 0, 1, 0, 0);
+  miniCtx.drawImage(miniBase, 0, 0);
+  miniCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  miniCtx.strokeStyle = 'rgba(74,58,44,0.6)';
+  miniCtx.lineWidth = 1;
+  miniCtx.strokeRect(ox + view.x * s, oy + view.y * s, view.w * s, view.h * s);
+  for (const sp of sprites.values()) {
+    miniCtx.fillStyle = sp.look?.revoked ? '#b5b5b5' : MINI_DOTS[sp.npc.kind] ?? '#999';
+    miniCtx.beginPath();
+    miniCtx.arc(ox + sp.x * s, oy + sp.y * s, 2, 0, Math.PI * 2);
+    miniCtx.fill();
+  }
+  miniCtx.fillStyle = '#fff';
+  miniCtx.strokeStyle = '#4a3a2c';
+  miniCtx.lineWidth = 1.5;
+  miniCtx.beginPath();
+  miniCtx.arc(ox + player.x * s, oy + player.y * s, 3.2, 0, Math.PI * 2);
+  miniCtx.fill();
+  miniCtx.stroke();
+}
+mini.addEventListener('pointerdown', (e) => {
+  if (busyNow()) return;
+  const r = mini.getBoundingClientRect();
+  const { s, ox, oy } = minimapScale(town, r.width, r.height);
+  walkTo({ x: (e.clientX - r.left - ox) / s, y: (e.clientY - r.top - oy) / s }, null, 220);
+});
+
+// ---------------------------------------------------------------------------
+// Talking to the server
+// ---------------------------------------------------------------------------
+
+let helperWasActive = new Set();
 async function refresh() {
   try {
     S = await api.get('/api/state');
   } catch {
     return;
   }
-  renderHud(S);
+  renderHud(S, counts);
   if (renderPhone(S)) toast('Your phone buzzed', 'warn');
   player.look = playerLook();
   player.label = S.agent ? S.agent.name : null;
-  const active = S.helper?.status === 'active';
-  if (helperWasActive && !active && S.helper?.status === 'expired') toast(`${S.helper.name}'s registration lapsed. Ephemeral sub-agents expire on their own.`, 'info');
+  document.getElementById('badgeBtn').classList.toggle('on', S.badge);
+  const active = new Set(S.helpers.filter((h) => h.status === 'active').map((h) => h.id));
+  for (const id of helperWasActive) {
+    const h = S.helpers.find((x) => x.id === id);
+    if (h && !active.has(id) && h.status === 'expired') toast(`${h.name}'s registration lapsed: ephemeral sub-agents expire on their own`, 'info');
+  }
   helperWasActive = active;
 }
+
+async function poll() {
+  try {
+    W = await api.get(`/api/world?since=${seq}&x=${Math.round(player.x)}&y=${Math.round(player.y)}`);
+  } catch {
+    return;
+  }
+  clockOffset = W.now - Date.now();
+  if (W.events.length) {
+    for (const e of W.events) {
+      if (e.mine && e.card && sprites.get(e.who)?.npc.kind === 'helper') toast(e.text, e.tone);
+      if (e.mine && e.placeId === 'toll' && e.decision === 'allow') counts.tolls++;
+      if (e.mine && e.placeId === 'cafe' && e.decision === 'allow') counts.euCafe = true;
+      if (e.kind === 'director' && /stirs/.test(e.text)) counts.swarm = true;
+    }
+    ledger = [...ledger, ...W.events].slice(-200);
+    seq = W.seq;
+    renderLedger(ledger);
+  }
+  if (!document.getElementById('director').hidden && !document.activeElement?.closest?.('#director')) renderDirector();
+  document.getElementById('outage').hidden = !W.director?.outage_until;
+}
+
+document.getElementById('ledgerList').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-seq]');
+  const ev = li && ledger.find((x) => String(x.seq) === li.dataset.seq);
+  if (ev?.card && !busyNow()) card(ev.card);
+});
 
 document.getElementById('phoneList').addEventListener('click', async (e) => {
   const approve = e.target.closest('[data-approve]');
@@ -715,18 +742,7 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
     }
     toast('Approved with your passkey', 'ok');
     await refresh();
-    const then = pending.get(rid);
-    pending.delete(rid);
-    if (then && !scene) {
-      interacting = true;
-      try {
-        await then();
-      } finally {
-        closeDialog();
-        interacting = false;
-        await refresh();
-      }
-    }
+    await retry(rid);
   } else if (decline) {
     const rid = decline.dataset.decline;
     await api.declineRequest(rid);
@@ -736,24 +752,71 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
   }
 });
 
-for (const id of ['phone', 'record', 'quest']) {
+for (const id of ['phone', 'record', 'quest', 'ledger']) {
   document.getElementById(`${id}Head`).addEventListener('click', () => document.getElementById(id).classList.toggle('open'));
 }
-if (innerWidth > 900) for (const id of ['phone', 'record', 'quest']) document.getElementById(id).classList.add('open');
+if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone']) document.getElementById(id).classList.add('open');
 
 document.getElementById('restart').addEventListener('click', async () => {
-  const r = await say({ face: '🌼', who: 'Start over?', text: "This forgets your verification, your agent and everything it did, and empties your phone. You'll need a new passkey on your door. (Your old one stays in your password manager; you can delete it there.)", choices: [{ label: 'Start over', value: true, primary: true }, { label: 'Keep playing', value: false, cancel: true }] });
+  const r = await say({ face: '🌼', who: 'Start over?', text: "This forgets your verification, your agent, its sub-agents and everything they did, and empties your phone. You'll need a new passkey on your door. (Your old one stays in your password manager; delete it there.) The rest of the town carries on.", choices: [{ label: 'Start over', value: true, primary: true }, { label: 'Keep playing', value: false, cancel: true }] });
   closeDialog();
   if (!r.value) return;
   await api.post('/api/reset');
   pending.clear();
-  for (const k of Object.keys(lastCards)) delete lastCards[k];
   lastApproval = null;
-  keyPrompted = false;
-  Object.assign(player, { x: SPAWN.x, y: SPAWN.y, path: null });
+  Object.assign(counts, { errands: 0, tolls: 0, euCafe: false, swarm: false, mischief: 0 });
+  Object.assign(player, { x: SPOTS.spawn.x, y: SPOTS.spawn.y, path: null });
   await refresh();
   welcome();
 });
+
+// ---------------------------------------------------------------------------
+// The key on the street, and the welcome
+// ---------------------------------------------------------------------------
+
+let keyPrompted = false;
+async function keyFound() {
+  interacting = true;
+  keys.clear();
+  player.path = null;
+  try {
+    const r = await say({
+      face: '🔑', who: 'A key tag', where: 'Hearthside',
+      text: "Something glints on the path: a key tag reading **Hearth & Key · maple**. It must be Maple's spare.\n\nIn AgentTown a key works like an API token: it says which home it's for, not who is holding it.",
+      choices: [{ label: 'Pick it up', value: true, primary: true }, { label: 'Leave it', value: false, cancel: true }],
+    });
+    if (r.value) {
+      await api.post('/api/do', { action: 'key.pickup' });
+      toast("You picked up Maple's key", 'info');
+    }
+  } finally {
+    closeDialog();
+    interacting = false;
+    await refresh();
+  }
+}
+
+async function welcome() {
+  interacting = true;
+  try {
+    const r = await say({
+      face: '🌼', who: 'Welcome to AgentTown', where: 'where every agent answers to someone',
+      text: "You're playing an **agent**: the little round one by the fountain. You, at the keyboard, are its **principal**: the person who answers for what it does.\n\nEveryone else in town is a real agent too, running errands for their own principals. Every door, shop and office makes real checks.\n\nWhat's your name? Only Town Hall's registry will keep it.",
+      input: { label: 'Your name', placeholder: 'e.g. Robin Ash' },
+      choices: [{ label: 'Enroll at Town Hall', value: true, primary: true }],
+    });
+    await api.post('/api/enroll', { name: r.input || 'Robin Ash' });
+    await say({
+      face: '🌼', who: 'How to play', where: 'press Q any time',
+      text: "Walk with **WASD** or the **arrow keys**, or click where you want to go. Press **Q** for the **action deck**: everything you can do in town is in it, wherever you are. Some actions will be refused; that's the point. Press **E** to talk to a place, click anyone to ask for their badge, and **B** to take your own badge off.\n\nYour **phone** (bottom right) is where places ask you for an OK. The **town ledger** (bottom left) shows everything everyone does. Start at **Town Hall**, up the avenue.",
+      choices: [{ label: "Let's go", value: true, primary: true }],
+    });
+  } finally {
+    closeDialog();
+    interacting = false;
+    await refresh();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Loop
@@ -762,7 +825,7 @@ document.getElementById('restart').addEventListener('click', async () => {
 function update(dt) {
   t += dt;
   night += (nightTarget - night) * Math.min(1, dt * 1.4);
-  for (const v of npcs) {
+  for (const v of visitors) {
     if (v.path?.length) {
       follow(v, dt, 78);
       v.phase += dt * 12;
@@ -775,13 +838,13 @@ function update(dt) {
       }
     }
   }
-  const frozen = dialogOpen() || scene || interacting;
+  const frozen = dialogOpen() || paletteOpen() || scene;
   let dx = 0;
   let dy = 0;
   if (!frozen) for (const k of keys) { dx += MOVE[k][0]; dy += MOVE[k][1]; }
   if (dx || dy) {
     const len = Math.hypot(dx, dy);
-    const step = 120 * dt;
+    const step = 125 * dt;
     const nx = player.x + (dx / len) * step;
     const ny = player.y + (dy / len) * step;
     if (!blocked(nx, player.y)) player.x = nx;
@@ -789,50 +852,30 @@ function update(dt) {
     player.facing = { x: dx / len, y: dy / len };
     player.walking = true;
   } else if (!frozen && player.path?.length) {
-    follow(player, dt, 125);
+    follow(player, dt, player.speed);
   } else {
     player.walking = false;
     if (!frozen && player.path && !player.path.length) {
       const then = player.then;
       player.path = null;
       player.then = null;
-      if (then) interact(then);
+      player.cancel = null;
+      if (then) then();
     }
   }
   if (player.walking) {
     player.phase += dt * 12;
     trail.push({ x: player.x, y: player.y });
-    if (trail.length > 60) trail.shift();
+    if (trail.length > 120) trail.shift();
   }
+  updateSprites(dt);
 
-  // The helper trails a little behind.
-  helper.shown = S?.helper?.status === 'active';
-  if (helper.shown) {
-    const target = trail[Math.max(0, trail.length - 16)] ?? { x: player.x + 18, y: player.y + 4 };
-    const d = Math.hypot(target.x - helper.x, target.y - helper.y);
-    if (d > 2) {
-      const step = Math.min(d, 130 * dt);
-      helper.facing = { x: (target.x - helper.x) / d, y: (target.y - helper.y) / d };
-      helper.x += helper.facing.x * step;
-      helper.y += helper.facing.y * step;
-      helper.walking = true;
-      helper.phase += dt * 14;
-    } else {
-      helper.walking = false;
-    }
-    const left = Math.max(0, Math.round((S.helper.expires_at - Date.now()) / 1000));
-    helper.label = `${S.helper.name} ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-  }
-
-  // The key on the lower street.
-  if (S && !S.found_key && !frozen) {
+  if (S && !S.found_key && !busyNow()) {
     const near = Math.hypot(player.x - (KEY_SPOT.x + 0.5) * TILE, player.y - (KEY_SPOT.y + 0.6) * TILE) < 18;
     if (near && !keyPrompted) {
       keyPrompted = true;
       keyFound();
-    } else if (!near) {
-      keyPrompted = false;
-    }
+    } else if (!near) keyPrompted = false;
   }
   updateCamera(dt);
 }
@@ -843,57 +886,63 @@ function render() {
   ctx.fillStyle = '#3f8146';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(k, 0, 0, k, -view.x * k, -view.y * k);
-  ctx.drawImage(groundCache, 0, 0, COLS * TILE, ROWS * TILE);
-  drawWater(ctx, t);
+  const size = CHUNK * TILE;
+  for (let cy = Math.floor(view.y / size); cy <= Math.floor((view.y + view.h) / size); cy++) {
+    for (let cx = Math.floor(view.x / size); cx <= Math.floor((view.x + view.w) / size); cx++) {
+      if (cx < 0 || cy < 0 || cx * CHUNK >= COLS || cy * CHUNK >= ROWS) continue;
+      ctx.drawImage(chunk(cx, cy), cx * size, cy * size, size, size);
+    }
+  }
+  const vw = { x: view.x, y: view.y, w: view.w, h: view.h };
+  drawWater(ctx, t, vw);
   if (S && !S.found_key) drawKey(ctx, t);
 
-  const inView = (x, y, m = 64) => x > view.x - m && x < view.x + view.w + m && y > view.y - m && y < view.y + view.h + m * 2;
+  const inView = (x, y, m = 80) => x > view.x - m && x < view.x + view.w + m && y > view.y - m && y < view.y + view.h + m * 2;
   const things = [];
   for (const tr of town.trees) if (inView((tr.x + 0.5) * TILE, (tr.y + 1) * TILE)) things.push({ y: (tr.y + 1) * TILE - 3, draw: () => drawTree(ctx, tr, t) });
-  for (const b of town.buildings) things.push({ y: (b.y + b.h) * TILE, draw: () => drawBuilding(ctx, b, t, night > 0.4) });
-  for (const l of town.lamps) things.push({ y: (l.y + 1) * TILE - 6, draw: () => drawLamp(ctx, l, night > 0.4) });
+  for (const b of town.buildings) if (inView((b.x + b.w / 2) * TILE, (b.y + b.h / 2) * TILE, b.w * TILE)) things.push({ y: (b.y + b.h) * TILE, draw: () => drawBuilding(ctx, b, t, night > 0.4) });
+  for (const l of town.lamps) if (inView((l.x + 0.5) * TILE, (l.y + 1) * TILE)) things.push({ y: (l.y + 1) * TILE - 6, draw: () => drawLamp(ctx, l, night > 0.4) });
   things.push({ y: (BOARD.y + 1) * TILE - 4, draw: () => drawBoard(ctx, t) });
-  for (const v of npcs) things.push({ y: v.y, draw: () => drawAgent(ctx, v, t) });
-  if (helper.shown) things.push({ y: helper.y, draw: () => drawAgent(ctx, helper, t) });
+  things.push({ y: (FOUNTAIN.y + 2) * TILE, draw: () => drawFountain(ctx, t) });
+  for (const s of sprites.values()) if (inView(s.x, s.y)) things.push({ y: s.y, draw: () => drawAgent(ctx, s, t) });
+  for (const v of visitors) things.push({ y: v.y, draw: () => drawAgent(ctx, v, t) });
   things.push({ y: player.y, draw: () => drawAgent(ctx, player, t) });
   things.sort((a, b) => a.y - b.y);
   for (const th of things) th.draw();
 
-  drawNight(ctx, town, night, view);
-
+  drawNight(ctx, town, night, vw);
   for (let i = bubbles.length - 1; i >= 0; i--) {
     const b = bubbles[i];
     const age = t - b.t0;
     if (age > 2.6) bubbles.splice(i, 1);
     else drawBubble(ctx, b.who.x, b.who.y, b.text, b.tone, age);
   }
-  if (!dialogOpen() && !scene && !interacting) {
+  if (!busyNow()) {
     const p = nearestPlace();
     if (p) drawBubble(ctx, player.x, player.y + 4, `E · ${p.name}`, 'info', 1);
   }
 }
 
 let last = performance.now();
+let lastMini = 0;
 function frame(now) {
-  // Generous enough that slow or throttled frames still move at the right speed;
-  // a step stays shorter than a tile, so nobody walks through a wall.
   const dt = Math.min(0.2, (now - last) / 1000);
   last = now;
   update(dt);
   render();
+  if (now - lastMini > 120) {
+    lastMini = now;
+    renderMinimap();
+  }
   requestAnimationFrame(frame);
 }
 
-function welcome() {
-  return say({
-    face: '🌼', who: 'Welcome to AgentTown', where: 'where every agent answers to someone',
-    text: "You're playing an **agent**: the little round one in the middle. You, at the keyboard, are its **principal**: the person who answers for what it does.\n\nYour **phone** (bottom right) is where places ask the principal for an OK. Approvals use a real passkey on this device.\n\nWalk with **WASD** or the **arrow keys**, or click where you want to go. Press **E** to talk and **B** to take your badge off. Start at **Town Hall**, up the lane.",
-    choices: [{ label: "Let's go", value: true, primary: true }],
-  }).then(closeDialog);
-}
-
+addEventListener('resize', resize);
+resize();
 await refresh();
+await poll();
 updateCamera(0, true);
 requestAnimationFrame(frame);
+setInterval(poll, 500);
 setInterval(() => { if (!document.hidden && !interacting) refresh(); }, 2500);
 if (!S?.principal) welcome();
