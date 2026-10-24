@@ -25,6 +25,7 @@
 
 <section id="mapCard" class="panel">
   <canvas id="minimap" aria-label="Map of AgentTown"></canvas>
+  <button id="townScore" class="quiet small" title="How much of town uses the framework">…</button>
 </section>
 
 <section id="record" class="panel">
@@ -45,10 +46,13 @@
 <nav id="dock">
   <button id="deckBtn" class="primary"><span>⚡</span> Actions <kbd>Q</kbd></button>
   <button id="badgeBtn"><span>🪪</span> Badge <kbd>B</kbd></button>
+  <button id="xrayBtn" title="See what each request sends, and to whom"><span>🩻</span> X-ray <kbd>X</kbd></button>
   <button id="directorBtn" title="Director: cues and policies for demos">🎬</button>
 </nav>
 
 <div id="outage" class="banner" hidden>📡 Registry A can't be reached from the shops. Places are deferring, not refusing.</div>
+<div id="reveal" class="banner reveal" hidden role="status"></div>
+<section id="xray" hidden aria-live="polite"></section>
 
 <div id="join" class="overlay" hidden><div class="deck join" id="joinBox" role="dialog" aria-label="Join AgentTown"></div></div>
 

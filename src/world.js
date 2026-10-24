@@ -63,9 +63,9 @@ export function buildWorld({ trust, keysDir, adminTokens = {} }) {
     },
 
     /** Have the town's identity verifier verify an enrolled principal (simulated KYC). */
-    async verify(principal, { assurance, method }) {
+    async verify(principal, { assurance, method, attributes = [], validForDays }) {
       if (!world.kyc) throw new Error('this town operates no identity verifier, so it cannot verify anyone');
-      principal.verification = await world.kyc.verify(principal, { assurance, method });
+      principal.verification = await world.kyc.verify(principal, { assurance, method, attributes, ...(validForDays !== undefined ? { validForDays } : {}) });
       return principal.verification;
     },
 

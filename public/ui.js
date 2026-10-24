@@ -1,5 +1,7 @@
 // The DOM side of the game: conversations, result cards, the HUD (quests, your
 // record, your phone, the town ledger) and toasts.
+import { lensHtml, wireLens } from './lens.js';
+
 const $ = (id) => document.getElementById(id);
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -108,28 +110,52 @@ document.addEventListener('keydown', (e) => {
 // Result cards: a place's ID check, or a registry's or record keeper's answer
 // ---------------------------------------------------------------------------
 
-/** Show a result card; resolves with the value of the button pressed (extra `buttons`, or nothing for Okay). */
-export function card(c, { note, buttons } = {}) {
+const listOf = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+
+/**
+ * Show a result card; resolves with the value of the button pressed: one of the
+ * extra `buttons`, 'consent:once' | 'consent:always' | 'consent:decline' when a
+ * place asked for something, 'fix', 'xray', or nothing for Okay.
+ *   own   the card is about your own agent, so you can act on it
+ */
+export function card(c, { note, buttons = [], own = false } = {}) {
   const service = c.type === 'service';
-  const d = c.stamp ?? (service && c.decision === 'allow' ? { label: 'Done', tone: 'ok' } : DECISIONS[c.decision]) ?? { label: c.decision, tone: 'info' };
+  let d = c.stamp ?? (service && c.decision === 'allow' ? { label: 'Done', tone: 'ok' } : DECISIONS[c.decision]) ?? { label: c.decision, tone: 'info' };
+  if (c.ask) d = { label: 'Your call', tone: 'warn' };
+  if (c.legacy && c.decision === 'allow') d = { label: 'Unchecked', tone: 'warn' };
   const checks = c.checks ?? [];
   const failed = checks.filter((x) => !x.ok).length;
+  const title = c.headline ?? c.title ?? c.place;
+  const who = service ? '' : own ? 'you' : c.actor;
+  const ask = own && c.ask ? c.ask : null;
+  const technical = !service && (c.classification || checks.length || c.learned?.length || c.reasons?.length);
   const html = `
     <header>
-      <div><span class="eyebrow">${esc(service ? c.place : c.title ? c.place : 'ID check')}</span><h3>${esc(c.title ?? c.place)}</h3></div>
+      <div><span class="eyebrow">${esc(service ? c.place : `${c.place}${who ? ` · ${who}` : ''}`)}</span><h3>${esc(title)}</h3></div>
       <div class="stamp ${d.tone}">${esc(d.label)}</div>
     </header>
+    ${c.why ? `<p class="why">${esc(c.why)}</p>` : ''}
     ${c.story ? `<div class="story"><span class="face">${esc(c.keeper?.face ?? '💬')}</span><div><b>${esc(c.keeper?.who ?? '')}</b>${prose(c.story)}</div></div>` : ''}
-    ${!service ? `<p class="who"><b>${esc(c.actor)}</b> asked to <code>${esc(c.action)}</code>${c.classification ? ` · <span class="chip">${esc(CLASSIFICATIONS[c.classification] ?? c.classification)}</span>` : ''}</p>` : ''}
-    ${c.reasons?.length ? `<ul class="reasons">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+    ${service && c.reasons?.length ? `<ul class="reasons">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+    ${ask ? `<div class="askbox"><b>📱 ${esc(ask.place)} asks for ${esc(listOf(ask.what.map((w) => w.label)))}</b>
+      <p class="small">Your agent will show only that, only to ${esc(ask.place)}. ${ask.law?.length ? `The law requires it here (${esc(listOf(ask.law))}).` : 'It’s the place’s own policy.'} Saying no is allowed: you just don’t get served.</p>
+      <div class="btns"><button class="primary" data-value="consent:once">Share once</button><button data-value="consent:always">Always share with ${esc(ask.place)}</button><button class="quiet" data-value="consent:decline">Decline</button></div></div>` : ''}
+    ${own && c.fix && !ask ? `<div class="fix"><button class="primary" data-value="fix">→ ${esc(c.fix.label)}</button></div>` : ''}
     ${c.note || note ? `<p class="note">${esc(c.note || note)}</p>` : ''}
-    ${c.steps?.length ? `<section><h4>Before the badge check</h4><ul class="steps">${c.steps.map((s) => `<li class="${s.ok ? 'ok' : 'bad'}"><span>${s.ok ? '✓' : '✗'}</span><b>${esc(s.via)}</b> ${esc(s.text)}</li>`).join('')}</ul></section>` : ''}
+    ${c.steps?.length ? `<section><h4>Before the badge check</h4><ul class="steps">${c.steps.map((x) => `<li class="${x.ok ? 'ok' : 'bad'}"><span>${x.ok ? '✓' : '✗'}</span><b>${esc(x.via)}</b> ${esc(x.text)}</li>`).join('')}</ul></section>` : ''}
     ${c.facts?.length ? `<dl class="facts">${c.facts.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd>`).join('')}</dl>` : ''}
-    ${c.learned?.length ? `<section><h4>What ${esc(c.place)} learned</h4><ul class="learned">${c.learned.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></section>` : ''}
-    ${checks.length ? `<details><summary>What they checked (${checks.length - failed} of ${checks.length} passed)</summary><ul class="checks">${checks.map((x) => `<li class="${x.ok ? 'ok' : 'bad'}"><span>${x.ok ? '✓' : '✗'}</span>${esc(x.name)}${x.detail ? ` <small>${esc(x.detail)}</small>` : ''}</li>`).join('')}</ul></details>` : ''}
-    ${c.policy ? `<p class="policy"><b>${esc(c.place)} asks for</b> ${esc(c.policy)}</p>` : ''}
-    ${!service ? (c.receipt ? `<footer>Logged at ${esc(c.receipt.log.replace('https://', ''))}, entry #${esc(c.receipt.index)} · receipt ${c.receipt.verified ? 'verified ✓' : 'did NOT verify'}</footer>` : '<footer>Nothing was logged: there was no accountable agent to log against.</footer>') : ''}
-    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`;
+    ${c.plain?.length ? `<section><h4>What ${esc(c.place)} learned</h4><ul class="plain">${c.plain.map((x) => `<li><span>${esc(x.icon)}</span><div>${esc(x.text)}</div></li>`).join('')}</ul></section>` : ''}
+    ${c.tier ? `<p class="tierline">${esc(c.place)} asked for <b>${esc(c.tier.needs)}</b> <span class="muted">(${esc(c.tier.label)}${c.tier.law?.length ? ` · required by ${esc(listOf(c.tier.law))}` : ''}${c.tier.capped ? ` · limited by ${esc(c.tier.capped)}` : ''})</span></p>` : ''}
+    ${!service && c.type === 'check' ? `<details class="lens-details"><summary>Compare: what would other approaches know?</summary>${lensHtml(c)}</details>` : ''}
+    ${technical ? `<details><summary>Technical record${checks.length ? ` · ${checks.length - failed} of ${checks.length} checks passed` : ''}</summary>
+      <p class="who"><b>${esc(c.actor)}</b> asked to <code>${esc(c.action)}</code>${c.classification ? ` · <span class="chip">${esc(CLASSIFICATIONS[c.classification] ?? c.classification)}</span>` : ''}</p>
+      ${c.reasons?.length ? `<ul class="reasons">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+      ${c.learned?.length ? `<ul class="learned">${c.learned.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+      ${checks.length ? `<ul class="checks">${checks.map((x) => `<li class="${x.ok ? 'ok' : 'bad'}"><span>${x.ok ? '✓' : '✗'}</span>${esc(x.name)}${x.detail ? ` <small>${esc(x.detail)}</small>` : ''}</li>`).join('')}</ul>` : ''}
+      ${c.policy ? `<p class="policy"><b>${esc(c.place)} asks for</b> ${esc(c.policy)}</p>` : ''}
+      ${c.receipt ? `<p class="policy">Logged at ${esc(c.receipt.log.replace('https://', ''))}, entry #${esc(c.receipt.index)} · receipt ${c.receipt.verified ? 'verified ✓' : 'did NOT verify'}</p>` : `<p class="policy">${c.legacy ? 'Nothing was logged: this place isn’t on the framework.' : 'Nothing was logged: there was no accountable agent to log against.'}</p>`}
+    </details>` : ''}
+    <div class="actions">${c.trace?.length ? '<button class="quiet" data-value="xray">🩻 X-ray</button>' : ''}<button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`;
   return showCard(html, buttons);
 }
 
@@ -157,7 +183,7 @@ export function showCard(html, buttons = []) {
       resolve(value);
     };
     const onKey = (e) => {
-      if (e.key === 'Enter' || e.key === 'Escape') {
+      if (e.key === 'Escape' || (e.key === 'Enter' && !e.target.closest?.('[data-value]'))) {
         e.preventDefault();
         e.stopPropagation();
         done();
@@ -165,6 +191,14 @@ export function showCard(html, buttons = []) {
     };
     document.addEventListener('keydown', onKey, true);
     $('cardOk').onclick = () => done();
+    $('card').onclick = (e) => {
+      const v = e.target.closest('[data-value]')?.dataset.value;
+      if (v) done(v);
+    };
+    wireLens($('card'));
+    $('card').querySelector('.lens-details')?.addEventListener('toggle', (e) => {
+      if (e.target.open) document.dispatchEvent(new Event('lens-opened'));
+    });
     wrap.onclick = (e) => {
       if (e.target === wrap) done();
     };
@@ -177,16 +211,20 @@ export function showCard(html, buttons = []) {
 // ---------------------------------------------------------------------------
 
 export const QUESTS = [
-  { text: 'Get verified at Town Hall', done: (s) => Boolean(s.principal?.verified) },
-  { text: 'Register your agent', done: (s) => Boolean(s.agent) },
-  { text: 'Sign a grant at the Records Office', done: (s) => Boolean(s.grant) },
-  { text: 'Buy something at two shops', done: (s) => s.events.filter((e) => e.startsWith('bought:')).length >= 2 },
-  { text: 'Spawn a sub-agent and send it on an errand', done: (s, c) => c.errands > 0 },
-  { text: 'Let your agent into your house', done: (s) => s.events.includes('home') },
-  { text: 'Rest at home until night', done: (s) => s.events.includes('night') },
+  { text: 'Get verified at Town Hall', action: 'verify', done: (s) => Boolean(s.principal?.verified) },
+  { text: 'Register your agent', action: 'register', done: (s) => Boolean(s.agent) },
+  { text: 'Sign a grant at the Records Office', action: 'grant', done: (s) => Boolean(s.grant) },
+  { text: 'Buy something at two shops', action: 'buy.bakery', done: (s) => s.events.filter((e) => e.startsWith('bought:')).length >= 2 },
+  { text: 'A place asks for more: answer on your phone', action: 'buy.apothecary', done: (s) => s.events.includes('consent') },
+  { text: 'Spawn a sub-agent and send it on an errand', action: 'helper.spawn', done: (s, c) => c.errands > 0 },
+  { text: 'Let your agent into your house', action: 'door.passkey', done: (s) => s.events.includes('home') },
+  { text: 'Rest at home until night', action: 'night', done: (s) => s.events.includes('night') },
 ];
 
 export const EXTRAS = [
+  { text: 'Shop in the Old Quarter: one place checks nothing, one blocks agents', done: (s, c) => c.oldQuarter > 0 },
+  { text: 'Turn on the X-ray (X) and watch a request', done: (s, c) => c.xray > 0 },
+  { text: 'On a result, open “Compare”', done: (s, c) => c.lens > 0 },
   { text: 'Get a World ID; claim a pie (and try twice)', done: (s) => s.inventory.some((i) => i.name === 'A free pie') },
   { text: 'Pay the bridge toll (x402)', done: (s, c) => c.tolls > 0 },
   { text: 'Café Lumière only takes EU badges: get served', done: (s, c) => c.euCafe },
@@ -196,10 +234,13 @@ export const EXTRAS = [
   { text: 'Revoke your agent', done: (s) => s.agent?.status === 'revoked' },
 ];
 
-const shortPpid = (p) => `…${String(p).split(':').pop().slice(-8)}`;
+const shortPpid = (p) => `…${String(p).split(':').pop().slice(-6)}`;
+const dollars = (v) => `$${Number(v ?? 0).toFixed(Number.isInteger(v) ? 0 : 2)}`;
+
+export const nextQuest = (s, counts) => QUESTS.find((q) => !q.done(s, counts)) ?? null;
 
 export function renderHud(s, counts) {
-  const next = QUESTS.find((q) => !q.done(s, counts));
+  const next = nextQuest(s, counts);
   $('questNext').textContent = next ? next.text : 'You did the whole day. Try the extras.';
   $('questList').innerHTML = QUESTS.map((q) => `<li class="${q.done(s, counts) ? 'done' : q === next ? 'next' : ''}">${esc(q.text)}</li>`).join('')
     + '<li class="extras-title">Try this</li>' + EXTRAS.map((q) => `<li class="extra ${q.done(s, counts) ? 'done' : ''}">${esc(q.text)}</li>`).join('');
@@ -208,30 +249,36 @@ export function renderHud(s, counts) {
   const rec = [];
   if (!s.principal) rec.push('<p class="muted">No record yet.</p>');
   else {
-    const flags = [s.principal.verified ? '<span class="pill ok">verified IAL2</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : '', s.principal.disclose ? '<span class="pill">name shown</span>' : ''].join(' ');
-    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>Principal at ${esc(s.principal.registry)} · only it knows your name</small></div></div>`);
+    const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : '', s.principal.disclose ? '<span class="pill">name shared when asked</span>' : ''].join(' ');
+    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small></div></div>`);
   }
+  rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
   if (s.agent) {
     const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
-    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Wallet ${esc(s.wallet.balance)} ${esc(s.wallet.asset)}</small></div></div>`);
+    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent</small></div></div>`);
   }
-  if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>Grant</b><br><small>${s.grant.permissions.map(esc).join('<br>')}</small></div></div>`);
+  if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${esc(s.agent?.name ?? 'Your agent')} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small></div></div>`);
   if (s.helpers.length) {
     rec.push(`<div class="row"><span>🌱</span><div><b>Sub-agents</b><br><small>${s.helpers.map((h) => {
       const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
       const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
-      return `${esc(h.name)} · ${esc(status)}${h.budget ? ` · $${h.budget}` : ''}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}`;
+      return `${esc(h.name)} · ${esc(status)}${h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}`;
     }).join('<br>')}</small></div></div>`);
   }
-  if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Places know you as</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);
+  if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);
   $('recordBody').innerHTML = rec.join('');
 }
 
 let seenPhone = new Set();
 
-/** Your phone: you are the principal, so approvals and incident reports come here. */
+/** Your phone: you are the principal, so questions from places, approvals and incident reports come here. */
 export function renderPhone(s) {
   const items = [];
+  for (const a of s.phone.asks ?? []) {
+    const what = listOf(a.what.map((w) => w.label));
+    items.push(`<li class="approval ask"><div><b>🔎 ${esc(a.place)} asks for ${esc(what)}</b><br><small>For ${esc(a.tier)}${a.law?.length ? `, required by ${esc(listOf(a.law))}` : ', its own policy'}. Your agent shows only that, only there.</small></div>
+      <div class="btns"><button class="primary" data-consent="${esc(a.id)}" data-choice="once">Share once</button><button data-consent="${esc(a.id)}" data-choice="always">Always here</button><button class="quiet" data-consent="${esc(a.id)}" data-choice="decline">Decline</button></div></li>`);
+  }
   for (const a of s.phone.approvals) {
     const d = a.details;
     let text;
@@ -246,9 +293,13 @@ export function renderPhone(s) {
   for (const n of [...s.phone.incidents].reverse()) {
     items.push(`<li class="incident"><b>⚠️ Report about ${esc(n.agent)}</b><br><small>${esc(n.summary)}. Reported by ${esc(n.reporter)}, relayed by the registry.</small></li>`);
   }
-  $('phoneList').innerHTML = items.length ? items.join('') : '<li class="muted">Nothing yet. When a place needs your OK, it comes here.</li>';
-  $('phoneCount').textContent = items.length ? String(items.length) : '';
-  const ids = [...s.phone.approvals.map((a) => a.request_id), ...s.phone.incidents.map((n) => n.id)];
+  if (s.phone.consent?.length) {
+    items.push(`<li class="consent"><b>You always share</b>${s.phone.consent.map((c) => `<div class="crow"><small>${esc(listOf(c.what))} with ${esc(c.place)}</small><button class="quiet small" data-unconsent="${esc(c.placeId)}">Take back</button></div>`).join('')}</li>`);
+  }
+  $('phoneList').innerHTML = items.length ? items.join('') : '<li class="muted">Nothing yet. When a place asks for more than your badge, or needs your OK, it comes here.</li>';
+  const waiting = (s.phone.asks?.length ?? 0) + s.phone.approvals.length + s.phone.incidents.length;
+  $('phoneCount').textContent = waiting ? String(waiting) : '';
+  const ids = [...(s.phone.asks ?? []).map((a) => a.id), ...s.phone.approvals.map((a) => a.request_id), ...s.phone.incidents.map((n) => n.id)];
   const fresh = ids.filter((id) => !seenPhone.has(id));
   seenPhone = new Set(ids);
   if (fresh.length) {
@@ -261,14 +312,32 @@ export function renderPhone(s) {
   return false;
 }
 
-/** The town ledger: everything anyone did, newest first. Lines with a card open it. */
+/** One line of the ledger: who, where, what happened, and the badge number that place saw. */
+export function ledgerLine(e) {
+  const c = e.card;
+  if (!c || c.type !== 'check') return esc(e.text);
+  const who = e.mine ? `you (${c.actor})` : c.actor;
+  return `<b>${esc(c.place)}</b> → ${esc(who)}: ${esc(c.headline ?? e.text)}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}`;
+}
+
+/** The town ledger: everything anyone did, newest first. Lines with a card open it. Holds still while you point at it. */
+let ledgerEvents = [];
 export function renderLedger(events) {
+  ledgerEvents = events;
   const list = $('ledgerList');
+  if (list.matches(':hover')) {
+    list.dataset.stale = '1';
+    return;
+  }
+  list.dataset.stale = '';
   list.innerHTML = events.slice(-40).reverse().map((e) => `
-    <li class="${e.tone ?? 'info'} ${e.mine ? 'mine' : ''} ${e.card ? 'open' : ''}" data-seq="${e.seq}">
-      <i></i><span>${esc(e.text)}</span>
+    <li class="${e.tone ?? 'info'} ${e.mine ? 'mine' : ''} ${e.card ? 'open' : ''} ${e.kind === 'policy' ? 'law' : ''}" data-seq="${e.seq}">
+      <i></i><span>${ledgerLine(e)}</span>
     </li>`).join('');
 }
+$('ledgerList')?.addEventListener('mouseleave', () => {
+  if ($('ledgerList').dataset.stale) renderLedger(ledgerEvents);
+});
 
 let toastTimer = null;
 export function toast(text, tone = 'info') {

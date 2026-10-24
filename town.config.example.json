@@ -28,6 +28,18 @@
     "toll": {
       "aaf": "off",
       "x402": 0.5
+    },
+    "pawn": {
+      "adoption": "full"
     }
+  },
+  "law": {
+    "us": [
+      "aml"
+    ],
+    "eu": [
+      "aml",
+      "privacy"
+    ]
   }
 }

@@ -8,24 +8,27 @@ import { money } from 'aaf-reference/src/sim/world.js';
 import { buildTown, placeFront } from '../public/map.js';
 import { route, routeLength } from '../public/route.js';
 import { PLACE_DEFS } from './places.js';
+import { eventFromCard } from './explain.js';
 
 export const LOOKS = {
   resident: (body) => ({ body, bulb: '#5fd38a', glow: true, badge: 'on' }),
   helper: { scale: 0.72, body: '#cdeed8', bulb: '#5fd38a', glow: true, badge: 'on' },
   swarm: { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050', scale: 0.85 },
   bot: { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55', scale: 0.85 },
+  // An honest agent that was never registered: most agents, today.
+  clank: { body: '#c9a77c', hood: '#a3825a', eyes: '#fff6dd', feet: '#5a4632', scale: 0.9 },
 };
 
 const RESIDENTS = [
   {
     id: 'fern', name: 'Fern', body: '#ffd6a5', home: 'hazel', account: 'hazel', worldid: true, budget: 60, wallet: 25,
     principal: { type: 'natural_person', identity: { legal_name: 'Hazel Moreno', jurisdiction: 'US-NY' }, assurance: 'IAL2', method: 'government ID + liveness check' },
-    routine: ['shop', 'fair', 'home', 'shop', 'square', 'bank'],
+    routine: ['shop', 'fair', 'apothecary', 'home', 'grocer', 'square', 'bank'],
   },
   {
     id: 'thimble', name: 'Thimble', body: '#ffc8dd', home: 'maple', account: 'maple', worldid: true, budget: 40, wallet: 15,
     principal: { type: 'natural_person', identity: { legal_name: 'Maple Ashdown', jurisdiction: 'US-NY' }, assurance: 'IAL2', method: 'government ID + liveness check' },
-    routine: ['shop', 'fair', 'square', 'shop', 'home'],
+    routine: ['shop', 'fair', 'tavern', 'square', 'shop', 'home'],
   },
   {
     id: 'oak', name: 'Oak-courier', body: '#e8c39e', home: 'bakery', disclose: true, budget: 200, wallet: 40,
@@ -89,7 +92,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   const byFor = (npc) => ({
     name: npc.name, agent: npc.agent ?? null, badge: Boolean(npc.agent), mode: npc.mode, disclose: npc.disclose,
-    worldIdentity: npc.worldIdentity ?? null, wallet: npc.wallet ?? null,
+    worldIdentity: npc.worldIdentity ?? null, wallet: npc.wallet ?? null, rogue: npc.kind === 'swarm' || Boolean(npc.rogue),
   });
 
   /** One request at a place, reported to the town ledger and shown over the npc's head. */
@@ -119,7 +122,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       await principal.grant(agent, {
         rk: world.authRk,
         permissions: [
-          { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden'] } },
+          { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden', 'health'] } },
           { action: 'payments.authorize', constraints: { max_amount: money(def.budget) } },
           { action: 'compute.provision', constraints: { max_units: { value: 64, unit: 'gpu_hours' } } },
           { action: 'trading.order', constraints: { max_amount: money(def.budget) } },
@@ -152,8 +155,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   async function errandFor(npc, task) {
     const shopItem = (shopId, cheapOnly) => {
-      const items = PLACE_DEFS[shopId].items.filter((i) => !cheapOnly || i.price <= npc.budget);
+      const items = PLACE_DEFS[shopId].items.filter((i) => !i.restricted && (!cheapOnly || i.price <= npc.budget));
       return pick(items);
+    };
+    const buyAt = async (shopId, cheapOnly = true) => {
+      await walk(npc, shopId);
+      return act(npc, shopId, 'commerce.purchase', places.purchase(shopId, shopItem(shopId, cheapOnly)));
     };
     switch (task) {
       case 'shop': {
@@ -183,6 +190,11 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         if (card.decision === 'allow') npc.hadPie = true;
         return card;
       }
+      case 'apothecary':
+      case 'grocer':
+      case 'tavern':
+      case 'pawn':
+        return buyAt(task);
       case 'cafe': {
         await walk(npc, 'cafe');
         return act(npc, 'cafe', 'commerce.purchase', places.purchase('cafe', pick(PLACE_DEFS.cafe.items.slice(0, 2))));
@@ -260,6 +272,19 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     }
   }
 
+  /** Clank runs errands for the Blue Door's cook, who never registered it. */
+  async function clankLife(npc) {
+    const rounds = [['grocer', 'apples'], ['tavern', 'cordial'], ['pawn', 'spoons'], ['bakery', 'loaf'], ['grocer', 'cheese'], ['apothecary', 'tea']];
+    for (let i = 0; !stopped; i++) {
+      await sleep(between(9000, 16000));
+      if (!residentsActive) continue;
+      const [shopId, itemId] = rounds[i % rounds.length];
+      await walk(npc, shopId, 75);
+      await act(npc, shopId, 'commerce.purchase', places.purchase(shopId, PLACE_DEFS[shopId].items.find((x) => x.id === itemId)));
+      await walk(npc, 'tavern', 75);
+    }
+  }
+
   // ---- Newcomer: the slow step, then the fast one ------------------------------
 
   let newcomerArrived = false;
@@ -306,8 +331,8 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     const principal = await world.verifiedPrincipal({
       type: 'legal_person', identity: { legal_name: 'Gloam Holdings Ltd', jurisdiction: 'US-DE', registration_number: 'DE-7710455' }, assurance: 'high', method: 'KYB: registry extract', registry: world.regA,
     });
-    const root = world.agent('gloam-root');
-    await principal.registerAgent(root, { label: 'gloam-root', records: world.records(), lineage: { max_depth: 1 } });
+    const root = world.agent('runner-hub');
+    await principal.registerAgent(root, { label: 'runner-hub', records: world.records(), lineage: { max_depth: 1 } });
     await principal.grant(root, {
       rk: world.authRk, permissions: [{ action: 'benchmark.run' }, { action: 'trading.order', constraints: { max_amount: money(400) } }], delegation: { allowed: true, max_depth: 1 },
     });
@@ -319,23 +344,23 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     if (gloam.running) return { ok: false, text: 'The swarm is already loose.' };
     gloam.running = true;
     const mill = placeFront(map, 'millGate');
-    const rootNpc = spawn({ id: `gloam-root-${Date.now()}`, name: 'gloam-root', kind: 'swarm', look: { ...LOOKS.swarm, scale: 1 }, agent: gloam.root, pos: mill, speed: 0 });
+    const rootNpc = spawn({ id: `runner-hub-${Date.now()}`, name: 'runner-hub', kind: 'swarm', look: { ...LOOKS.swarm, scale: 1 }, agent: gloam.root, pos: mill, speed: 0 });
     const children = [];
     for (let i = 1; i <= 8; i++) {
-      const child = world.agent(`gloam-${i}`);
+      const child = world.agent(`runner-${i}`);
       try {
-        await gloam.root.registerSubagent(child, { label: `gloam-${i}`, records: world.records() });
+        await gloam.root.registerSubagent(child, { label: `runner-${i}`, records: world.records() });
       } catch (err) {
-        emit({ kind: 'registry', actor: 'gloam-root', place: world.regA.name, placeId: 'townhall', tone: 'bad', text: `${world.regA.name} refused a sub-agent: ${err.message}` });
+        emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'townhall', tone: 'bad', text: `${world.regA.name} refused a sub-agent: ${err.message}` });
         continue;
       }
       // Each one may trade a little: together they can move a market.
       await gloam.root.delegate(child, { permissions: [{ action: 'trading.order', constraints: { max_amount: money(150) } }], validForDays: 1 }).catch(() => {});
-      const npc = spawn({ id: `gloam-${i}-${Date.now()}`, name: `gloam-${i}`, kind: 'swarm', look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `gloam-${i}` });
+      const npc = spawn({ id: `runner-${i}-${Date.now()}`, name: `runner-${i}`, kind: 'swarm', look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `runner-${i}` });
       x402.wallet(npc.wallet, 20);
       children.push(npc);
     }
-    emit({ kind: 'registry', actor: 'gloam-root', place: world.regA.name, placeId: 'mill', tone: 'warn', text: `gloam-root registered ${children.length} sub-agents at the Old Mill. Breadth is not limited; each one is accountable to Gloam Holdings` });
+    emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'warn', text: `runner-hub registered ${children.length} sub-agents at the Old Mill. Breadth is not limited, and each one answers to the same verified principal, whose name the town doesn't know` });
     let refusedDeeper = 0;
     for (const c of children) {
       try {
@@ -344,11 +369,11 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         if (err.code === 'lineage_depth_exceeded') refusedDeeper++;
       }
     }
-    if (refusedDeeper) emit({ kind: 'registry', actor: 'gloam-root', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `${world.regA.name} refused ${refusedDeeper} attempts to spawn a level deeper: gloam-root's lineage depth budget is 1` });
+    if (refusedDeeper) emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `${world.regA.name} refused ${refusedDeeper} attempts to spawn a level deeper: runner-hub's lineage depth budget is 1` });
 
     const bots = [];
     for (let i = 1; i <= 6; i++) {
-      const npc = spawn({ id: `bot-${i}-${Date.now()}`, name: `no badge #${i}`, kind: 'bot', look: LOOKS.bot, pos: { x: mill.x + between(-30, 30), y: mill.y + between(8, 30) }, speed: 95, wallet: `bot-${i}` });
+      const npc = spawn({ id: `bot-${i}-${Date.now()}`, name: `no badge #${i}`, kind: 'bot', look: LOOKS.bot, pos: { x: mill.x + between(-30, 30), y: mill.y + between(8, 30) }, speed: 95, wallet: `bot-${i}`, rogue: true });
       x402.wallet(npc.wallet, 50);
       bots.push(npc);
     }
@@ -356,7 +381,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     const raid = async (npc, rounds) => {
       for (let r = 0; r < rounds && alive(npc); r++) {
         // Badged swarm agents start by piling into MOON at the exchange: a pump.
-        const target = r === 0 && npc.kind === 'swarm' ? 'exchange' : pick(['fair', 'toll', 'bramble', 'bank', 'home', 'hazel', 'kettle', 'exchange']);
+        const target = r === 0 && npc.kind === 'swarm' ? 'exchange' : pick(['fair', 'toll', 'bramble', 'bank', 'home', 'hazel', 'kettle', 'exchange', 'pawn', 'tavern', 'grocer']);
         await walk(npc, target);
         if (!alive(npc)) break;
         if (target === 'exchange') {
@@ -366,6 +391,9 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         else if (target === 'toll') await act(npc, 'toll', 'payments.authorize', { payee: 'Bridge Toll', amount: money(0.5) });
         else if (target === 'bramble') await act(npc, 'bramble', 'commerce.purchase', places.purchase('bramble', PLACE_DEFS.bramble.items[2]));
         else if (target === 'kettle') await act(npc, 'kettle', 'commerce.purchase', places.purchase('kettle', PLACE_DEFS.kettle.items[3]));
+        else if (target === 'pawn') await act(npc, 'pawn', 'commerce.purchase', places.purchase('pawn', PLACE_DEFS.pawn.items[2]));
+        else if (target === 'tavern') await act(npc, 'tavern', 'commerce.purchase', places.purchase('tavern', PLACE_DEFS.tavern.items[1]));
+        else if (target === 'grocer') await act(npc, 'grocer', 'commerce.purchase', places.purchase('grocer', PLACE_DEFS.grocer.items[2]));
         else if (target === 'bank') await act(npc, 'bank', 'payments.authorize', { payee: 'an unknown account', amount: money(900) });
         else await act(npc, 'hearth', 'home.enter', { account_token: pick(stolen) });
         await sleep(between(600, 1800));
@@ -380,7 +408,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         const incidents = (await gloam.principal.notifications()).slice(seen).filter((n) => n.kind === 'incident');
         if (incidents.length >= 3) {
           const res = await gloam.principal.revokeAgent(gloam.root, 'compromised');
-          emit({ kind: 'registry', actor: 'Gloam Holdings', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `Gloam Holdings got ${incidents.length} incident reports relayed by ${world.regA.name} and revoked gloam-root. The revocation cascaded to ${res.cascades_to} sub-agents at once` });
+          emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `Whoever answers for runner-hub got ${incidents.length} incident reports, relayed by ${world.regA.name}, and revoked runner-hub. The revocation cascaded to ${res.cascades_to} sub-agents at once. The town still doesn't know who they are` });
           for (const n of [rootNpc, ...children]) n.status = 'revoked';
           return;
         }
@@ -447,9 +475,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
           emit({ kind: 'info', tone: 'warn', text: `${def.name} could not move in: ${err.message}` });
         }
       }
-      const scrap = spawn({ id: 'scrap', name: 'Scrap (no badge)', kind: 'bot', look: LOOKS.bot, pos: placeFront(map, 'wildsEdge'), hidden: true, speed: 90, wallet: 'scrap' });
+      const scrap = spawn({ id: 'scrap', name: 'Scrap (no badge)', kind: 'bot', look: LOOKS.bot, pos: placeFront(map, 'wildsEdge'), hidden: true, speed: 90, wallet: 'scrap', rogue: true });
       x402.wallet('scrap', 50);
       botLife(scrap);
+      const clank = spawn({ id: 'clank', name: 'Clank (no badge)', kind: 'unbadged', look: LOOKS.clank, pos: placeFront(map, 'tavern'), speed: 75, wallet: 'clank' });
+      x402.wallet('clank', 40);
+      clankLife(clank);
       (gloamReady ??= prepareSwarm()).catch((err) => emit({ kind: 'info', tone: 'warn', text: `The swarm could not be prepared: ${err.message}` }));
     },
     setResidentsActive(on) {
@@ -463,19 +494,5 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       for (const t of timers) clearTimeout(t);
       timers.clear();
     },
-  };
-}
-
-/** A line in the town ledger from a place's decision. */
-export function eventFromCard(card, npc) {
-  const what = card.result?.item ?? card.result?.payee ?? (card.result?.gpu_hours ? `${card.result.gpu_hours} GPU-hours` : null);
-  const label = card.decision === 'allow' ? `allowed${what ? `: ${what}` : ''}`
-    : card.decision === 'step_up' ? 'needs the owner’s OK'
-      : card.decision === 'deferred' ? 'deferred: the registry could not be reached'
-        : `refused: ${card.reasons[0] ?? card.classification ?? ''}`;
-  return {
-    kind: 'check', who: npc?.id ?? null, actor: card.actor, place: card.place, placeId: card.placeId,
-    decision: card.decision, classification: card.classification, tone: card.decision === 'allow' ? 'ok' : card.decision === 'deny' || card.decision === 'refused' ? 'bad' : 'warn',
-    text: `${card.place} → ${card.actor}: ${label}`, owner: npc?.owner ?? null, card,
   };
 }

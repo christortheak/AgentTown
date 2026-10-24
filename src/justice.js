@@ -114,7 +114,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
     c.status = 'identified';
     c.outcome.push(`identified by order of ${judge}`);
     const others = c.findings.others.length ? ` The rest belong to ${c.findings.others.map((o) => `${o.name} (${o.badges})`).join(', ')}: not the same principal.` : '';
-    emit({ kind: 'justice', placeId: 'court', place: 'Courthouse', tone: 'ok', text: `By order of ${judge}, the registry identified case ${c.id}: ${main.badges} of ${c.evidence.length} badge(s) belong to ${main.identity.legal_name} (${main.type.replace('_', ' ')}).${others}` });
+    emit({ kind: 'justice', placeId: 'court', place: 'Courthouse', tone: 'ok', reveal: true, text: `By order of ${judge}, the registry identified case ${c.id}: ${main.badges} of ${c.evidence.length} badge(s) belong to ${main.identity.legal_name} (${main.type.replace('_', ' ')}).${others}` });
     if (!people().police) later(3000, () => inspect(c));
   }
 
@@ -144,7 +144,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
     bans.set(banKey(p.identity), c.id);
     c.status = 'principal banned';
     c.outcome.push(`principal banned by order of ${judge}`);
-    emit({ kind: 'justice', placeId: 'court', place: 'Courthouse', tone: 'ok', text: `By order of ${judge}, VerityCheck withdrew ${p.identity.legal_name}'s verification. Every agent registered under it is suspended at once, and that identity can't be verified again` });
+    emit({ kind: 'justice', placeId: 'court', place: 'Courthouse', tone: 'ok', reveal: true, text: `By order of ${judge}, VerityCheck withdrew ${p.identity.legal_name}'s verification. Every agent registered under it is suspended at once, and that identity can't be verified again` });
   }
 
   /** The simulated inspector: identify first; then delete; ban a principal behind several cases or a scheme. */

@@ -69,8 +69,10 @@ button kbd { margin-right: 7px; }
 #questList li.extra::before { border-radius: 4px; }
 
 #mapCard { top: 14px; right: 14px; padding: 6px; line-height: 0; }
-#minimap { width: 236px; height: 162px; border-radius: 12px; cursor: crosshair; }
-#record { top: 196px; right: 14px; width: 250px; max-height: calc(100vh - 196px - 250px); overflow: auto; padding: 10px 14px; }
+#minimap { width: 264px; height: 132px; border-radius: 12px; cursor: crosshair; }
+#townScore { display: block; width: 100%; margin: 4px 0 0; padding: 4px 6px; line-height: 1.3; font-weight: 600; text-align: left; color: var(--muted); }
+#townScore b { color: var(--ink); }
+#record { top: 196px; right: 14px; width: 276px; max-height: calc(100vh - 196px - 250px); overflow: auto; padding: 10px 14px; }
 #recordBody { margin-top: 8px; font-size: 13px; }
 #recordBody .row { display: flex; gap: 8px; padding: 6px 0; border-top: 1px dashed var(--line); line-height: 1.35; }
 #recordBody .row:first-child { border-top: none; }
@@ -107,9 +109,10 @@ button kbd { margin-right: 7px; }
 #ledgerList li.open:hover { background: var(--paper-2); }
 
 #dock { position: fixed; z-index: 6; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 8px; }
-#dock button { padding: 9px 16px; font-size: 14px; box-shadow: var(--shadow); }
+#dock button { padding: 9px 16px; font-size: 14px; white-space: nowrap; box-shadow: var(--shadow); }
 #dock button kbd { margin: 0 0 0 6px; }
 #dock #badgeBtn.on { border-color: var(--ok); color: var(--ok); }
+#dock #xrayBtn.on { border-color: var(--info); color: var(--info); background: #eaf1fb; }
 body:has(.dialog:not([hidden])) #dock, body:has(#palette:not([hidden])) #dock, body.scene #dock { display: none; }
 
 .banner { position: fixed; z-index: 7; top: 14px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: #fff3d6; border: 2px solid #f2c14e; font-size: 13px; font-weight: 700; box-shadow: var(--shadow); }
@@ -309,3 +312,111 @@ button.danger { border-color: var(--bad); color: var(--bad); }
 body:not([data-role="agent"]) #badgeBtn { display: none; }
 .idcard .actions { flex-wrap: wrap; gap: 8px; }
 .idcard .actions button { font-size: 13px; }
+
+/* ---- Plain-language cards, disclosure requests, the comparison lens ------------------------------ */
+
+.why { margin: 4px 0 10px; font-size: 15px; line-height: 1.45; }
+.askbox { margin: 10px 0; padding: 12px 14px; border-radius: 14px; background: #fff3d6; border: 2px solid #f2c14e; }
+.askbox p { margin: 6px 0 0; }
+.askbox .btns, .fix { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.askbox .btns button { font-size: 13px; padding: 6px 12px; }
+.fix { margin: 8px 0; }
+ul.plain { margin: 0; padding: 0; list-style: none; }
+ul.plain li { display: flex; gap: 8px; margin: 4px 0; padding: 6px 10px; border-radius: 10px; background: var(--paper-2); font-size: 13.5px; }
+ul.plain li > span { flex: none; width: 20px; text-align: center; }
+.tierline { margin: 10px 0 0; font-size: 12.5px; }
+.lens-details summary, .idcard details summary { padding: 4px 0; }
+.lens { margin-top: 6px; overflow-x: auto; }
+.lens table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.lens th { font-weight: 700; color: var(--muted); text-align: left; padding: 3px 4px; vertical-align: bottom; }
+.lens thead th { font-size: 10.5px; text-align: center; line-height: 1.15; }
+.lens thead th.ours { color: #2f6b3f; }
+.lens tbody th { font-weight: 600; color: var(--ink); min-width: 150px; }
+.lens td { text-align: center; padding: 3px 4px; border-top: 1px dashed var(--line); font-weight: 900; cursor: pointer; }
+.lens td.yes { color: var(--ok); }
+.lens td.partly { color: var(--warn); }
+.lens td.no { color: var(--bad); }
+.lens td.ours { background: #eef8ea; }
+.lens td:focus { outline: 2px solid #f2c14e; }
+.lens-why { min-height: 2.6em; margin: 6px 0; padding: 6px 8px; border-radius: 8px; background: var(--paper-2); }
+code.badge { font-size: 10.5px; padding: 0 4px; color: var(--muted); }
+#ledgerList li.law { background: #f1ebfb; }
+
+/* ---- Phone: questions from places ---------------------------------------------------------------- */
+
+#phoneList li.ask { background: #fff3d6; }
+#phoneList li.consent { background: #eef8ea; }
+#phoneList .crow { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 4px; }
+#phoneList .crow button { padding: 2px 8px; }
+
+/* ---- Roles: the shopkeeper's choices, the council's rulebook, the scoreboard --------------------- */
+
+.adopt { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; font-weight: 800; }
+.adopt select, .policies select { font: 600 12px var(--font); padding: 3px 6px; border-radius: 8px; border: 1.5px solid var(--frame); background: #fff; color: var(--ink); }
+ul.lines { margin: 4px 0; padding: 0; list-style: none; font-size: 12.5px; }
+ul.lines li { margin: 3px 0; line-height: 1.35; }
+.tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; background: var(--paper-2); color: var(--muted); }
+.tag.law { background: #ece3fa; color: #5b4a7a; }
+.tag.adoption { background: #e3eefb; color: var(--info); }
+.tag.keeper { background: #eaf4e6; color: #2f6b3f; }
+.regimes { display: grid; gap: 6px; }
+.regime { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 10px; background: var(--paper-2); cursor: pointer; font-size: 13px; }
+.regime input { margin-top: 3px; accent-color: #7a5aa6; }
+.regime small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+.score { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; margin: 8px 0; }
+.score > div { padding: 8px; border-radius: 12px; background: var(--paper-2); font-size: 12px; }
+.score b { font-size: 20px; color: #5a4636; }
+.score small { display: block; color: var(--muted); line-height: 1.25; }
+.score-table td, .score-table th { font-size: 12px; }
+.policies tr.claimed td { color: var(--muted); }
+#paletteBody .chip.done { background: #e3f3e6; color: var(--ok); }
+#paletteBody h5.pinned { color: var(--green); }
+#paletteBody ul.pinned .row { background: #eef8ea; }
+
+/* ---- The X-ray, court reveals, presenter view ------------------------------------------------------ */
+
+#xray { position: fixed; z-index: 7; top: 196px; right: 14px; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 196px - 160px); overflow: auto;
+  padding: 10px 14px; background: rgba(255, 250, 240, 0.97); border: 2px solid #9fbbe0; border-radius: 16px; box-shadow: var(--shadow); font-size: 13px; }
+#xray[hidden] { display: none; }
+#xray header { display: flex; justify-content: space-between; align-items: center; }
+#xray h2 { margin: 0; font-size: 14px; color: #3d5a80; }
+#xray ol { margin: 6px 0; padding-left: 20px; }
+#xray li { margin: 3px 0; color: var(--muted); transition: color 0.2s; }
+#xray li b { color: #3d5a80; }
+#xray li.now { color: var(--ink); font-weight: 700; }
+#xray li.now::marker { color: var(--info); }
+#xray li.done { color: var(--ink); }
+#xray li.bad b { color: var(--bad); }
+.banner.reveal { top: auto; bottom: 74px; width: max-content; max-width: min(720px, calc(100vw - 24px)); border-color: #7a5aa6; background: #f3ecfd; cursor: pointer; text-align: center; border-radius: 16px; }
+body.presenter #quest, body.presenter #record, body.presenter #phone, body.presenter #rolePanel { display: none; }
+body.presenter #ledger { width: 440px; max-height: 46vh; font-size: 14px; }
+body.presenter #ledgerList { font-size: 14px; }
+body.presenter #ledger .fold { display: block; }
+
+/* ---- Phones -------------------------------------------------------------------------------------------- */
+
+@media (max-width: 760px) {
+  kbd, #dock kbd, .panel .hint { display: none; }
+  #dock { bottom: 10px; gap: 6px; }
+  #dock button { padding: 7px 11px; font-size: 13px; white-space: nowrap; }
+  .banner.reveal { font-size: 12px; padding: 6px 10px; }
+  #quest { top: 10px; left: 10px; right: 10px; padding: 8px 12px; }
+  #quest h1 { font-size: 15px; }
+  #rolePanel { top: 10px; left: 10px; right: 10px; width: auto; max-height: 42vh; }
+  #ledger { display: block; left: 10px; right: 10px; width: auto; bottom: 60px; max-height: 30vh; padding: 6px 10px; }
+  #ledger:not(.open) { right: auto; }
+  #phone { right: 10px; left: auto; bottom: 60px; width: auto; max-width: calc(100vw - 20px); }
+  #phone.open { left: 10px; }
+  body:has(#ledger.open) #phone:not(.open) { display: none; }
+  #xray { top: 64px; right: 10px; left: 10px; width: auto; max-height: 34vh; font-size: 12px; }
+  .idcard { padding: 14px; font-size: 13.5px; }
+  .idcard h3 { font-size: 17px; }
+  .lens tbody th { min-width: 110px; font-size: 11px; }
+  .banner.reveal { bottom: 112px; }
+}
+
+.law-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; font-size: 12.5px; }
+.law-row > b { min-width: 150px; }
+.chip-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; border: 1.5px solid var(--frame); background: #fff; font-weight: 700; cursor: pointer; }
+.chip-toggle:has(input:checked) { border-color: #7a5aa6; background: #f3ecfd; color: #5b4a7a; }
+.chip-toggle input { accent-color: #7a5aa6; margin: 0; }

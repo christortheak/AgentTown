@@ -21,6 +21,12 @@ export function createX402() {
       return wallets.get(id);
     },
     balance: (id) => wallets.get(id)?.balance ?? 0,
+    /** Ordinary spending from the same wallet (purchases, bills, trades): not x402. */
+    adjust(id, delta) {
+      const w = x402.wallet(id);
+      w.balance = Math.round((w.balance + delta) * 100) / 100;
+      return w.balance;
+    },
 
     /** What the resource puts in PAYMENT-REQUIRED. */
     requirements({ resource, amount, payTo, description }) {

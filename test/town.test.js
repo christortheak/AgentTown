@@ -61,7 +61,10 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.ok(actions.length > 30, 'the deck lists every action');
 
     // An unregistered agent is unlabeled; registering before verification is refused by the registry itself.
-    assert.equal((await run('buy', { shop: 'bramble', item: 'guide' })).classification, 'UNLABELED');
+    const unlabeled = await run('buy', { shop: 'bramble', item: 'guide' });
+    assert.equal(unlabeled.classification, 'UNLABELED');
+    assert.equal(unlabeled.headline, 'Refused: no badge shown');
+    assert.equal(unlabeled.fix.action, 'verify', 'every refusal suggests the next step');
     const early = await run('register', { name: 'Pip' });
     assert.equal(early.decision, 'refused');
     assert.match(early.reasons[0], /verified/);
@@ -74,17 +77,36 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     const guide = await run('buy', { shop: 'bramble', item: 'guide' });
     assert.equal(guide.decision, 'allow');
     assert.ok(guide.receipt.verified);
+    assert.match(guide.headline, /Bought pocket guide/);
+    assert.ok(guide.plain.some((x) => x.kind === 'protected'), 'in plain words: not who they are');
+    const hops = guide.trace.map((h) => `${h.from}>${h.to}`);
+    for (const hop of ['actor>bramble', 'bramble>townhall', 'bramble>records', 'bramble>actor']) assert.ok(hops.includes(hop), `the X-ray shows ${hop}`);
     assert.equal((await run('buy', { shop: 'bramble', item: 'encyclopedia' })).decision, 'deny');
     const cafe = await run('buy', { shop: 'cafe', item: 'creme' });
     assert.notEqual(cafe.decision, 'allow', 'Café Lumière only accepts Harbor Registry badges');
     assert.match(cafe.policy, /Harbor Registry|Registry B/);
 
-    // Disclosure: the forge's large jobs need a disclosed principal (and provenance), small ones don't.
+    // Disclosure requests: a place asks, the principal decides on their phone, the agent shows only that.
     assert.equal((await run('compute', { job: 'small' })).decision, 'allow');
-    assert.equal((await run('compute', { job: 'large' })).decision, 'step_up');
-    await run('disclose', { on: true });
-    assert.equal((await run('buy', { shop: 'kettle', item: 'kettle' })).classification, 'ACCOUNTABLE_DISCLOSED');
-    await run('disclose', { on: false });
+    const large = await run('compute', { job: 'large' });
+    assert.equal(large.decision, 'step_up');
+    assert.deepEqual(large.ask.what.map((w) => w.kind), ['identity', 'provenance']);
+    assert.equal((await get('/api/state')).phone.asks.length, 1, 'the question is on the phone');
+    const shared = await run('consent', { ask: large.ask.id, choice: 'once' });
+    assert.equal(shared.classification, 'ACCOUNTABLE_DISCLOSED');
+    assert.match(shared.headline, /grant/, 'name and bill of materials shown, but 32 GPU-hours is more than the grant allows');
+    const draught = await run('buy', { shop: 'apothecary', item: 'draught' });
+    assert.equal(draught.decision, 'step_up');
+    assert.equal(draught.ask.what[0].name, 'age_over_18');
+    const served = await run('consent', { ask: draught.ask.id, choice: 'always' });
+    assert.equal(served.decision, 'allow');
+    assert.ok(served.plain.some((x) => x.kind === 'attribute'), 'the place learned "over 18"');
+    assert.ok(!served.plain.some((x) => x.kind === 'identity'), '... and not the name');
+    assert.equal((await run('buy', { shop: 'apothecary', item: 'draught' })).decision, 'allow', 'standing consent: no question the second time');
+    assert.equal((await run('buy', { shop: 'kettle', item: 'kettle' })).classification, 'ACCOUNTABLE_PROTECTED', 'a place that does not ask learns nothing extra');
+    const kyc = await run('bank.open');
+    assert.equal((await run('consent', { ask: kyc.ask.id, choice: 'decline' })).decision, 'info');
+    assert.equal((await run('bank.open')).decision, 'step_up', 'declined: the bank still does not have the name');
 
     // World ID (simulated): one pie per person, not per agent.
     const noWorldId = await run('fair.claim');
@@ -95,10 +117,11 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.equal((await run('fair.claim')).decision, 'deny', 'same person, same nullifier');
 
     // x402 (simulated): the toll takes payment from anyone; with the framework on, it also checks authority.
+    const before = (await get('/api/state')).wallet.balance;
     const toll = await run('toll.pay');
     assert.equal(toll.decision, 'allow');
     assert.ok(toll.steps.some((s) => /settled/.test(s.text)));
-    assert.equal((await get('/api/state')).wallet.balance, 19.5);
+    assert.equal((await get('/api/state')).wallet.balance, before - 0.5);
     await run('badge', { on: false });
     assert.equal((await run('toll.pay')).decision, 'allow', 'x402 alone: no badge needed');
     await post('/api/director', { cue: 'policy', params: { place: 'toll', patch: { aaf: 'required' } } });
@@ -160,7 +183,7 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     await post('/api/director', { cue: 'swarm' });
     await until(get, (e) => /lineage depth budget/.test(e.text ?? ''), { label: 'depth refusals' });
     await until(get, (e) => e.kind === 'alert' && /MOON/.test(e.text), { label: 'the pump alert' });
-    const cascade = await until(get, (e) => /revoked gloam-root/.test(e.text ?? ''), { timeout: 60000, label: 'the cascade' });
+    const cascade = await until(get, (e) => /revoked runner-hub/.test(e.text ?? ''), { timeout: 60000, label: 'the cascade' });
     assert.match(cascade.text, /8 sub-agent/);
     await until(get, (e) => /withdrew Gloam Holdings Ltd's verification/.test(e.text ?? ''), { timeout: 60000, label: 'the ban' });
 
@@ -275,6 +298,62 @@ test('people in roles: a shopkeeper, a homeowner, police, a judge, and a crook',
     await alice.post('/api/leave');
     await alice.join('agent', 'Alicia Gray');
     assert.equal((await alice.run('verify')).decision, 'allow');
+  } finally {
+    await game.close();
+  }
+});
+
+test('partial adoption and the law: same rails, different questions', { timeout: 60000 }, async () => {
+  const game = await startServer({ port: 4496, portOffset: 9000, quiet: true, residents: false, timeScale: 25 });
+  const [ana, sam, cy, viv] = [client(game), client(game), client(game), client(game)];
+  try {
+    await ana.join('agent', 'Ana Park');
+    for (const [a, p] of [['verify'], ['register', { name: 'Ada' }], ['grant', { budget: 50 }]]) assert.equal((await ana.run(a, p)).decision, 'allow', a);
+
+    // The Old Quarter: one shop checks nothing, one blocks agents, one is piloting badges.
+    const pawn = await ana.run('buy', { shop: 'pawn', item: 'violin' });
+    assert.equal(pawn.decision, 'allow', 'not on the framework: $120 with no authority checked');
+    assert.equal(pawn.legacy, 'none');
+    assert.equal((await ana.run('buy', { shop: 'tavern', item: 'cordial' })).decision, 'deny', 'the Blue Door turns away an agent that says so');
+    await ana.run('badge', { on: false });
+    assert.equal((await ana.run('buy', { shop: 'tavern', item: 'ale' })).decision, 'allow', '... and serves one that does not, ale included');
+    assert.equal((await ana.run('buy', { shop: 'grocer', item: 'apples' })).decision, 'allow', 'pilot: small orders from anyone');
+    assert.equal((await ana.run('buy', { shop: 'grocer', item: 'cheese' })).classification, 'UNLABELED', 'pilot: bigger orders need a badge');
+    await ana.run('badge', { on: true });
+    assert.equal((await ana.run('buy', { shop: 'grocer', item: 'cheese' })).decision, 'allow');
+
+    // A shopkeeper chooses to adopt; the council makes it law for a whole sector.
+    await sam.join('shopkeeper', 'Sam Reed', 'tavern');
+    await sam.run('shop.adoption', { mode: 'full' });
+    assert.equal((await ana.run('buy', { shop: 'tavern', item: 'cordial' })).decision, 'allow', 'checking badges instead of blocking agents');
+    await cy.join('council', 'Cy Lane');
+    const law = await cy.run('law.set', { jurisdiction: 'us', regime: 'consumer', on: true });
+    assert.ok(law.changed.includes('Mended Things'), 'the law makes the pawn shop check badges');
+    assert.match(law.story, /unchanged/);
+    await ana.run('badge', { on: false });
+    assert.equal((await ana.run('buy', { shop: 'pawn', item: 'spoons' })).classification, 'UNLABELED');
+    await ana.run('badge', { on: true });
+    const ale = await ana.run('buy', { shop: 'tavern', item: 'ale' });
+    assert.equal(ale.decision, 'step_up');
+    assert.deepEqual(ale.ask.law, ['Consumer protection']);
+    await cy.run('law.set', { jurisdiction: 'us', regime: 'aml', on: true });
+    const rent = await ana.run('pay', { bill: 'rent' });
+    assert.equal(rent.ask?.what[0].kind, 'identity', 'anti-money-laundering: the name, over $100');
+    await cy.run('law.set', { jurisdiction: 'us', regime: 'privacy', on: true });
+    assert.notEqual((await ana.run('pay', { bill: 'rent' })).decision, 'step_up', 'privacy first caps what any place may ask');
+    const board = (await cy.get('/api/state')).law.scoreboard;
+    assert.equal(board.adopted, board.of, 'with consumer protection and AML, every place checks badges');
+    assert.ok(board.totals.unseen >= 2, 'the visits nobody checked are counted');
+
+    // A name shared with one place stays with that place.
+    await viv.join('police', 'Viv Moss');
+    await cy.run('law.set', { jurisdiction: 'us', regime: 'privacy', on: false });
+    const kyc = await ana.run('bank.open');
+    const opened = await ana.run('consent', { ask: kyc.ask.id, choice: 'once' });
+    assert.equal(opened.result.holder, 'Ana Park');
+    const seen = (await viv.get('/api/world?since=0')).events.find((e) => e.card?.txn === opened.txn);
+    assert.ok(seen, 'the visit is in the town ledger');
+    assert.ok(!JSON.stringify(seen).includes('Ana Park'), 'but not her name');
   } finally {
     await game.close();
   }

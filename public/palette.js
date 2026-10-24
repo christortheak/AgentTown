@@ -13,12 +13,13 @@ export const paletteOpen = () => Boolean(open);
 /**
  * Open the deck. Resolves with { action, params } or null.
  *   actions   the server's catalog
+ *   pin       { key, text }: the step the day's list suggests next, pinned at the top
  *   here      { id, name } of the place you're standing at, or null
  *   greeting  { face, who, text } from the keeper here, or null
  *   placeName id -> display name
  *   nearby    (options) -> options sorted by distance, for "whom?" questions
  */
-export function openPalette({ actions, here, greeting, placeName, nearby }) {
+export function openPalette({ actions, pin = null, here, greeting, placeName, nearby }) {
   if (open) open.close(null);
   const root = $('palette');
   root.hidden = false;
@@ -41,7 +42,7 @@ export function openPalette({ actions, here, greeting, placeName, nearby }) {
       <li class="row ${i === sel ? 'sel' : ''} ${r.danger ? 'danger' : ''} ${r.disabled ? 'disabled' : ''}" data-i="${i}">
         <span class="ico">${esc(r.icon ?? '•')}</span>
         <span class="lbl">${esc(r.label)}${r.hint ? `<small>${esc(r.hint)}</small>` : ''}</span>
-        ${r.chip ? `<span class="chip ${r.chipTone ?? ''}">${esc(r.chip)}</span>` : ''}
+        ${r.done ? '<span class="chip done">✓ done</span>' : r.chip ? `<span class="chip ${r.chipTone ?? ''}">${esc(r.chip)}</span>` : ''}
       </li>`;
 
     function render() {
@@ -50,6 +51,8 @@ export function openPalette({ actions, here, greeting, placeName, nearby }) {
         $('paletteTitle').textContent = here ? `At ${here.name}` : 'What would you like to do?';
         rows = [];
         const sections = [];
+        const pinned = pin && !query ? actions.find((a) => a.key === pin.key && !a.done) : null;
+        if (pinned) sections.push({ title: `Next step · ${pin.text}`, items: [pinned], pinned: true });
         const hereRows = here ? actions.filter((a) => a.place === here.id && matches(a)) : [];
         if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: hereRows });
         for (const g of GROUPS) {
@@ -58,7 +61,7 @@ export function openPalette({ actions, here, greeting, placeName, nearby }) {
         }
         let html = greeting && !query ? `<div class="greet"><span class="face">${esc(greeting.face)}</span><p><b>${esc(greeting.who)}</b> ${esc(greeting.text)}</p></div>` : '';
         for (const s of sections) {
-          html += `<h5>${esc(s.title)}</h5><ul>`;
+          html += `<h5 class="${s.pinned ? 'pinned' : ''}">${esc(s.title)}</h5><ul class="${s.pinned ? 'pinned' : ''}">`;
           for (const a of s.items) {
             const away = a.place && (!here || a.place !== here.id);
             const row = { ...a, chip: away ? `→ ${placeName(a.place)}` : a.place ? 'here' : null, chipTone: away ? '' : 'here', action: a };

@@ -2,7 +2,9 @@
 
 A cozy town where you play an accountable agent. It is a launch demo for the *Accountable Agents* framework, and it is a separate project from the framework's reference implementation, which it uses as a dependency.
 
-Many people can play at once, each in a role: an **agent** (you are its principal), a **shopkeeper**, a **homeowner**, the **police** or **the judge**. Simulated residents, a newcomer, sub-agents and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, with every check it ran, what it learned, and a verified receipt for its activity-log entry.
+Many people can play at once, each in a role: an **agent** (you are its principal), a **shopkeeper**, a **homeowner**, the **police**, **the judge** or the **town council**. Simulated residents, a newcomer, sub-agents, an honest agent nobody registered and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, told in plain words first (what happened, why, and what would fix it), with every check it ran, what it learned, and a verified receipt for its activity-log entry underneath.
+
+What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
 
 ## Run it
 
@@ -19,7 +21,7 @@ Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because p
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster); runs a town against an external federation reached by address; and runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name.
+Plays a whole day through the API (town time runs 25× faster), including disclosure requests answered once, always or not at all; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; and runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for.
 
 ## Roles
 
@@ -28,16 +30,27 @@ Open the town and pick a role. Each browser tab is its own player, so two tabs (
 | Role | What you do |
 |---|---|
 | 🤖 Agent | You are the principal; your agent walks the town. Get verified, register, sign a grant, shop, bank, trade, spawn sub-agents and send them on errands. Play it straight, or try to get away with something. |
-| 🏪 Shopkeeper | Run a shop, the bank, the exchange, the fair or the toll. Choose which registries you trust and what you ask for (badge, World ID, x402), watch every customer's ID check, report a customer to its registry (its principal hears about it, you still don't learn who), or file it with the police. |
+| 🏪 Shopkeeper | Run a shop, the bank, the exchange, the fair or the toll. Choose whether to use the framework at all (check badges, pilot it, ignore it, or block agents), which registries you trust and what you ask for (badge, proof of age, World ID, x402); see which of your questions come from you and which from the law; watch every customer's ID check, report a customer to its registry (its principal hears about it, you still don't learn who), or file it with the police. |
 | 🏡 Homeowner | Own a house in Hearthside. Put a passkey on your door; when an agent knocks, your phone shows who stands behind it and you decide. Change the locks when keys go astray. |
 | 👮 Police | Cases arrive from places: refused payments the bank flags, attempted break-ins, a pump spotted at the Exchange. Open cases from any ledger line, and petition the court. |
+| 🏛️ Town council | Make the law, separately for the town (US rules) and the Harbor (EU rules): anti-money-laundering, consumer protection, high-risk AI services, privacy first. Set how much of town uses the framework. Watch the scoreboard. |
 | ⚖️ Judge | Rule on petitions. *Identify*: the registry resolves every badge in the case and groups them by principal, so bystanders are told apart from whoever ran the scheme. *Delete*: the registry's operator revokes the principal's agents under legal order, and the revocation cascades. *Ban*: the identity verifier withdraws the principal's verification, which suspends every agent under it at once, and won't verify that identity again. |
 
 Nobody playing police or judge? A simulated inspector and judge take over: refused payments and complaints are only identified; a pump or break-ins lead to deletion, and a coordinated scheme or repeated misconduct to a ban.
 
 **Getting away with it.** A banned player can leave and join again. As the same person they can't be verified; under another name they can, in this town. Real identity checks, with documents and liveness, exist to stop exactly that.
 
-**Who sees what.** A badge never names its principal, so neither do the town's shared views: other players see your agent's name, never yours, and ledger lines that would link the two are visible only to you. A court order changes that, and its findings are public.
+**Who sees what.** A badge never names its principal, so neither do the town's shared views: other players see your agent's name, never yours, and ledger lines that would link the two are visible only to you. If you share your name with one place, that place sees it; everyone else's view of the same visit says only that a name was shared. A court order changes that, and its findings are public: a banner tells the whole town.
+
+## Asking and answering
+
+The core loop. A place's policy may ask for more than a badge: the bank wants your name to open an account, the apothecary wants proof you're over 18 for a sleeping draught, the Compute Forge wants your name and your agent's bill of materials for a large job. The place answers *not yet* and says exactly what it needs; the question goes to your **phone** (and onto the result card):
+
+- **Share once**: the registry adds just that to a fresh badge for that place, your agent shows it, and it's gone again afterwards.
+- **Always here**: standing consent for that place; take it back on your phone any time.
+- **Decline**: you aren't served, and the place learns nothing more.
+
+Your agent never shows more than the place's rule needs: "over 18", not a birth date or a name. Verification at Town Hall records that one fact; your agent's maker publishes its bill of materials when you register it.
 
 ## Playing
 
@@ -46,10 +59,11 @@ Nobody playing police or judge? A simulated inspector and judge take over: refus
 | **Q** | The **action deck**: every action in town, grouped and searchable, with what you can do right here at the top. Picking an action somewhere else walks you there first. Nothing is hidden. Some actions are refused, and the refusal comes from the service that refused. |
 | **E** | Talk to the place you're standing at (opens the deck there). |
 | **B** | Take your badge off or put it back on. |
+| **X** | The **X-ray**: watch each request travel. Your agent asks its registry for a badge made out to this place only, swaps its grant for a permission slip at the Records Office, sends a signed request; the place checks the badge's status with the registry and the grant with the Records Office, writes to the activity log and answers. The camera pulls back to fit it all in, and the steps are listed in words. Every result card has an X-ray button too. |
 | Click | Walk; click a building to go and talk to it; click anyone to ask for their badge; click the minimap to run there. |
-| 🎬 | The **director**: cues for demos and videos, and each place's policy. |
+| 🎬 | The **director**: cues for demos and videos, the law, adoption, each place's policy, and a presenter view. |
 
-The HUD shows your quests, a minimap, **your record** (what the registry holds about you), **your phone** (approvals and incident reports for you as principal) and the **town ledger** (everything everyone does; click a line to see its ID check).
+The HUD shows your quests, a minimap with the town's adoption score under it, **your record** (what the registry holds about you, your wallet, what your agent may do), **your phone** (questions from places, approvals and incident reports for you as principal) and the **town ledger** (everything everyone does, with the badge number each place saw; click a line to see its ID check). Each result card leads with a plain headline and a suggested fix, and has two folds: **Compare**, which shows what an API key, Web Bot Auth, World ID, x402 or a payment mandate would have told the same place, and the **technical record**.
 
 ## The town
 
@@ -58,7 +72,8 @@ The HUD shows your quests, a minimap, **your record** (what the registry holds a
 | Civic Row | Town Hall (Registry A), Records Office (Ledgerline, Tessera), Courthouse, Police Station, Thistle Exchange, Orb Kiosk | Verification once, fast registration, grants, receipts; police and courts; commodities trading with market surveillance; a simulated World ID |
 | Market Lane | Bramble Books, Copper Kettle, First Ledger Bank, Oakleaf Bakery | Selective disclosure, refusals over the limit or outside the categories, pairwise badge numbers; opening a bank account needs your name (know your customer); refused payments become SAR candidates |
 | The Works | Compute Forge, Wren Labs | Large jobs need a disclosed principal and a bill of materials |
-| Hearthside | Your house, Maple's, Hazel's, Ivy's | Passkeys: agent-bound access, the human path, step-up; stolen keys reported to the right principal |
+| Hearthside | Your house, Maple's, Hazel's, Ivy's, Willow Apothecary | Passkeys: agent-bound access, the human path, step-up; stolen keys reported to the right principal; proof of age without a name |
+| The Old Quarter | Mended Things (pawn), The Blue Door (tavern), Saffron Grocer | Partial adoption: a shop that checks nothing (and can report no one), a tavern that blocks agents (and turns away only the honest ones), a grocer piloting badges for bigger orders. Clank, an honest agent nobody registered, runs errands here |
 | Town Square | Fountain, Harvest Fair | A free pie, one per person: World ID (simulated) next to the framework |
 | The Harbor (EU) | Bridge Toll, Harbor Registry (Registry B), Café Lumière, Rook & Daughters | x402 (simulated) next to the framework; a café that only accepts EU badges; federated chains |
 | The Wilds | The Old Mill | Where the swarm comes from |
@@ -69,7 +84,26 @@ The HUD shows your quests, a minimap, **your record** (what the registry holds a
 - **Registry outage.** The shops can't reach Registry A for 45 seconds and **defer** instead of refusing (`LOOKUP_FAILED`), while agents from Registry B are still served.
 - **A newcomer arrives.** Ivy walks in from the east gate and goes through the slow step at Town Hall, the Orb and the Records Office, then moves in.
 - **Night at your house.** Four visitors with a copy of your key.
-- **Each place's policy**, live: which registries it accepts, whether it needs a badge, World ID, an x402 payment.
+- **The law**, per jurisdiction, and **adoption**: presets for "today", "early days" and "everyone", or one place at a time.
+- **Each place's policy**, live: which registries it accepts, whether it needs a badge, World ID, an x402 payment. A place run by a person playing is theirs to set.
+- **Presenter view**: hides the personal panels and enlarges the ledger, for a screen in a room.
+
+## The rulebook and partial adoption
+
+What a place asks for comes from three layers, kept apart (`src/places.js`, `src/rulebook.js`):
+
+1. **Adoption**: does the place use the framework at all? *Checks badges*, *pilot* (badges optional for orders up to $20), *not on the framework* (checks nothing, keeps nothing), or *blocks agents* (refuses anything that says it is an agent, so an agent that hides its badge walks in).
+2. **The keeper's policy**: which registries, whether a badge is needed, proof of age, World ID, x402.
+3. **The law** for the place's jurisdiction and sector. Each regime sets *floors* (ask for at least this), *caps* (never ask for more) and *mandates* (this sector must check badges, whatever it chose):
+
+| Regime | Sectors | Effect |
+|---|---|---|
+| Anti-money-laundering | finance | Payments and trades need an accountable agent with permission; over $100, the principal's name |
+| Consumer protection | shops, pharmacies, inns | Permission for every purchase; verified proof of age for age-restricted goods |
+| High-risk AI services | compute, finance | The principal's name and the agent's bill of materials for compute jobs and trades |
+| Privacy first | everywhere | No place may demand a name; regimes that would are capped |
+
+Switching a regime on rebuilds the affected places' rules in place and announces what changed: "Registries and record keepers unchanged; 4 places now ask for something different". The scoreboard counts, for every place, visits with a valid badge, without one, and unchecked; and for the swarm, how many of its visits were stopped, served but reportable, or served unseen. Set the starting law in the config: `"law": { "us": ["aml"], "eu": ["aml", "privacy"] }`.
 
 ### World ID and x402 are simulated
 
@@ -89,7 +123,8 @@ AGENTTOWN_CONFIG=./town.config.json npm start
 - `federation.urlOverrides`: where to reach a member if its published `endpoint_base` isn't reachable from the town's host.
 - `federation.authorityKeys`: a folder holding the keys of the identity verifier and court that this town operates. Without it, the town can't verify principals or resolve badges, and says so.
 - `federation.registryOperatorTokens`: `{ "<registry id>": "<token>" }`, so court orders to delete agents reach the registry's operator. (Locally, the town has these already.)
-- `places`: each place's starting policy, e.g. a bank that accepts only one registry.
+- `places`: each place's starting policy and adoption, e.g. a bank that accepts only one registry, or a pawn shop that checks badges after all (`"adoption": "full"`).
+- `law`: the regimes in force at the start, per jurisdiction.
 
 To host the framework's services on a LAN with aaf-reference as it is: set `"host"` in `aaf-reference/config/federation.json` to the machine's address, run `npm run reset` and `npm start` there, then copy `data.nosync/trust-anchor.json` (and, for verification and courts, the verifier's and court's key files from `data.nosync/keys/`) to the town's host. Those keys are private: share them only with the town that plays those roles.
 
@@ -101,7 +136,9 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 |---|---|
 | `src/federation.js` | Local or external federation |
 | `src/world.js` | The town's view of the federation: registries, record keepers, verifier, court |
-| `src/places.js` | Places as relying parties, their live policies, and the World ID and x402 layers |
+| `src/places.js` | Places as relying parties: adoption, live policies, disclosure requests, plain-language results, X-ray traces, the scoreboard, and the World ID and x402 layers |
+| `src/rulebook.js` | Jurisdictions, regimes, floors, caps and mandates |
+| `src/explain.js` | Headlines and reasons in plain words, and ledger lines |
 | `src/sim.js` | Residents, newcomers, sub-agents' errands, bots, the swarm; walks timed on the shared routes |
 | `src/player.js` | A player with an agent, and the full action catalog |
 | `src/sessions.js` | Joining, roles, what each role sees and can do, idle sessions let go |
@@ -110,6 +147,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/worldid.js`, `src/x402.js` | The simulations |
 | `public/map.js`, `public/route.js` | The town's layout and drawing; routes shared with the server |
 | `public/game.js`, `public/palette.js`, `public/roles.js`, `public/ui.js`, `public/api.js` | The game, the action deck, joining and the role panels, cards and HUD, server calls and WebAuthn |
+| `public/xray.js`, `public/lens.js` | The X-ray, and the comparison with other approaches |
 
 ## Limits of this prototype
 
@@ -117,3 +155,5 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 - **No accounts.** A session is a tab; anyone can take any free role. That is the point for a demo, but a public one should keep the director key private.
 - **The town ledger is a narrator's view**, for the demo: it shows what every place decided. Names of principals stay out of it unless a court finds them.
 - **World ID and x402 are simulated**, as above.
+- **The comparison is simplified.** "Compare" gives typical answers for each approach, not a full analysis, and several of them combine with the framework rather than compete with it.
+- **The laws are illustrative.** The regimes are loosely modeled on real ones to show how one infrastructure serves different rules; they are not legal advice or faithful implementations.

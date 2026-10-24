@@ -3,7 +3,8 @@
 // courts, the town ledger, and the director's cues for live demos and videos.
 import { loadConfig, connectFederation } from './federation.js';
 import { buildWorld } from './world.js';
-import { createPlaces, PLACE_DEFS } from './places.js';
+import { createPlaces, PLACE_DEFS, ADOPTION } from './places.js';
+import { REGIMES } from './rulebook.js';
 import { createSim } from './sim.js';
 import { createSessions } from './sessions.js';
 import { createJustice } from './justice.js';
@@ -29,7 +30,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   const worldid = createWorldId();
   const x402 = createX402();
   const places = await createPlaces({
-    world, origin, config: config.places, worldid, x402, emit,
+    world, origin, config: config.places, law: config.law, worldid, x402, emit,
     alert: (a) => justice.fileCase({ kind: a.kind, placeId: a.placeId, title: a.title, evidence: a.evidence, by: PLACE_DEFS[a.placeId]?.name ?? 'Hearth & Key' }),
   });
   const keys = {};
@@ -67,6 +68,25 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       emit({ kind: 'policy', place: res.place, placeId: place, tone: 'info', text: `${res.place} now asks for: ${res.policy}` });
       return { ok: true, text: `${res.place}: ${res.policy}` };
     },
+    /** The law for one jurisdiction: a regime on or off. */
+    law({ jurisdiction = 'us', regime, on = true }) {
+      if (!REGIMES[regime]) return { ok: false, text: `No regime ${regime}.` };
+      const res = places.setLaw(jurisdiction, regime, Boolean(on));
+      sessions.announce(null, `The council ${on ? 'switched on' : 'repealed'} ${REGIMES[regime].name} in ${res.jurisdiction}`, res.changed);
+      return { ok: true, text: `${REGIMES[regime].name} ${on ? 'in force' : 'repealed'}: ${res.changed.length} places changed`, changed: res.changed };
+    },
+    /** How much of town is on the framework: one place, or a preset for all. */
+    adoption({ place, mode, preset }) {
+      if (preset) {
+        const res = places.presetAdoption(preset);
+        sessions.announce(null, `The town is now "${res.preset}"`, res.changed);
+        return { ok: true, text: `${res.preset}: ${res.changed.length} places changed`, changed: res.changed };
+      }
+      if (places.places[place]?.human) return { ok: false, text: `${places.places[place].name} is run by a person playing; it's their call.` };
+      const res = places.setAdoption(place, mode);
+      emit({ kind: 'policy', place: res.place, placeId: place, tone: 'info', text: `${res.place}: ${ADOPTION[res.adoption].label}${res.mandated ? ' (required by law)' : ''}` });
+      return { ok: true, text: `${res.place}: ${ADOPTION[res.adoption].label}` };
+    },
   };
 
   function directorState() {
@@ -77,8 +97,13 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       registries: world.registries.map((r) => ({ id: r.id, name: r.name })),
       places: Object.keys(PLACE_DEFS).map((id) => {
         const pl = places.places[id];
-        return { id, name: pl.name, keeper: pl.human?.name ?? null, accepts: pl.policy.accepts, aaf: pl.policy.aaf, worldid: Boolean(pl.policy.worldid), x402: pl.policy.x402, summary: places.describePolicy(pl) };
+        return {
+          id, name: pl.name, keeper: pl.human?.name ?? null, accepts: pl.policy.accepts, aaf: pl.policy.aaf, worldid: Boolean(pl.policy.worldid), x402: pl.policy.x402,
+          adoption: pl.adoption, effective: places.adoptionOf(pl), jurisdiction: pl.jurisdiction, sector: pl.sector, summary: places.describePolicy(pl),
+        };
       }),
+      adoptions: Object.entries(ADOPTION).map(([id, a]) => ({ id, ...a })),
+      law: sessions.lawView(),
     };
   }
 
@@ -101,7 +126,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     world_(since = 0, s = null) {
       return {
         now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id),
-        events: ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(-80), director: directorState(), market: places.market(),
+        events: sessions.visibleEvents(s, ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(-80)), director: directorState(), market: places.market(),
       };
     },
     async direct(event, params = {}) {

@@ -4,13 +4,15 @@
 //   homeowner   owns a house in Hearthside: a passkey on the door, decides who comes in
 //   police      investigates cases and petitions the court
 //   judge       rules on petitions: identify, delete agents, ban principals
+//   council     makes the law: switches regimes on and off in each jurisdiction
 // A session that goes quiet for a few minutes is let go, with whatever it held.
 // Anyone can come back with a new session, under any name; a banned identity
 // just won't be verified again.
 import crypto from 'node:crypto';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 import { createPlayer } from './player.js';
-import { PLACE_DEFS, HOUSES } from './places.js';
+import { PLACE_DEFS, HOUSES, ADOPTION, ADOPTION_PRESETS } from './places.js';
+import { REGIMES } from './rulebook.js';
 
 const IDLE_MS = 4 * 60 * 1000;
 
@@ -20,6 +22,7 @@ export const ROLES = {
   homeowner: { icon: '🏡', label: 'A homeowner', blurb: 'Put a passkey on your door and decide, on your phone, which agents come in.' },
   police: { icon: '👮', label: 'Police', blurb: 'Investigate fraud and rogue agents from the cases places report, and take them to court.' },
   judge: { icon: '⚖️', label: 'The judge', blurb: 'Rule on petitions: order a registry to identify a principal, delete rogue agents, ban a principal.' },
+  council: { icon: '🏛️', label: 'Town council', blurb: 'Make the law for the town or the Harbor: anti-money-laundering, consumer protection, privacy. See what places must ask for change, while the registries stay exactly as they are.' },
 };
 
 const PERSON_LOOKS = {
@@ -27,6 +30,7 @@ const PERSON_LOOKS = {
   homeowner: { body: '#d7f0ff', bulb: null, badge: 'none', feet: '#5a6a7a' },
   police: { body: '#c9d6ff', bulb: '#4f7fbf', glow: true, badge: 'on', badgeColor: '#ffe08a', badgeMark: '#2c3e66', feet: '#2c3e66' },
   judge: { body: '#3b3346', bulb: null, badge: 'none', feet: '#22202a' },
+  council: { body: '#e9d8ff', bulb: null, badge: 'none', feet: '#5b4a7a' },
 };
 
 export function createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin }) {
@@ -113,8 +117,16 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   }
 
   const eventBySeq = (seq) => ledger.items.find((e) => e.seq === Number(seq));
+  /** A shopkeeper is the relying party, so sees its own customers' cards in full; everyone else sees what's public. */
+  const cardFor = (s, e) => (e.card && !(e.owner === s?.id) && !(s?.role === 'shopkeeper' && s.claim === e.placeId) ? places.publicCard(e.card) : e.card);
   const evidenceOf = (card) => ({ ppid: card.ppid, registry: card.registry, sealed_ref: card.sealed_ref, rp: places.places[card.placeId]?.rp.id, place: card.place });
-  const summarize = (e) => ({ seq: e.seq, at: e.at, text: e.text, tone: e.tone, decision: e.decision, classification: e.classification, card: e.card });
+  const summarize = (e, s) => ({ seq: e.seq, at: e.at, text: e.text, tone: e.tone, decision: e.decision, classification: e.classification, badge: e.badge ?? null, card: cardFor(s, e) });
+  const lawView = () => ({
+    ...places.law(),
+    regimes: Object.entries(REGIMES).map(([id, r]) => ({ id, name: r.name, blurb: r.blurb })),
+    scoreboard: places.scoreboard(),
+    presets: Object.entries(ADOPTION_PRESETS).map(([id, p]) => ({ id, ...p })),
+  });
 
   // ---- What each role sees ------------------------------------------------------
 
@@ -125,9 +137,15 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       const place = places.places[s.claim];
       return {
         me,
-        place: { id: s.claim, name: place.name, summary: places.describePolicy(place), policy: { accepts: place.policy.accepts, aaf: place.policy.aaf, worldid: Boolean(place.policy.worldid), x402: place.policy.x402 } },
+        place: {
+          id: s.claim, name: place.name, summary: places.describePolicy(place), lines: places.policyLines(place), asks: places.asks(place),
+          adoption: place.adoption, effective: places.adoptionOf(place), jurisdiction: place.jurisdiction, sector: place.sector, kind: place.kind,
+          policy: { accepts: place.policy.accepts, aaf: place.policy.aaf, age: Boolean(place.policy.age), worldid: Boolean(place.policy.worldid), x402: place.policy.x402 },
+        },
+        adoptions: Object.entries(ADOPTION).map(([id, a]) => ({ id, ...a })),
         registries: world.registries.map((r) => ({ id: r.id, name: r.name })),
-        customers: ledger.items.filter((e) => e.kind === 'check' && e.placeId === s.claim).slice(-25).reverse().map(summarize),
+        customers: ledger.items.filter((e) => e.kind === 'check' && e.placeId === s.claim).slice(-25).reverse().map((e) => summarize(e, s)),
+        stats: places.scoreboard().rows.find((r) => r.id === s.claim) ?? null,
         market: s.claim === 'exchange' ? places.market() : null,
       };
     }
@@ -135,12 +153,19 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       return {
         me,
         home: { passkey: (accounts.get(s.claim)?.passkeys.size ?? 0) > 0 },
-        door: ledger.items.filter((e) => e.kind === 'check' && e.card?.account === s.claim).slice(-25).reverse().map(summarize),
+        door: ledger.items.filter((e) => e.kind === 'check' && e.card?.account === s.claim).slice(-25).reverse().map((e) => summarize(e, s)),
         phone: { approvals: accounts.pendingFor(s.claim).map(({ id, purpose, details }) => ({ request_id: id, purpose, details })), incidents: [] },
       };
     }
+    if (s.role === 'council') return { me, law: lawView() };
     return { me, cases: justice.cases().slice().reverse(), petitions: justice.petitions().slice().reverse(), lawful: { police: ofRole('police').length, judge: ofRole('judge').length } };
   }
+
+  /** Tell the town what a change did: the rails stay the same, places' questions change. */
+  const announce = (s, what, changed, placeId) => emit({
+    kind: 'policy', tone: 'info', owner: s?.id ?? null, placeId: placeId ?? null,
+    text: `${what}. Registries and record keepers unchanged; ${changed.length ? `${changed.length} place${changed.length === 1 ? '' : 's'} now ask${changed.length === 1 ? 's' : ''} for something different: ${changed.join(', ')}` : 'no place asks for anything different'}`,
+  });
 
   // ---- What each role can do ------------------------------------------------------
 
@@ -150,6 +175,11 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         const res = places.setPolicy(s.claim, patch ?? {});
         emit({ kind: 'policy', place: res.place, placeId: s.claim, tone: 'info', owner: s.id, text: `${s.name} set ${res.place} to ask for: ${res.policy}` });
         return { type: 'toggle', policy: res.policy };
+      },
+      'shop.adoption': (s, { mode }) => {
+        const res = places.setAdoption(s.claim, mode);
+        emit({ kind: 'policy', place: res.place, placeId: s.claim, tone: 'info', owner: s.id, text: `${res.place} ${{ full: 'now checks badges', pilot: 'is piloting badges: optional for small orders', none: 'stopped checking badges', block: 'now turns away anything that says it is an agent' }[mode]}${res.mandated ? ' (but the law still makes it check badges)' : ''}` });
+        return { type: 'toggle', adoption: res.adoption, policy: res.policy };
       },
       'shop.report': async (s, { seq }) => {
         const e = eventBySeq(seq);
@@ -185,6 +215,19 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         return { type: 'service', place: 'Courthouse', title: 'Petition filed', decision: 'allow', story: `Petition ${p.id} is before the court${ofRole('judge').length ? '. A judge will rule.' : '; the simulated judge will rule shortly.'}` };
       },
     },
+    council: {
+      'law.set': (s, { jurisdiction, regime, on }) => {
+        if (!REGIMES[regime]) throw new HttpError(404, 'unknown_regime', `no regime ${regime}`);
+        const res = places.setLaw(jurisdiction, regime, Boolean(on));
+        announce(s, `${s.name} ${on ? 'switched on' : 'repealed'} ${REGIMES[regime].name} in ${res.jurisdiction}`, res.changed);
+        return { type: 'service', place: 'Town Council', keeper: { face: '🏛️', who: 'Town Council' }, title: on ? `${REGIMES[regime].name}: in force` : `${REGIMES[regime].name}: repealed`, decision: 'allow', story: `${REGIMES[regime].blurb}\n\n**Registries, record keepers and badges: unchanged.** ${res.changed.length ? `${res.changed.length} place${res.changed.length === 1 ? '' : 's'} now ask${res.changed.length === 1 ? 's' : ''} for something different: ${res.changed.join(', ')}.` : 'No place asks for anything different.'}`, changed: res.changed };
+      },
+      'adoption.preset': (s, { preset }) => {
+        const res = places.presetAdoption(preset);
+        announce(s, `${s.name} set the town to "${res.preset}"`, res.changed);
+        return { type: 'toggle', changed: res.changed };
+      },
+    },
     judge: {
       'petition.rule': async (s, { petition, grant }) => {
         const p = await justice.rule(petition, { grant: Boolean(grant), by: `Judge ${s.name}`, owner: s.id });
@@ -209,6 +252,9 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     },
   };
 
+  /** The ledger as one person may see it: names shared with a place stay with that place. */
+  const visibleEvents = (s, events) => events.map((e) => (e.card ? { ...e, card: cardFor(s, e) } : e));
+
   async function run(s, action, params = {}) {
     if (s.player) return s.player.run(action, params);
     const fn = ROLE_ACTIONS[s.role]?.[action] ?? COMMON[action];
@@ -222,7 +268,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   }
 
   return {
-    join, leave, get, state, run, actions, accountOf, lookup,
+    join, leave, get, state, run, actions, accountOf, lookup, visibleEvents, announce, lawView,
     roles: () => ({
       roles: Object.entries(ROLES).map(([id, r]) => ({ id, ...r, taken: id === 'judge' && ofRole('judge').length > 0 })),
       shops: Object.entries(PLACE_DEFS).map(([id, d]) => ({ id, name: d.name, taken: Boolean(holder(id)) })),

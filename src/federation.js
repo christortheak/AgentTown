@@ -22,7 +22,7 @@ import { startFederationInProcess } from 'aaf-reference/src/lib/federation.js';
 import { discoverWithRetry } from 'aaf-reference/src/lib/trust.js';
 
 export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
-  if (!file) return { federation: null, places: {} };
+  if (!file) return { federation: null, places: {}, law: null };
   const dir = path.dirname(path.resolve(file));
   const config = JSON.parse(fs.readFileSync(file, 'utf8'));
   const resolve = (p) => (typeof p === 'string' ? path.resolve(dir, p) : p);
@@ -34,6 +34,7 @@ export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
       authorityKeys: fed.authorityKeys ? resolve(fed.authorityKeys) : null,
     },
     places: config.places ?? {},
+    law: config.law ?? null,
   };
 }
 

@@ -1,5 +1,6 @@
 // Joining the town, and the panel each role works from: a shopkeeper's counter,
-// a homeowner's door, the police case board, the judge's docket.
+// a homeowner's door, the police case board, the judge's docket, the council's
+// rulebook.
 import * as api from './api.js';
 import { esc, DECISIONS, CLASSIFICATIONS, showCard } from './ui.js';
 
@@ -59,8 +60,42 @@ export async function showJoin() {
 const row = (e) => {
   const d = DECISIONS[e.decision] ?? { label: e.decision ?? '', tone: e.tone ?? 'info' };
   const c = e.card;
-  return `<li class="${d.tone}" data-seq="${e.seq}"><i></i><span><b>${esc(c?.actor ?? '')}</b> · ${esc(d.label)}${e.classification ? ` · ${esc(CLASSIFICATIONS[e.classification] ?? e.classification)}` : ''}</span></li>`;
+  const what = c?.headline ?? d.label;
+  const seen = c?.legacy ? 'not checked' : e.classification ? CLASSIFICATIONS[e.classification] ?? e.classification : '';
+  return `<li class="${d.tone}" data-seq="${e.seq}"><i></i><span><b>${esc(c?.actor ?? '')}</b> · ${esc(what)}${seen ? ` <small class="muted">· ${esc(seen)}</small>` : ''}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}</span></li>`;
 };
+
+const ADOPTION_WORDS = { full: 'checks badges', pilot: 'pilot', none: 'not on the framework', block: 'blocks agents' };
+const FROM = { keeper: 'your choice', law: 'the law', adoption: 'adoption', rails: 'other rails' };
+const pct = (n, d) => (d ? Math.round((100 * n) / d) : 0);
+
+/** How much of town is on the framework, and what that meant for the visits so far. */
+export function scoreboardHtml(board, { table = true } = {}) {
+  const t = board.totals;
+  const checked = t.visits - t.unseen;
+  const rogue = t.rogueServed + t.rogueUnseen + t.rogueStopped;
+  return `
+    <div class="score">
+      <div><b>${board.adopted}</b> of ${board.of}<small>places check badges</small></div>
+      <div><b>${pct(t.accountable, checked)}%</b><small>of checked visits showed a valid badge</small></div>
+      <div><b>${t.unseen}</b><small>visits nobody checked</small></div>
+      ${rogue ? `<div><b>${t.rogueStopped}</b>/${rogue}<small>rogue visits stopped; ${t.rogueServed} more reportable, ${t.rogueUnseen} unseen</small></div>` : ''}
+    </div>
+    ${table ? `<table class="policies score-table"><thead><tr><th>Place</th><th>Uses the framework?</th><th title="visits">Visits</th><th title="showed a valid badge">Badge</th><th title="showed no badge">None</th><th title="nobody checked">Unchecked</th></tr></thead>
+      <tbody>${board.rows.map((r) => `<tr><td>${esc(r.name)} <small class="muted">${esc(r.jurisdiction === 'eu' ? 'EU' : 'US')}</small></td><td>${esc(ADOPTION_WORDS[r.adoption])}${r.mandated ? ' <small class="muted">(by law)</small>' : ''}</td><td>${r.visits ?? 0}</td><td>${r.accountable ?? 0}</td><td>${r.unbadged ?? 0}</td><td>${r.unseen ?? 0}</td></tr>`).join('')}</tbody></table>` : ''}`;
+}
+
+/** Each jurisdiction's regimes, as switches; `compact` puts each jurisdiction on one line. */
+export function lawHtml(law, { compact = false } = {}) {
+  if (compact) {
+    return law.jurisdictions.map((j) => `<div class="law-row"><b>${esc(j.name[0].toUpperCase() + j.name.slice(1))}</b>${law.regimes.map((r) => `<label class="chip-toggle" title="${esc(r.blurb)}"><input type="checkbox" data-law="${esc(j.id)}:${esc(r.id)}" ${j.regimes.includes(r.id) ? 'checked' : ''}>${esc(r.name)}</label>`).join('')}</div>`).join('');
+  }
+  return law.jurisdictions.map((j) => `
+    <h5>${esc(j.name[0].toUpperCase() + j.name.slice(1))}</h5>
+    <div class="regimes">${law.regimes.map((r) => `<label class="regime"><input type="checkbox" data-law="${esc(j.id)}:${esc(r.id)}" ${j.regimes.includes(r.id) ? 'checked' : ''}><span><b>${esc(r.name)}</b><small>${esc(r.blurb)}</small></span></label>`).join('')}</div>`).join('');
+}
+
+export const presetsHtml = (law) => `<div class="btns">${law.presets.map((p) => `<button data-preset="${esc(p.id)}" title="${esc(p.blurb)}">${esc(p.label)}</button>`).join('')}</div>`;
 
 /** The panel for someone who isn't playing an agent. */
 export function renderRolePanel(S) {
@@ -69,16 +104,23 @@ export function renderRolePanel(S) {
   if (me.role === 'shopkeeper') {
     const p = S.place;
     const regs = `<option value="*" ${!p.policy.accepts ? 'selected' : ''}>Any registry</option>${S.registries.map((r) => `<option value="${esc(r.id)}" ${p.policy.accepts?.length === 1 && p.policy.accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`).join('')}`;
+    const checking = p.effective === 'full' || p.effective === 'pilot';
+    const st = S.stats ?? {};
     html = `
-      <header><div><h1>🏪 ${esc(p.name)}</h1><p>${esc(me.name)}, you run this place</p></div></header>
-      <p class="small">Asks for: <b>${esc(p.summary)}</b></p>
-      <div class="policy-row">
+      <header><div><h1>🏪 ${esc(p.name)}</h1><p>${esc(me.name)}, you run this place · ${esc(p.jurisdiction === 'eu' ? 'Harbor (EU rules)' : 'the town (US rules)')}</p></div></header>
+      <label class="adopt">Use the framework? <select data-k="adoption">${S.adoptions.map((a) => `<option value="${esc(a.id)}" ${a.id === p.adoption ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>
+      <p class="muted small">${esc(S.adoptions.find((a) => a.id === p.effective)?.blurb ?? '')}${p.effective !== p.adoption ? ' <b>The law requires this here, whatever you choose.</b>' : ''}</p>
+      ${checking ? `<div class="policy-row">
         <label>Registries <select data-k="accepts">${regs}</select></label>
         <label><input type="checkbox" data-k="aaf" ${p.policy.aaf === 'required' ? 'checked' : ''}> Badge</label>
+        ${p.kind === 'shop' ? `<label><input type="checkbox" data-k="age" ${p.policy.age ? 'checked' : ''}> Proof of age (18+)</label>` : ''}
         <label><input type="checkbox" data-k="worldid" ${p.policy.worldid ? 'checked' : ''}> World ID</label>
         <label><input type="checkbox" data-k="x402" ${p.policy.x402 ? 'checked' : ''}> x402</label>
-      </div>
+      </div>` : ''}
+      <h5>What you ask for, and why</h5>
+      <ul class="lines">${p.lines.map((l) => `<li><span class="tag ${esc(l.from)}">${esc(FROM[l.from] ?? l.from)}</span>${esc(l.text)}</li>`).join('')}</ul>
       ${S.market ? `<div class="ticker">${S.market.map((m) => `<span><b>${esc(m.id)}</b> $${esc(m.price)} <em class="${m.change >= 0 ? 'up' : 'down'}">${m.change >= 0 ? '▲' : '▼'}${Math.abs(m.change)}%</em></span>`).join('')}</div>` : ''}
+      <p class="small muted">${st.visits ?? 0} visits · ${st.accountable ?? 0} with a valid badge · ${st.unbadged ?? 0} with none · ${st.unseen ?? 0} unchecked</p>
       <h5>Customers <span class="muted">(click one)</span></h5>
       <ol class="rows">${S.customers.map(row).join('') || '<li class="muted">Nobody yet.</li>'}</ol>`;
   } else if (me.role === 'homeowner') {
@@ -93,6 +135,14 @@ export function renderRolePanel(S) {
       <header><div><h1>👮 Case board</h1><p>Officer ${esc(me.name)}</p></div></header>
       <p class="muted small">Places send in cases. Click any line in the town ledger to open one yourself. Only a court order makes a registry say who stands behind a badge.</p>
       <ol class="rows">${S.cases.map((c) => `<li class="${c.findings ? 'ok' : 'warn'}" data-case="${c.id}"><i></i><span><b>${esc(c.id)}</b> ${esc(c.title)} · ${esc(c.status)} · ${c.evidence.length} badge${c.evidence.length === 1 ? '' : 's'}${c.findings ? ` · ${esc(c.findings.principal.identity.legal_name)}` : ''}</span></li>`).join('') || '<li class="muted">No cases yet. Quiet town.</li>'}</ol>`;
+  } else if (me.role === 'council') {
+    html = `
+      <header><div><h1>🏛️ Town council</h1><p>Councillor ${esc(me.name)}</p></div></header>
+      <p class="small">Make the law. <b>Registries, record keepers and badges stay exactly the same</b>: only what places must ask for changes.</p>
+      ${lawHtml(S.law)}
+      <h5>How much of town uses the framework</h5>
+      ${presetsHtml(S.law)}
+      ${scoreboardHtml(S.law.scoreboard)}`;
   } else if (me.role === 'judge') {
     const pending = S.petitions.filter((p) => p.status === 'pending');
     const done = S.petitions.filter((p) => p.status !== 'pending');
