@@ -8,6 +8,7 @@
 // The record, spending allowances, statements, passkey consent and the way an
 // agent answers a place's question are a PROPOSED EXTENSION prototyped in
 // AgentTown (src/proposed/, docs/PROPOSED.md), not part of aaf-reference.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { money } from 'aaf-reference/src/sim/world.js';
 import { describePermission, toRar } from 'aaf-reference/src/lib/scope.js';
 import { digestOf, generateSigningKey, nowSeconds, publicOf } from 'aaf-reference/src/lib/crypto.js';
@@ -26,6 +27,36 @@ const HELPER_LIFETIME_SECONDS = 240;
 const OPENING_BALANCE = 400;
 const TARGETS = ['bramble', 'kettle', 'bakery', 'apothecary', 'grocer', 'cafe', 'bank', 'exchange', 'forge', 'fair', 'toll'];
 export const SHOP_ICONS = { bramble: '📚', kettle: '🫖', bakery: '🥐', apothecary: '🌿', cafe: '☕', pawn: '🕰️', tavern: '🍺', grocer: '🧺' };
+/**
+ * What an outside agent, paired with a player, may do on its own. Everything
+ * that is the principal's to decide (verifying, registering, the record, the
+ * grant, revoking, consent that needs a passkey) stays in the browser: the
+ * agent can ask, never approve.
+ */
+export const AGENT_MAY = new Set([
+  'buy', 'pay', 'trade', 'compute', 'fair.claim', 'toll.pay', 'bank.open', 'id.ask',
+  'helper.spawn', 'helper.fund', 'helper.errand', 'helper.deeper', 'helper.revoke',
+  'home.enter', 'home.key', 'home.discard', 'neighbor.knock', 'maple.knock', 'maple.key',
+  'badge', 'incognito', 'pose', 'consent', 'consent.finish', 'police.complain', 'receipts',
+  'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim',
+]);
+
+/** Where an action happens, so whoever does it can walk there first. */
+const PLACE_OF = {
+  pay: 'bank', 'bank.open': 'bank', trade: 'exchange', compute: 'forge', 'fair.claim': 'fair', 'toll.pay': 'toll',
+  'home.enter': 'home', 'home.key': 'home', 'home.discard': 'home', 'maple.knock': 'maple', 'maple.key': 'maple',
+  verify: 'townhall', register: 'townhall', grant: 'records', 'grant.revoke': 'records', 'record.set': 'records', 'helper.fund': 'records',
+  'worldid.enroll': 'orb', court: 'court', 'police.complain': 'police',
+};
+export function placeOfAction(id, params = {}) {
+  if (id === 'buy') return params.shop;
+  if (id === 'signup') return params.place;
+  if (id === 'helper.spawn') return params.registry === 'harbor' ? 'harbor' : 'townhall';
+  if (id === 'neighbor.knock') return ['maple', 'hazel', 'ivy'].includes(params.home) ? params.home : 'home';
+  if (id.startsWith('mischief.')) return params.at;
+  return PLACE_OF[id] ?? null;
+}
+
 const RULE_OF = { identity: 'name', attribute: 'age_over_18', provenance: 'bill_of_materials', statement: 'facts', worldid: 'world_id' };
 const SPEND_WORDS = { per_purchase: 'over your limit per purchase', per_day: 'over your daily budget', count: 'one purchase too many today', category: 'not a kind of purchase your record covers' };
 
@@ -71,7 +102,9 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     if (!h || h.owner !== pid) throw new HttpError(404, 'no_helper', 'You have no sub-agent by that name.');
     return h;
   };
-  const asAgent = () => Boolean(p.agent && !p.revoked && p.acting === 'agent');
+  // Who is acting on this call: an outside agent paired with this player always acts as the agent.
+  const acting = new AsyncLocalStorage();
+  const asAgent = () => Boolean(p.agent && !p.revoked && (acting.getStore()?.as ?? p.acting) === 'agent');
 
   // ---- The record (proposed) -----------------------------------------------------------
   // The principal's record at the Records Office says what places may learn and
@@ -934,6 +967,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'verify', group: 'You', icon: '🪪', label: 'Get verified (KYC)', hint: 'Once. Only the registry keeps your name.', place: 'townhall' },
       { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
       { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
+      { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent over MCP or a CLI; you still approve' : 'Register an agent first', client: 'pair' },
+      { id: 'unpair', group: 'You', icon: '🔌', label: 'Disconnect your outside agent', hint: 'Its token stops working at once', client: 'unpair' },
       { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: p.accounts[id] ? 'you have an account' : '' })) }] },
       { id: 'court', group: 'You', icon: '⚖️', label: 'Ask the court who is behind a badge', hint: 'Resolution under legal process', place: 'court', params: [{ key: 'case', label: 'Which case?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
       { id: 'police.complain', group: 'You', icon: '👮', label: 'Report someone to the police', hint: 'A badge you checked, or a visitor', place: 'police', params: [{ key: 'case', label: 'About whom?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
@@ -986,10 +1021,18 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     ].map((a) => ({ ...a, key: a.key ?? a.id, done: DONE[a.key ?? a.id]?.() ?? false }));
   }
 
-  async function run(id, params = {}) {
+  /**
+   * Run one action. `as: 'agent'` is a paired outside agent: it acts as the
+   * agent whatever the browser's toggle says, and only within AGENT_MAY.
+   */
+  async function run(id, params = {}, { as } = {}) {
     const fn = ACTIONS[id];
     if (!fn) throw new HttpError(404, 'unknown_action', `no action ${id}`);
-    const out = await fn(params);
+    if (as === 'agent') {
+      if (!AGENT_MAY.has(id)) throw new HttpError(403, 'principal_only', `Only your principal can do "${id}", in the browser. Ask them.`);
+      if (!p.agent || p.revoked) throw new HttpError(409, 'no_agent', 'Your principal has no active agent for you to drive.');
+    }
+    const out = await (as ? acting.run({ as }, () => fn(params)) : fn(params));
     // A place asked, and the record says to ask you: the question goes to your phone.
     if (out?.ask && out.decision === 'step_up' && out.agentAnswer?.overall === 'ask') {
       p.asks = p.asks.filter((a) => !(a.placeId === out.ask.placeId && a.retry.action === id));
@@ -1071,6 +1114,16 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
   return {
     catalog, run, enroll, state, reset, account,
+    /** The actions an outside agent may take, for its tool list. */
+    agentCatalog: () => acting.run({ as: 'agent' }, () => catalog().filter((a) => AGENT_MAY.has(a.id))),
+    /** What an outside agent needs to know to play: who it is, its record, what waits on its principal. */
+    briefing: () => ({
+      agent: p.agent && !p.revoked ? { name: p.agent.name, software: SOFTWARE[p.software]?.name, badge: p.badge } : null,
+      record: record(), register: p.principal ? K.register(p.principal.id) : null, grant: p.grant?.plain ?? null,
+      wallet: x402.balance(p.wallet),
+      asks: p.asks.map(({ id, place, placeId, want, tier, law }) => ({ id, place, placeId, want: want.map((w) => w.label), tier, law })),
+      approvals: approvals(), phonePasskey: phoneReady(),
+    }),
     /** How this player presents when someone asks to see a badge: their agent, or the person. */
     presentAs: () => (asAgent() ? byAgent() : byPerson()),
     /** The agent following them, asked directly. */

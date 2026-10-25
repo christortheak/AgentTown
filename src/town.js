@@ -39,7 +39,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   const keys = {};
   places.resetHomes(keys);
   const sim = createSim({ world, places, emit, worldid, x402, origin, keys, timeScale });
-  sessions = createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin });
+  sessions = createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin, timeScale });
   if (residents) await sim.start();
   emit({ kind: 'director', tone: 'info', text: `AgentTown is open. Federation: ${fed.kind} (${world.registries.map((r) => r.name).join(', ')})` });
 
@@ -117,7 +117,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   ];
 
   return {
-    world, places, sim, sessions, justice, ledger, keys,
+    world, places, sim, sessions, justice, ledger, keys, npcOptions,
     info: () => ({
       federation: fed.kind, trust_anchor: fed.trustAnchorUrl,
       registries: world.registries.map((r) => ({ id: r.id, name: r.name, url: r.url })),
@@ -129,7 +129,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     },
     world_(since = 0, s = null) {
       return {
-        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id && x.owner !== s?.id),
+        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id && x.owner !== s?.id), me: sessions.me(s),
         events: sessions.visibleEvents(s, ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(since ? 0 : -80, since ? 200 : undefined)), director: directorState(), market: places.market(),
       };
     },

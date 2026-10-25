@@ -14,5 +14,9 @@
   "dependencies": {
     "aaf-reference": "file:../aaf-reference"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "bin": {
+    "agenttown": "bin/agenttown.js",
+    "agenttown-mcp": "bin/agenttown-mcp.js"
+  }
 }

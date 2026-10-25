@@ -21,7 +21,7 @@ Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because p
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; and plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer.
+Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; and pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself.
 
 ## Roles
 
@@ -41,6 +41,25 @@ Nobody playing police or judge? A simulated inspector and judge take over: refus
 **Getting away with it.** A banned player can leave and join again. As the same person they can't be verified; under another name they can, in this town. Real identity checks, with documents and liveness, exist to stop exactly that.
 
 **Who sees what.** A badge never names its principal, so neither do the town's shared views: other players see your agent's name, never yours, and ledger lines that would link the two are visible only to you. If you share your name with one place, that place sees it; everyone else's view of the same visit says only that a name was shared. A court order changes that, and its findings are public: a banner tells the whole town.
+
+## Bring your own agent
+
+Your own AI agent (Claude, ChatGPT, anything that speaks MCP or can run a command) can play as your agent in town, while you stay its principal in the browser. Register an agent, then choose **Actions → Connect your own agent** to get a pairing code, and give it to your agent:
+
+| Client | How |
+|---|---|
+| Claude Code | `claude mcp add --transport http agenttown "http://localhost:4400/mcp?code=ABC-123"` |
+| Any MCP client over HTTP (e.g. the OpenAI Agents SDK) | `http://localhost:4400/mcp?code=ABC-123` |
+| Claude Desktop and other stdio clients | `node bin/agenttown-mcp.js --url http://localhost:4400 --code ABC-123` |
+| A shell | `node bin/agenttown.js pair ABC-123 --url http://localhost:4400`, then `look`, `actions`, `do buy shop=bramble item=guide` |
+| Anything that reads | "Read http://localhost:4400/agents.md and play AgentTown as my agent. The code is ABC-123." |
+
+Your agent gets tools to look, list what it may do, act (it walks there first, and everyone sees it go), say something, walk, and put a question to you. It gets **no way to approve anything**:
+- What your record says to ask about goes to your phone, and you approve with your passkey.
+- The approval endpoints only take a person's own session; an agent's token isn't one.
+- Verifying, registering, your record and your grant stay yours.
+
+The town serves its guide for agents at `/agents.md`, with an index at `/llms.txt`. A code works for two hours, and reconnecting with it gets the same agent back. **Disconnect your outside agent** ends it at once. A player who joins through the API with `"headless": true` and no browser is walked about by the server, so others still see them move.
 
 ## People and agents
 
@@ -161,6 +180,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/world.js` | The town's view of the federation: registries, record keepers, verifier, court |
 | `src/places.js` | Places as relying parties: adoption, live policies, disclosure requests, plain-language results, X-ray traces, the scoreboard, and the World ID and x402 layers |
 | `src/rulebook.js` | Jurisdictions, regimes, floors, caps and mandates |
+| `src/mcp.js`, `src/guide.js`, `bin/agenttown-mcp.js`, `bin/agenttown.js` | Outside agents: the MCP endpoint and its tools, /agents.md and /llms.txt, the stdio bridge, the CLI |
 | `src/proposed/keeper.js`, `src/proposed/driver.js` | Proposed: the principal's record, allowances, statements and the phone's passkey; the agent software that answers a place's question |
 | `src/explain.js` | Headlines and reasons in plain words, and ledger lines |
 | `src/sim.js` | Residents, newcomers, sub-agents' errands, bots, the swarm; walks timed on the shared routes |

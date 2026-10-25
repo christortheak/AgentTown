@@ -11,6 +11,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp, closeServer, html, typed, HttpError } from 'aaf-reference/src/lib/http.js';
 import { createTown } from './town.js';
+import { createMcp } from './mcp.js';
+import { agentsMd, llmsTxt } from './guide.js';
 
 export const PORT = Number(process.env.PORT ?? 4400);
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
@@ -25,6 +27,7 @@ export async function startServer({
   const { sessions } = town;
   const app = createApp('agenttown');
   const me = (headers) => sessions.get(headers['x-session']);
+  const mcp = createMcp({ sessions, town });
   // An approval belongs to one of the session's own services: its phone, its door, or a place it signs in to.
   const mine = (s, rid) => sessions.approvalFor(s, rid);
 
@@ -59,8 +62,28 @@ export async function startServer({
     return sv.accounts.registerPasskey(sv.account, body?.credential);
   });
   app.post('/api/approvals/:rid/options', ({ params, headers }) => mine(me(headers), params.rid).approvalOptions(params.rid));
-  app.post('/api/approvals/:rid/approve', ({ params, body, headers }) => mine(me(headers), params.rid).approve(params.rid, body?.credential));
-  app.post('/api/approvals/:rid/decline', ({ params, headers }) => mine(me(headers), params.rid).decline(params.rid));
+  // Only a person's own session reaches these: a paired agent's token is not a session.
+  app.post('/api/approvals/:rid/approve', ({ params, body, headers }) => {
+    const r = mine(me(headers), params.rid).approve(params.rid, body?.credential);
+    sessions.noteApproval(params.rid, 'approved');
+    return r;
+  });
+  app.post('/api/approvals/:rid/decline', ({ params, headers }) => {
+    const r = mine(me(headers), params.rid).decline(params.rid);
+    sessions.noteApproval(params.rid, 'declined');
+    return r;
+  });
+
+  // An outside agent: the resident makes a pairing code; the agent plays over MCP.
+  app.post('/api/pair', ({ headers }) => {
+    const { code, expires } = sessions.pairCode(me(headers));
+    return { code, expires, mcp: `${townOrigin}/mcp?code=${code}`, guide: `${townOrigin}/agents.md` };
+  });
+  app.post('/api/pair/end', ({ headers }) => ({ ended: sessions.unpair(me(headers)) }));
+  app.post('/mcp', ({ body, headers, query }) => mcp.handle({ body, headers, query }));
+  app.get('/mcp', () => ({ __raw: true, status: 405, body: { error: 'method_not_allowed', message: 'This server sends no event stream; POST JSON-RPC to /mcp.' } }));
+  app.get('/agents.md', () => typed(agentsMd(townOrigin), 'text/markdown; charset=utf-8'));
+  app.get('/llms.txt', () => typed(llmsTxt(townOrigin), 'text/plain; charset=utf-8'));
 
   const page = (file) => fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
   app.get('/', () => html(page('index.html')));

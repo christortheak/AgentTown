@@ -266,6 +266,7 @@ export function renderHud(s, counts) {
     rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small></div></div>`);
   }
   if (s.agent) rec.push(`<div class="row"><span>${s.acting === 'agent' ? '🤖' : '🧍'}</span><div><b>${s.acting === 'agent' ? `${esc(s.agent.name)} goes for you` : 'You go yourself'}</b><br><small>Press T to switch</small></div></div>`);
+  if (s.paired) rec.push(`<div class="row"><span>🔌</span><div><b>${esc(s.agent?.name ?? 'Your agent')} is driven by ${esc(s.paired.client)}</b><br><small>An outside agent, over MCP or the CLI. It asks you; it can't approve.</small></div></div>`);
   if (s.record) {
     const sp = s.record.spending;
     const today = s.register?.today;

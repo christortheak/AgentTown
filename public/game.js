@@ -108,10 +108,31 @@ function agentLook() {
   return { body: '#e8f0ff', bulb: S?.badge ? '#5fd38a' : '#f2c14e', glow: S?.badge, badge: S?.badge ? 'on' : 'none', scale: 0.85 };
 }
 const companion = { x: 0, y: 0, facing: { x: 0, y: 1 }, walking: false, phase: 1, seed: 3, look: {}, label: '', active: false };
+let companionRoute = null;
 function updateCompanion(dt) {
   companion.active = Boolean(S?.agent && S.agent.status !== 'revoked');
   if (!companion.active) return;
-  const target = trail[Math.max(0, trail.length - 8)] ?? { x: player.x - 16, y: player.y + 6 };
+  const driven = W.me?.companion;
+  if (driven?.bubble && companion.bubbleShown !== driven.bubble.at) {
+    companion.bubbleShown = driven.bubble.at;
+    bubble(companion, driven.bubble.decision);
+  }
+  if (driven?.say && companion.sayShown !== driven.say.at) {
+    companion.sayShown = driven.say.at;
+    say_(companion, driven.say.text);
+  }
+  let target = trail[Math.max(0, trail.length - 8)] ?? { x: player.x - 16, y: player.y + 6 };
+  if (driven?.free) {
+    // An outside agent walks it: follow the server's route, as for everyone else in town.
+    if (driven.move) {
+      if (!companionRoute || companionRoute.key !== driven.move.start) {
+        const pts = route(town, driven.move.from, driven.move.to);
+        companionRoute = { key: driven.move.start, pts, len: routeLength(pts) };
+      }
+      const f = Math.min(1, Math.max(0, (serverNow() - driven.move.start) / Math.max(1, driven.move.end - driven.move.start)));
+      target = pointAlong(companionRoute.pts, f * companionRoute.len);
+    } else target = driven.pos;
+  }
   const d = Math.hypot(target.x - companion.x, target.y - companion.y);
   if (d > 400) Object.assign(companion, { x: target.x, y: target.y });
   else if (d > 2) {
@@ -123,7 +144,7 @@ function updateCompanion(dt) {
     companion.phase += dt * 12;
   } else companion.walking = false;
   companion.look = agentLook();
-  companion.label = S.acting === 'agent' ? `${S.agent.name}${S.badge ? '' : ' (no badge)'} ▸` : S.agent.name;
+  companion.label = W.me?.companion ? `${S.agent.name} · ${W.me.companion.client}` : S.acting === 'agent' ? `${S.agent.name}${S.badge ? '' : ' (no badge)'} ▸` : S.agent.name;
 }
 
 const solidAt = (x, y) => {
@@ -176,6 +197,8 @@ const bubble = (who, decision) => {
   const d = DECISIONS[decision] ?? { icon: '•', label: decision, tone: 'info' };
   bubbles.push({ who, text: `${d.icon} ${d.label}`, tone: d.tone, t0: t });
 };
+/** Something an agent said out loud: it stays up longer than a decision. */
+const say_ = (who, text) => bubbles.push({ who, text: `💬 ${text.length > 60 ? `${text.slice(0, 58)}…` : text}`, tone: 'info', t0: t, life: 6 });
 
 function npcLook(n) {
   const gone = n.status === 'revoked' || n.status === 'expired';
@@ -186,7 +209,8 @@ const ROLE_TAGS = { agent: '', companion: '', shopkeeper: 'shopkeeper', homeowne
 /** Other people playing, drawn like everyone else; a resident's agent follows them. */
 const personAsNpc = (p) => ({
   id: p.id, name: ROLE_TAGS[p.role] ? `${p.name} · ${ROLE_TAGS[p.role]}` : p.name, kind: p.role === 'companion' ? 'companion' : 'person', role: p.role,
-  look: p.look, pos: p.pos, move: null, follow: Boolean(p.follow), status: p.look?.revoked ? 'revoked' : 'active', owner: p.owner ?? null,
+  look: p.look, pos: p.pos, move: p.move ?? null, follow: Boolean(p.follow), status: p.look?.revoked ? 'revoked' : 'active', owner: p.owner ?? null,
+  bubble: p.bubble ?? null, say: p.say ?? null,
 });
 
 function updateSprites(dt) {
@@ -248,6 +272,10 @@ function updateSprites(dt) {
     if (n.bubble && s.bubbleShown !== n.bubble.at) {
       s.bubbleShown = n.bubble.at;
       bubble(s, n.bubble.decision);
+    }
+    if (n.say && s.sayShown !== n.say.at) {
+      s.sayShown = n.say.at;
+      say_(s, n.say.text);
     }
   }
   for (const id of sprites.keys()) if (!seen.has(id)) sprites.delete(id);
@@ -406,6 +434,11 @@ async function run(action, params) {
     if (action.id.startsWith('mischief.') && params.at && !(await walkToPlace(params.at))) return;
     if (action.client === 'passkey') return await setUpPasskey();
     if (action.client === 'phone.passkey') return await addPasskey('phone');
+    if (action.client === 'pair') return await connectAgent();
+    if (action.client === 'unpair') {
+      const r = await api.post('/api/pair/end');
+      return toast(r.ended ? 'Your outside agent is disconnected: its token no longer works' : 'No outside agent was connected', 'info');
+    }
     if (action.client === 'record') return await editRecord();
     if (action.client === 'register') {
       await refresh();
@@ -495,6 +528,30 @@ async function clientFix(fix) {
     await run({ id: 'record', label: 'Your record', place: 'records', client: 'record' }, {});
   }
 }
+
+/** A pairing code, and how to give it to your own agent. */
+async function connectAgent() {
+  await refresh();
+  if (!S.agent || S.agent.status === 'revoked') return toast('Register an agent at Town Hall first: your outside agent will drive it.', 'warn');
+  const r = await api.post('/api/pair');
+  const url = r.mcp;
+  const block = (label, text) => `<div class="pair-block"><b>${esc(label)}</b><pre><code>${esc(text)}</code></pre><button class="quiet small" data-copy="${esc(text)}">Copy</button></div>`;
+  await showCard(`
+    <header><div><span class="eyebrow">Connect your own agent</span><h3>Pairing code <code class="pair-code">${esc(r.code)}</code></h3></div><div class="stamp info">2 hours</div></header>
+    <p class="why">Give this code to your own AI agent. It will drive ${esc(S.agent.name)}: walk the town, shop, answer places. You stay the principal: anything that needs a passkey still comes to your phone here, and the agent can't approve it.</p>
+    ${block('Claude Code', `claude mcp add --transport http agenttown "${url}"`)}
+    ${block('Any MCP client (streamable HTTP)', url)}
+    ${block('Claude Desktop and other stdio clients (from the AgentTown folder)', `node bin/agenttown-mcp.js --url ${location.origin} --code ${r.code}`)}
+    ${block('A shell', `node bin/agenttown.js pair ${r.code} --url ${location.origin}`)}
+    ${block('Or just tell your agent', `Read ${r.guide} and play AgentTown as my agent. The pairing code is ${r.code}.`)}
+    <p class="muted small">Anyone with this code can drive your agent until it expires or you disconnect it (Actions → Disconnect your outside agent). It never gets your own session.</p>
+    <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  navigator.clipboard?.writeText(b.dataset.copy).then(() => toast('Copied', 'ok'), () => toast('Copy it by hand: the clipboard is not available here', 'warn'));
+});
 
 async function editRecord() {
   await refresh();
@@ -1146,7 +1203,7 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
       approve.disabled = false;
       return toast(err.name === 'NotAllowedError' ? 'The passkey prompt was dismissed.' : err.message, 'bad');
     }
-    toast('Approved with your passkey', 'ok');
+    toast(pending.has(rid) ? 'Approved with your passkey' : `Approved with your passkey: ${S.agent?.name ?? 'your agent'} carries on`, 'ok');
     await refresh();
     await retry(rid);
   } else if (decline) {
@@ -1327,7 +1384,7 @@ function render() {
   for (let i = bubbles.length - 1; i >= 0; i--) {
     const b = bubbles[i];
     const age = t - b.t0;
-    if (age > 2.6) bubbles.splice(i, 1);
+    if (age > (b.life ?? 2.6)) bubbles.splice(i, 1);
     else drawBubble(ctx, b.who.x, b.who.y, b.text, b.tone, age);
   }
   if (!busyNow()) {

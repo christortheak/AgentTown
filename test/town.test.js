@@ -8,7 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { SoftwareAuthenticator } from 'aaf-reference/src/lib/webauthn.js';
 import { startFederationInProcess } from 'aaf-reference/src/lib/federation.js';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { startServer } from '../src/server.js';
+import { buildTown, placeFront } from '../public/map.js';
 
 /** One browser tab: it joins the town and sends its session with every call. */
 const client = (game) => {
@@ -453,5 +456,97 @@ test('people and agents: who goes, what the record allows, what the agent answer
     assert.match(wont.headline, /walked away/);
   } finally {
     await game.close();
+  }
+});
+
+test('outside agents: pairing, MCP, the stdio bridge and the CLI; approvals stay human', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4494, portOffset: 9600, quiet: true, residents: false, timeScale: 25 });
+  const robin = client(game);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenttown-home-'));
+  let sid = null;
+  const rpc = async (method, params, { query = '', bearer } = {}) => {
+    const res = await fetch(`${game.url}/mcp${query}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(sid ? { 'mcp-session-id': sid } : {}), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+    sid = res.headers.get('mcp-session-id') ?? sid;
+    return (await res.json()).result;
+  };
+  const tool = (name, args = {}, opts) => rpc('tools/call', { name, arguments: args }, opts);
+  try {
+    // The guides name this town.
+    assert.match(await (await fetch(`${game.url}/agents.md`)).text(), new RegExp(`${game.origin}/mcp\\?code=`));
+    assert.match(await (await fetch(`${game.url}/llms.txt`)).text(), /agents\.md/);
+
+    await robin.join('agent', 'Robin Ash');
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
+    const { code, mcp } = await robin.post('/api/pair');
+    assert.match(code, /^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+
+    // MCP over HTTP, paired by the code in the URL.
+    const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test-agent', version: '1' } }, { query: `?code=${code}` });
+    assert.equal(init.serverInfo.name, 'agenttown');
+    const names = (await rpc('tools/list', {})).tools.map((t) => t.name);
+    assert.ok(names.includes('act') && names.includes('ask_my_principal'));
+    assert.ok(!names.some((n) => /approve/.test(n)), 'no tool approves anything');
+    assert.match((await tool('look')).content[0].text, /You are Pip/);
+    const bought = await tool('act', { action: 'buy', params: { shop: 'bramble', item: 'guide' } });
+    assert.equal(bought.structuredContent.decision, 'allow');
+    assert.equal((await robin.get('/api/world?since=0')).me.companion.free, true, 'the agent walked there, on the server');
+    assert.equal((await robin.get('/api/state')).paired.client, 'test-agent');
+    const principalOnly = await tool('act', { action: 'grant', params: { budget: 100 } });
+    assert.ok(principalOnly.isError);
+    assert.match(principalOnly.content[0].text, /Only your principal/);
+
+    // The place asks; the agent asks its principal; only the principal's passkey answers.
+    const asked = await tool('act', { action: 'buy', params: { shop: 'apothecary', item: 'draught' } });
+    const askId = asked.structuredContent.ask.id;
+    await robin.passkey('phone');
+    const principal = (async () => {
+      for (let i = 0; i < 80; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const ap = (await robin.get('/api/state')).phone.approvals.find((x) => x.service === 'phone');
+        if (!ap) continue;
+        const res = await fetch(`${game.url}/api/approvals/${ap.request_id}/options`, { method: 'POST', headers: { 'x-session': sid } });
+        assert.equal(res.status, 401, "an MCP session is not a person's session");
+        return robin.approve(ap.request_id);
+      }
+      throw new Error('the question never reached the phone');
+    })();
+    const answered = await tool('ask_my_principal', { ask_id: askId, choice: 'once', wait_seconds: 20 });
+    await principal;
+    assert.equal(answered.structuredContent.status, 'approved');
+    assert.equal(answered.structuredContent.result.decision, 'allow');
+    assert.match((await tool('say', { text: 'Done at the apothecary.' })).content[0].text, /Done at the apothecary/);
+    assert.ok((await robin.get('/api/world?since=0')).events.some((e) => e.kind === 'say'));
+
+    // The stdio bridge, as Claude Desktop would run it.
+    const bridge = spawn('node', ['bin/agenttown-mcp.js', '--url', game.url, '--code', code], { cwd: path.resolve('.') });
+    const lines = [];
+    bridge.stdout.on('data', (d) => lines.push(...String(d).split('\n').filter(Boolean)));
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'bridge-test' } } })}\n`);
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    bridge.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'look', arguments: {} } })}\n`);
+    for (let i = 0; i < 100 && lines.length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+    bridge.kill();
+    assert.match(JSON.parse(lines[1]).result.content[0].text, /You are Pip/);
+
+    // The CLI, as an agent with a shell would use it (its token goes in a scratch HOME).
+    const cli = async (...a) => (await promisify(execFile)('node', ['bin/agenttown.js', ...a], { env: { ...process.env, HOME: home } })).stdout;
+    assert.match(await cli('pair', code, '--url', game.url), /Paired/);
+    assert.match(await cli('do', 'buy', 'shop=bakery', 'item=loaf'), /Bought seeded loaf/);
+    const { token } = JSON.parse(fs.readFileSync(path.join(home, '.agenttown.json'), 'utf8'));
+
+    // Disconnecting ends it, whatever the agent holds.
+    await robin.post('/api/pair/end');
+    assert.ok((await tool('look', {}, { bearer: token })).isError);
+
+    // A player with no browser: the server walks them to the shop before buying.
+    const { session: solo } = await (await fetch(`${game.url}/api/join`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'agent', name: 'Sol Reed', headless: true }) })).json();
+    const soloBuys = await (await fetch(`${game.url}/api/do`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-session': solo }, body: JSON.stringify({ action: 'buy', params: { shop: 'bramble', item: 'guide' } }) })).json();
+    assert.equal(soloBuys.decision, 'allow');
+    const front = placeFront(buildTown(), 'bramble');
+    const seen = (await robin.get('/api/world?since=0')).people.find((x) => x.role === 'agent' && Math.hypot(x.pos.x - front.x, x.pos.y - front.y) < 2);
+    assert.ok(seen, 'others see them standing at Bramble Books');
+  } finally {
+    await game.close();
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });

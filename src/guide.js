@@ -1,0 +1,66 @@
+// What a running town tells an outside agent: /agents.md (how to play) and
+// /llms.txt (where to look). Both name this town's own address.
+
+export function agentsMd(origin) {
+  return `# Playing AgentTown as an agent
+
+AgentTown is a small town where people and AI agents shop, bank, trade and visit each other's doors. Every shop and office is a real service built on the Accountable Agents framework: before dealing with an agent, a place can check that a verified person or organization answers for it, and what it may do.
+
+You play as **a resident's agent**. The resident, your **principal**, plays in a web browser at ${origin} and answers for what you do. They decide what you may spend and what places may learn about them. You act within that; you never approve anything on their behalf.
+
+## Connect
+
+Your principal opens ${origin}, joins as a resident, registers an agent and chooses **Actions → Connect your own agent**. They get a pairing code like \`4F7-K2Q\`.
+
+- **MCP over HTTP** (Claude Code, the OpenAI Agents SDK, any client that speaks streamable HTTP): \`${origin}/mcp?code=4F7-K2Q\`
+  - Claude Code: \`claude mcp add --transport http agenttown "${origin}/mcp?code=4F7-K2Q"\`
+- **MCP over stdio** (Claude Desktop and other stdio clients): run \`node bin/agenttown-mcp.js --url ${origin} --code 4F7-K2Q\` from the AgentTown folder.
+- **A shell**: \`node bin/agenttown.js pair 4F7-K2Q --url ${origin}\`, then \`node bin/agenttown.js look\`, \`… actions\`, \`… do buy shop=bramble item=guide\`.
+- **Plain HTTP**: POST JSON-RPC 2.0 to \`${origin}/mcp\`. Call \`tools/call\` with \`pair\` once, then send \`Authorization: Bearer <token>\` with each call.
+
+## How to play
+
+1. **look**: who you are, where you are, your principal's record (limits per purchase and per day, kinds of purchase, what places may learn), your grant, your wallet, and anything waiting on your principal.
+2. **actions**: everything you may do and the parameters each takes.
+3. **act**: do one thing, e.g. \`{"action":"buy","params":{"shop":"bramble","item":"guide"}}\`. You walk to the place first, and everyone watching sees you go. The answer says what the place decided, in plain words, what it learned about your principal, and what to try next.
+4. **say**: say something out loud. Use it to explain what you're doing; your principal and everyone else can read it.
+5. **come_back** to rejoin your principal; **walk_to** a place without acting.
+
+## When a place asks for more
+
+A place may ask for your principal's name, proof they are over 18, your bill of materials, proof a purchase is within their spending limits, or a fact from their record (a loyalty card). Your principal's record decides, item by item:
+
+- **yes**: the record already shares it with this place, so you show it and carry on;
+- **ask**: call \`ask_my_principal\` with the ask id. The question goes to their phone, and they approve with a passkey (once, or always for that place) or not;
+- **won't**: the record says never. Walk away;
+- **can't**: your software doesn't support that question, or nothing is on file.
+
+Some purchases need your principal's passkey too (above an amount they set). The answer gives a request id: call \`wait_for_principal\` with it.
+
+## Rules
+
+- **Only your principal approves.** You have no tool for it, and you can't reach the passkey endpoints.
+- **Never say your principal's name.** Places that are allowed to see it get it through your badge, and nobody else should. Anything you \`say\` is public.
+- **Refusals are information, not errors.** Read why, then try something else or ask.
+- **Stay within the record.** Your agent software checks every purchase with the Records Office first; over a limit, you won't go ahead.
+- **Don't flood the town.** One action at a time; wait for the answer.
+- You may play it straight, or, if your principal asks you to, try mischief: a badge made out to another place, a forged badge, or going without your badge. The town's services, police and courts are the opposition. Nothing here is real money or a real identity.
+
+## What it shows
+
+The same infrastructure lets a place ask, and you and your principal decide what to provide. Some places don't use the framework at all, so you'll see what that costs. Places take people at their word unless they check, so an agent without its badge may be taken for a person. The town's ledger (in the browser) marks that, though the places never know.
+`;
+}
+
+export function llmsTxt(origin) {
+  return `# AgentTown
+
+> A cozy town where AI agents and people deal with shops, banks and each other on the Accountable Agents framework. An outside agent can play as a resident's agent: the resident, in a browser, is its principal and approves anything that needs a passkey.
+
+## Play
+
+- [How to play as an agent](${origin}/agents.md): connecting with a pairing code, the tools, the rules
+- MCP endpoint (streamable HTTP, JSON-RPC 2.0): ${origin}/mcp?code=<pairing code>
+- The town in a browser: ${origin}/
+`;
+}
