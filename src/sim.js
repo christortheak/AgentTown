@@ -5,6 +5,10 @@
 // the same route the browser animates, so everyone agrees where everyone is.
 import { SoftwareAuthenticator } from 'aaf-reference/src/lib/webauthn.js';
 import { money } from 'aaf-reference/src/sim/world.js';
+import { digestOf } from 'aaf-reference/src/lib/crypto.js';
+import { HEADERS } from 'aaf-reference/src/lib/protocol.js';
+import { normalizeRecord, signRecord, agentThumbprint, CATEGORIES } from './proposed/keeper.js';
+import { fetchExtras } from './proposed/driver.js';
 import { buildTown, placeFront } from '../public/map.js';
 import { route, routeLength } from '../public/route.js';
 import { PLACE_DEFS } from './places.js';
@@ -17,16 +21,17 @@ export const LOOKS = {
   bot: { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55', scale: 0.85 },
   // An honest agent that was never registered: most agents, today.
   clank: { body: '#c9a77c', hood: '#a3825a', eyes: '#fff6dd', feet: '#5a4632', scale: 0.9 },
+  person: { body: '#ffd9c0', bulb: null, badge: 'none', feet: '#6b4f3a' },
 };
 
 const RESIDENTS = [
   {
-    id: 'fern', name: 'Fern', body: '#ffd6a5', home: 'hazel', account: 'hazel', worldid: true, budget: 60, wallet: 25,
+    id: 'fern', name: 'Fern', body: '#ffd6a5', home: 'hazel', account: 'hazel', worldid: true, budget: 60, wallet: 25, facts: { loyalty_card: 'GR-1043' },
     principal: { type: 'natural_person', identity: { legal_name: 'Hazel Moreno', jurisdiction: 'US-NY' }, assurance: 'IAL2', method: 'government ID + liveness check' },
     routine: ['shop', 'fair', 'apothecary', 'home', 'grocer', 'square', 'bank'],
   },
   {
-    id: 'thimble', name: 'Thimble', body: '#ffc8dd', home: 'maple', account: 'maple', worldid: true, budget: 40, wallet: 15,
+    id: 'thimble', name: 'Thimble', body: '#ffc8dd', home: 'maple', account: 'maple', worldid: true, budget: 40, wallet: 15, facts: { loyalty_card: 'GR-2290' },
     principal: { type: 'natural_person', identity: { legal_name: 'Maple Ashdown', jurisdiction: 'US-NY' }, assurance: 'IAL2', method: 'government ID + liveness check' },
     routine: ['shop', 'fair', 'tavern', 'square', 'shop', 'home'],
   },
@@ -51,6 +56,7 @@ const pick = (list) => list[Math.floor(Math.random() * list.length)];
 const between = (a, b) => a + Math.random() * (b - a);
 
 export function createSim({ world, places, emit, worldid, x402, origin, keys, timeScale = 1 }) {
+  const keeper = places.keeper;
   const map = buildTown();
   const npcs = new Map();
   const timers = new Set();
@@ -90,9 +96,16 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     npc.move = null;
   }
 
+  /** A resident's agent answers a place's question from its principal's record: an allowance, the facts asked for. */
+  const answerFor = (npc) => npc.answer ?? (keeper && npc.principal && npc.agent ? (ask, { action, params }) => {
+    const pl = places.places[ask.placeId];
+    const got = fetchExtras({ keeper, principalId: npc.principal.id, agent: npc.agent, place: pl.name, aud: pl.rp.id, action, params, want: ask.want });
+    return got.refused ? null : { extras: got };
+  } : undefined);
+
   const byFor = (npc) => ({
-    name: npc.name, agent: npc.agent ?? null, badge: Boolean(npc.agent), mode: npc.mode, disclose: npc.disclose,
-    worldIdentity: npc.worldIdentity ?? null, wallet: npc.wallet ?? null, rogue: npc.kind === 'swarm' || Boolean(npc.rogue),
+    name: npc.name, kind: npc.kind === 'person' ? 'person' : 'agent', agent: npc.agent ?? null, badge: Boolean(npc.agent), mode: npc.mode, disclose: npc.disclose,
+    worldIdentity: npc.worldIdentity ?? null, wallet: npc.wallet ?? null, rogue: npc.kind === 'swarm' || Boolean(npc.rogue), answer: answerFor(npc),
   });
 
   /** One request at a place, reported to the town ledger and shown over the npc's head. */
@@ -134,6 +147,11 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     if (def.disclose) {
       await principal.setDisclosurePolicy({ identity: { audiences: Object.values(places.places).map((p) => p.rp.id), claims: ['legal_name'] } });
     }
+    // Proposed: a record at the Records Office, so its agent can answer what places ask.
+    keeper?.setRecord(principal.id, signRecord(principal, normalizeRecord({
+      spending: { per_purchase: def.budget, per_day: def.budget * 20, purchases_per_day: null, categories: CATEGORIES, approve_above: null },
+      facts: def.facts ?? {}, agents: [agentThumbprint(agent)],
+    })));
     return { principal, agent };
   }
 
@@ -282,6 +300,29 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       await walk(npc, shopId, 75);
       await act(npc, shopId, 'commerce.purchase', places.purchase(shopId, PLACE_DEFS[shopId].items.find((x) => x.id === itemId)));
       await walk(npc, 'tavern', 75);
+    }
+  }
+
+  /** Tom has no agent: he shops in person, signs in at the bank with his passkey, and sometimes fails the tavern's check. */
+  async function personLife(npc, auth) {
+    const rounds = ['bakery', 'tavern', 'bank', 'bramble', 'fair', 'tavern', 'grocer'];
+    for (let i = 0; !stopped; i++) {
+      await sleep(between(9000, 16000));
+      if (!residentsActive) continue;
+      const where = rounds[i % rounds.length];
+      await walk(npc, where, 65);
+      if (where === 'bank') {
+        const accounts = places.places.bank.rp.accounts;
+        const params = { payee: 'the water bill', amount: money(30), account: npc.account };
+        const req = accounts.openRequest(npc.account, 'approve-action', { actor: 'human', action: 'payments.authorize', params_digest: digestOf(params), summary: 'Pay the water bill' });
+        accounts.approve(req.request_id, auth.get(accounts.approvalOptions(req.request_id).publicKey, origin));
+        await act(npc, 'bank', 'payments.authorize', params, { headers: { [HEADERS.humanApproval]: req.request_id } });
+      } else if (where === 'fair') {
+        if (!npc.hadPie && (await act(npc, 'fair', 'fair.claim', {})).decision === 'allow') npc.hadPie = true;
+      } else {
+        await act(npc, where, 'commerce.purchase', places.purchase(where, PLACE_DEFS[where].items.find((x) => !x.restricted)));
+      }
+      await walk(npc, 'square', 65);
     }
   }
 
@@ -481,6 +522,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       const clank = spawn({ id: 'clank', name: 'Clank (no badge)', kind: 'unbadged', look: LOOKS.clank, pos: placeFront(map, 'tavern'), speed: 75, wallet: 'clank' });
       x402.wallet('clank', 40);
       clankLife(clank);
+      const tom = spawn({ id: 'tom', name: 'Tom (in person)', kind: 'person', look: LOOKS.person, pos: placeFront(map, 'square'), speed: 65, wallet: 'tom', account: 'tom-bank', worldIdentity: worldid.enroll('orb') });
+      x402.wallet('tom', 60);
+      const auth = new SoftwareAuthenticator();
+      places.signup('bank', 'tom-bank', 'Tom Ashby');
+      places.places.bank.rp.accounts.registerPasskey('tom-bank', auth.create(places.places.bank.rp.accounts.passkeyRegistrationOptions('tom-bank').publicKey, origin));
+      personLife(tom, auth);
       (gloamReady ??= prepareSwarm()).catch((err) => emit({ kind: 'info', tone: 'warn', text: `The swarm could not be prepared: ${err.message}` }));
     },
     setResidentsActive(on) {

@@ -3,7 +3,7 @@
 // there first. Some actions ask a question or two before they run.
 import { esc } from './ui.js';
 
-const GROUPS = ['You', 'Your agent', 'Sub-agents', 'Authority', 'Shops & services', 'Home', 'Mischief'];
+const GROUPS = ['You', 'Your agent', 'Your record', 'Sub-agents', 'Shops & services', 'Home', 'Mischief'];
 const $ = (id) => document.getElementById(id);
 
 let open = null;

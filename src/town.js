@@ -3,13 +3,14 @@
 // courts, the town ledger, and the director's cues for live demos and videos.
 import { loadConfig, connectFederation } from './federation.js';
 import { buildWorld } from './world.js';
-import { createPlaces, PLACE_DEFS, ADOPTION } from './places.js';
+import { createPlaces, PLACE_DEFS, ADOPTION, PEOPLE } from './places.js';
 import { REGIMES } from './rulebook.js';
 import { createSim } from './sim.js';
 import { createSessions } from './sessions.js';
 import { createJustice } from './justice.js';
 import { createWorldId } from './worldid.js';
 import { createX402 } from './x402.js';
+import { createKeeper } from './proposed/keeper.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
 export async function createTown({ origin, portOffset = 7000, config = loadConfig(), residents = true, timeScale = 1 }) {
@@ -29,8 +30,10 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   const justice = createJustice({ world, emit, people: () => sessions?.counts() ?? { police: 0, judge: 0 }, timeScale });
   const worldid = createWorldId();
   const x402 = createX402();
+  // Proposed extension: the principal's record, allowances and statements (src/proposed, docs/PROPOSED.md).
+  const keeper = createKeeper({ rpId: new URL(origin).hostname, origin });
   const places = await createPlaces({
-    world, origin, config: config.places, law: config.law, worldid, x402, emit,
+    world, origin, config: config.places, law: config.law, worldid, x402, emit, keeper,
     alert: (a) => justice.fileCase({ kind: a.kind, placeId: a.placeId, title: a.title, evidence: a.evidence, by: PLACE_DEFS[a.placeId]?.name ?? 'Hearth & Key' }),
   });
   const keys = {};
@@ -99,10 +102,11 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
         const pl = places.places[id];
         return {
           id, name: pl.name, keeper: pl.human?.name ?? null, accepts: pl.policy.accepts, aaf: pl.policy.aaf, worldid: Boolean(pl.policy.worldid), x402: pl.policy.x402,
-          adoption: pl.adoption, effective: places.adoptionOf(pl), jurisdiction: pl.jurisdiction, sector: pl.sector, summary: places.describePolicy(pl),
+          adoption: pl.adoption, effective: places.adoptionOf(pl), jurisdiction: pl.jurisdiction, sector: pl.sector, summary: places.describePolicy(pl), people: pl.policy.people,
         };
       }),
       adoptions: Object.entries(ADOPTION).map(([id, a]) => ({ id, ...a })),
+      peoples: Object.entries(PEOPLE).map(([id, a]) => ({ id, ...a })),
       law: sessions.lawView(),
     };
   }
@@ -125,8 +129,8 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     },
     world_(since = 0, s = null) {
       return {
-        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id),
-        events: sessions.visibleEvents(s, ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(-80)), director: directorState(), market: places.market(),
+        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id && x.owner !== s?.id),
+        events: sessions.visibleEvents(s, ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(since ? 0 : -80, since ? 200 : undefined)), director: directorState(), market: places.market(),
       };
     },
     async direct(event, params = {}) {

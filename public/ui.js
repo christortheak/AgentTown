@@ -111,6 +111,12 @@ document.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 
 const listOf = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+const ANSWER = {
+  yes: { icon: '✓', label: 'yes, your record allows it', tone: 'ok' },
+  ask: { icon: '📱', label: 'ask you', tone: 'warn' },
+  "won't": { icon: '✋', label: "won't", tone: 'bad' },
+  "can't": { icon: '∅', label: "can't", tone: 'bad' },
+};
 
 /**
  * Show a result card; resolves with the value of the button pressed: one of the
@@ -137,9 +143,10 @@ export function card(c, { note, buttons = [], own = false } = {}) {
     ${c.why ? `<p class="why">${esc(c.why)}</p>` : ''}
     ${c.story ? `<div class="story"><span class="face">${esc(c.keeper?.face ?? '💬')}</span><div><b>${esc(c.keeper?.who ?? '')}</b>${prose(c.story)}</div></div>` : ''}
     ${service && c.reasons?.length ? `<ul class="reasons">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
-    ${ask ? `<div class="askbox"><b>📱 ${esc(ask.place)} asks for ${esc(listOf(ask.what.map((w) => w.label)))}</b>
+    ${ask ? `<div class="askbox"><b>📱 ${esc(ask.place)} asks for ${esc(listOf(ask.want.map((w) => w.label)))}</b>
       <p class="small">Your agent will show only that, only to ${esc(ask.place)}. ${ask.law?.length ? `The law requires it here (${esc(listOf(ask.law))}).` : 'It’s the place’s own policy.'} Saying no is allowed: you just don’t get served.</p>
       <div class="btns"><button class="primary" data-value="consent:once">Share once</button><button data-value="consent:always">Always share with ${esc(ask.place)}</button><button class="quiet" data-value="consent:decline">Decline</button></div></div>` : ''}
+    ${c.agentAnswer?.items?.length ? `<section><h4>What ${esc(c.actor)} answered, under your record</h4><ul class="answers">${c.agentAnswer.items.map((i) => `<li class="${ANSWER[i.answer]?.tone ?? ''}"><span>${ANSWER[i.answer]?.icon ?? '•'}</span><div><b>${esc(i.label)}</b>: ${esc(ANSWER[i.answer]?.label ?? i.answer)} <small>${esc(i.why)}</small></div></li>`).join('')}</ul></section>` : ''}
     ${own && c.fix && !ask ? `<div class="fix"><button class="primary" data-value="fix">→ ${esc(c.fix.label)}</button></div>` : ''}
     ${c.note || note ? `<p class="note">${esc(c.note || note)}</p>` : ''}
     ${c.steps?.length ? `<section><h4>Before the badge check</h4><ul class="steps">${c.steps.map((x) => `<li class="${x.ok ? 'ok' : 'bad'}"><span>${x.ok ? '✓' : '✗'}</span><b>${esc(x.via)}</b> ${esc(x.text)}</li>`).join('')}</ul></section>` : ''}
@@ -183,7 +190,8 @@ export function showCard(html, buttons = []) {
       resolve(value);
     };
     const onKey = (e) => {
-      if (e.key === 'Escape' || (e.key === 'Enter' && !e.target.closest?.('[data-value]'))) {
+      const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName);
+      if (e.key === 'Escape' || (e.key === 'Enter' && !typing && !e.target.closest?.('[data-value]'))) {
         e.preventDefault();
         e.stopPropagation();
         done();
@@ -211,10 +219,12 @@ export function showCard(html, buttons = []) {
 // ---------------------------------------------------------------------------
 
 export const QUESTS = [
+  { text: 'Buy something yourself, in person', action: 'buy.bakery', done: (s) => s.events.includes('bought-in-person') },
   { text: 'Get verified at Town Hall', action: 'verify', done: (s) => Boolean(s.principal?.verified) },
-  { text: 'Register your agent', action: 'register', done: (s) => Boolean(s.agent) },
-  { text: 'Sign a grant at the Records Office', action: 'grant', done: (s) => Boolean(s.grant) },
-  { text: 'Buy something at two shops', action: 'buy.bakery', done: (s) => s.events.filter((e) => e.startsWith('bought:')).length >= 2 },
+  { text: 'Register an agent (pick its software)', action: 'register', done: (s) => Boolean(s.agent) },
+  { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.grant) },
+  { text: 'Put a passkey on your phone', action: 'phone.passkey', done: (s) => Boolean(s.phone?.passkey) },
+  { text: 'Send your agent to buy something', action: 'buy.bramble', done: (s) => s.events.includes('bought-by-agent') },
   { text: 'A place asks for more: answer on your phone', action: 'buy.apothecary', done: (s) => s.events.includes('consent') },
   { text: 'Spawn a sub-agent and send it on an errand', action: 'helper.spawn', done: (s, c) => c.errands > 0 },
   { text: 'Let your agent into your house', action: 'door.passkey', done: (s) => s.events.includes('home') },
@@ -222,6 +232,9 @@ export const QUESTS = [
 ];
 
 export const EXTRAS = [
+  { text: 'Send your agent without its badge: who can tell?', done: (s) => s.events.includes('posed') },
+  { text: 'Go over your daily budget', done: (s) => s.events.includes('over-limit') },
+  { text: 'Pay at the bank in person, with a passkey', done: (s) => s.events.includes('bank-in-person') },
   { text: 'Shop in the Old Quarter: one place checks nothing, one blocks agents', done: (s, c) => c.oldQuarter > 0 },
   { text: 'Turn on the X-ray (X) and watch a request', done: (s, c) => c.xray > 0 },
   { text: 'On a result, open “Compare”', done: (s, c) => c.lens > 0 },
@@ -252,10 +265,16 @@ export function renderHud(s, counts) {
     const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : '', s.principal.disclose ? '<span class="pill">name shared when asked</span>' : ''].join(' ');
     rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small></div></div>`);
   }
+  if (s.agent) rec.push(`<div class="row"><span>${s.acting === 'agent' ? '🤖' : '🧍'}</span><div><b>${s.acting === 'agent' ? `${esc(s.agent.name)} goes for you` : 'You go yourself'}</b><br><small>Press T to switch</small></div></div>`);
+  if (s.record) {
+    const sp = s.record.spending;
+    const today = s.register?.today;
+    rec.push(`<div class="row"><span>🗂️</span><div><b>Your record</b> <span class="pill">proposed</span><br><small>Up to $${esc(sp.per_purchase)} a purchase${sp.per_day !== null ? `, $${esc(sp.per_day)} a day` : ''}${sp.approve_above !== null ? `; ask me above $${esc(sp.approve_above)}` : ''}${today ? `<br>Today: $${esc(today.spent)} in ${esc(today.purchases)} purchase${today.purchases === 1 ? '' : 's'}` : ''}</small></div></div>`);
+  }
   rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
   if (s.agent) {
     const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
-    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent</small></div></div>`);
+    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}</small></div></div>`);
   }
   if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${esc(s.agent?.name ?? 'Your agent')} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small></div></div>`);
   if (s.helpers.length) {
@@ -279,14 +298,18 @@ export function renderPhone(s) {
     items.push(`<li class="approval ask"><div><b>🔎 ${esc(a.place)} asks for ${esc(what)}</b><br><small>For ${esc(a.tier)}${a.law?.length ? `, required by ${esc(listOf(a.law))}` : ', its own policy'}. Your agent shows only that, only there.</small></div>
       <div class="btns"><button class="primary" data-consent="${esc(a.id)}" data-choice="once">Share once</button><button data-consent="${esc(a.id)}" data-choice="always">Always here</button><button class="quiet" data-consent="${esc(a.id)}" data-choice="decline">Decline</button></div></li>`);
   }
+  if (s.phone.passkey === false && s.agent) items.push('<li class="setup"><b>📱 No passkey on your phone yet</b><br><small>You need one to approve what your agent shares or spends.</small><div class="btns"><button class="primary" data-phone-passkey>Put a passkey on your phone</button></div></li>');
   for (const a of s.phone.approvals) {
     const d = a.details;
     let text;
-    if (a.purpose === 'delegate-agent') {
+    const from = a.service === 'phone' ? 'Records Office' : a.service === 'door' ? 'your door' : a.service?.startsWith('place:') ? `your account at ${s.places?.[a.service.slice(6)]?.name ?? 'a place'}` : '';
+    if (d.action === 'disclose' || d.action === 'spend') {
+      text = `<b>${esc(d.summary)}</b><br><small>From the ${esc(from)}: approve with your passkey.</small>`;
+    } else if (a.purpose === 'delegate-agent') {
       const who = d.accountability ?? {};
       text = `<b>An agent wants into your house.</b><br><small>Who stands behind it: ${esc(String(who.type ?? '').replace('_', ' '))}, verified ${esc(who.assurance)} by ${esc(String(who.verifier ?? '').replace('https://', ''))}; chain length ${esc(who.chain_length)}.${who.identity ? '' : ' No name given.'}</small>`;
     } else {
-      text = `<b>Approve this, just once?</b><br><small>${esc(d.summary ?? d.action)}${d.actor === 'human' ? '' : ' (asked by your agent)'}</small>`;
+      text = `<b>Approve this, just once?</b><br><small>${esc(d.summary ?? d.action)}${d.actor === 'human' ? '' : ' (asked by your agent)'}${from ? ` · ${esc(from)}` : ''}</small>`;
     }
     items.push(`<li class="approval"><div>${text}</div><div class="btns"><button class="primary" data-approve="${esc(a.request_id)}">Approve with passkey</button><button class="quiet" data-decline="${esc(a.request_id)}">Decline</button></div></li>`);
   }
@@ -316,8 +339,8 @@ export function renderPhone(s) {
 export function ledgerLine(e) {
   const c = e.card;
   if (!c || c.type !== 'check') return esc(e.text);
-  const who = e.mine ? `you (${c.actor})` : c.actor;
-  return `<b>${esc(c.place)}</b> → ${esc(who)}: ${esc(c.headline ?? e.text)}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}`;
+  const who = e.mine ? (c.lane === 'people' && c.truth === 'person' ? 'you, in person' : `you (${c.actor})`) : c.actor;
+  return `<b>${esc(c.place)}</b> → ${esc(who)}: ${esc(c.headline ?? e.text)}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}${e.posing ? ' <span class="posing" title="Only the narrator knows: an agent, taken for a person">🥸 an agent</span>' : ''}`;
 }
 
 /** The town ledger: everything anyone did, newest first. Lines with a card open it. Holds still while you point at it. */

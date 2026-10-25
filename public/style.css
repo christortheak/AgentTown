@@ -420,3 +420,41 @@ body.presenter #ledger .fold { display: block; }
 .chip-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; border: 1.5px solid var(--frame); background: #fff; font-weight: 700; cursor: pointer; }
 .chip-toggle:has(input:checked) { border-color: #7a5aa6; background: #f3ecfd; color: #5b4a7a; }
 .chip-toggle input { accent-color: #7a5aa6; margin: 0; }
+
+/* ---- People and agents; the record (proposed) ------------------------------------------------------ */
+
+#dock #actBtn.on { border-color: #4f7fbf; color: #3d5a80; background: #eaf1fb; }
+#dock button[hidden] { display: none; }
+ul.answers { margin: 0; padding: 0; list-style: none; }
+ul.answers li { display: flex; gap: 8px; margin: 4px 0; padding: 6px 10px; border-radius: 10px; background: var(--paper-2); font-size: 13px; }
+ul.answers li > span { flex: none; width: 18px; text-align: center; font-weight: 900; }
+ul.answers li.ok > span { color: var(--ok); }
+ul.answers li.warn > span { color: var(--warn); }
+ul.answers li.bad > span { color: var(--bad); }
+ul.answers small { display: block; color: var(--muted); }
+.posing { font-size: 11px; color: #7a5aa6; font-weight: 800; white-space: nowrap; }
+#phoneList li.setup { background: #eaf1fb; border: 2px dashed #9fbbe0; }
+.record-form h4 { margin-top: 14px; }
+.record-form .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px 12px; }
+.record-form label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12.5px; font-weight: 700; }
+.record-form input[type="number"], .record-form .fact input { font: 600 13px var(--font); padding: 4px 8px; border-radius: 8px; border: 1.5px solid var(--frame); background: #fff; color: var(--ink); width: 90px; }
+.record-form .fact { display: flex; gap: 6px; margin: 4px 0; }
+.record-form .fact input { width: auto; flex: 1; }
+.record-form .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.record-form label.chip-toggle { display: inline-flex; justify-content: flex-start; font-size: 11px; font-weight: 700; padding: 1px 7px; gap: 3px; }
+.share-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.share-table th { text-align: left; color: var(--muted); font-weight: 700; padding: 4px; vertical-align: top; }
+.share-table tbody th { color: var(--ink); width: 120px; }
+.share-table td { padding: 4px; border-top: 1px dashed var(--line); vertical-align: top; }
+.share-table select { font: 600 12px var(--font); padding: 3px 6px; border-radius: 8px; border: 1.5px solid var(--frame); background: #fff; color: var(--ink); }
+.share-table .chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.policy-row input[data-k="facts"] { font: 600 12px var(--font); padding: 2px 6px; border-radius: 8px; border: 1.5px solid var(--frame); }
+.tag.people { background: #fde7df; color: #a4472b; }
+.tag.proposed { background: #fff3d6; color: var(--warn); }
+
+.idcard:has(.record-form) { width: min(760px, 100%); }
+.share-row { padding: 8px 0; border-top: 1px dashed var(--line); }
+.share-row .share-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; font-size: 13px; }
+.share-row .share-head label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.share-row select { font: 600 12px var(--font); padding: 3px 6px; border-radius: 8px; border: 1.5px solid var(--frame); background: #fff; color: var(--ink); }
+.share-row .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-top: 4px; }

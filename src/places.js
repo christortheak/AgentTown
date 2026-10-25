@@ -11,6 +11,11 @@
 //               age      age-restricted goods need verified proof of age
 //               worldid  also require a (simulated) World ID proof: one per person per action
 //               x402     also require a (simulated) x402 payment of this many USDC
+//               people   what it does with a request that shows no badge (PEOPLE below):
+//                        a person, or an agent that isn't saying; the place can't tell
+//               budget   (proposed) ask agents for proof a purchase is within their
+//                        owner's spending limits, from the Records Office
+//               facts    (proposed) ask agents to state these facts from their owner's record
 //   law       the rulebook's regimes for the place's jurisdiction and sector
 //             (rulebook.js): floors raise what it asks, caps limit it, and a
 //             mandate makes it check badges whatever it chose.
@@ -23,6 +28,8 @@ import { pickTier } from 'aaf-reference/src/rp/policy.js';
 import { CLASSIFICATION as C } from 'aaf-reference/src/lib/protocol.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 import { createRulebook, JURISDICTIONS, SECTORS } from './rulebook.js';
+import { TYP } from './proposed/keeper.js';
+import { digestOf } from 'aaf-reference/src/lib/crypto.js';
 import { ASSET } from './x402.js';
 
 export const ADOPTION = {
@@ -33,6 +40,16 @@ export const ADOPTION = {
 };
 const PILOT_LIMIT = 20;
 
+/** What a place does with a request that shows no badge. It might be a person, or an agent that isn't saying. */
+export const PEOPLE = {
+  assume: { label: 'Takes them at their word', blurb: 'Anyone without a badge is served as a person. An agent that hides its badge gets the same.' },
+  check: { label: '"Seems human?" check', blurb: 'A guess, like a CAPTCHA: some people fail it, and some agents pass.' },
+  passkey: { label: 'Sign in with a passkey', blurb: 'People sign in to an account here and approve each request with their passkey. An agent without it gets nowhere.' },
+  worldid: { label: 'World ID', blurb: 'One per person (simulated World ID). It shows a unique human made the proof, not who is at the keyboard.' },
+  agents_only: { label: 'Agents only', blurb: 'No service for requests without a badge.' },
+};
+const CHECK_PASS = { person: 0.85, agent: 0.4 };
+
 /** Verified facts about a principal a place may ask for (granted at KYC). */
 export const ATTRIBUTES = {
   age_over_18: { label: 'proof you are over 18', short: 'proof of age', shown: 'Over 18: yes' },
@@ -42,65 +59,65 @@ export const PLACE_DEFS = {
   bramble: {
     name: 'Bramble Books', keeper: { face: '🐻', who: 'Bram' }, kind: 'shop', category: 'books', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us',
     items: [{ id: 'guide', name: 'Pocket guide to mushrooms', price: 12 }, { id: 'atlas', name: 'Atlas of old maps', price: 34 }, { id: 'encyclopedia', name: 'Illuminated encyclopedia', price: 180 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'assume' },
   },
   kettle: {
     name: 'Copper Kettle', keeper: { face: '🦊', who: 'Fennel' }, kind: 'shop', category: 'home', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us',
     items: [{ id: 'kettle', name: 'Copper kettle', price: 28 }, { id: 'lantern', name: 'Brass lantern', price: 45 }, { id: 'seeds', name: 'Moonflower seeds', price: 6, category: 'garden' }, { id: 'clock', name: 'Grandfather clock', price: 260 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'passkey' },
   },
   bakery: {
     name: 'Oakleaf Bakery', keeper: { face: '🐭', who: 'Crumb' }, kind: 'shop', category: 'food', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us',
     items: [{ id: 'loaf', name: 'Seeded loaf', price: 4 }, { id: 'cake', name: 'Honey cake', price: 18 }, { id: 'wedding', name: 'Three-tier wedding cake', price: 140 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'assume' },
   },
   apothecary: {
     name: 'Willow Apothecary', keeper: { face: '🐇', who: 'Sage' }, kind: 'shop', category: 'health', action: 'commerce.purchase', sector: 'health', jurisdiction: 'us',
     items: [{ id: 'tea', name: 'Chamomile tea', price: 5 }, { id: 'tonic', name: 'Willow-bark tonic', price: 14 }, { id: 'draught', name: 'Sleeping draught (18+)', price: 22, restricted: true }],
-    policy: { aaf: 'required', age: true },
+    policy: { aaf: 'required', age: true, people: 'assume' },
   },
   cafe: {
     name: 'Café Lumière', keeper: { face: '🦢', who: 'Odile' }, kind: 'shop', category: 'food', action: 'commerce.purchase', sector: 'hospitality', jurisdiction: 'eu',
     items: [{ id: 'creme', name: 'Café crème', price: 4 }, { id: 'croissant', name: 'Croissant', price: 3 }, { id: 'tatin', name: 'Tarte Tatin', price: 12 }, { id: 'kir', name: 'Kir royal (18+)', price: 9, restricted: true }],
-    policy: { aaf: 'required', accepts: ['harbor'] },
+    policy: { aaf: 'required', accepts: ['harbor'], people: 'assume' },
   },
   pawn: {
     name: 'Mended Things', keeper: { face: '🦝', who: 'Old Rackham' }, kind: 'shop', category: 'home', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us', adoption: 'none',
     items: [{ id: 'spoons', name: 'Silver spoons', price: 15 }, { id: 'watch', name: 'Pocket watch', price: 40 }, { id: 'violin', name: 'A violin with no case', price: 120 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'assume' },
   },
   tavern: {
     name: 'The Blue Door', keeper: { face: '🐗', who: 'Barrow' }, kind: 'shop', category: 'food', action: 'commerce.purchase', sector: 'hospitality', jurisdiction: 'us', adoption: 'block',
     items: [{ id: 'cordial', name: 'Elderflower cordial', price: 4 }, { id: 'ale', name: 'Pint of ale (18+)', price: 6, restricted: true }, { id: 'lunch', name: "Ploughman's lunch", price: 9 }],
-    policy: { aaf: 'required', age: true },
+    policy: { aaf: 'required', age: true, people: 'check' },
   },
   grocer: {
     name: 'Saffron Grocer', keeper: { face: '🐐', who: 'Saffi' }, kind: 'shop', category: 'food', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us', adoption: 'pilot',
     items: [{ id: 'apples', name: 'Basket of apples', price: 5 }, { id: 'saffron', name: 'A pinch of saffron', price: 16 }, { id: 'cheese', name: 'Wheel of cheese', price: 38 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'assume', facts: ['loyalty_card'] },
   },
   bank: {
     name: 'First Ledger Bank', keeper: { face: '🐢', who: 'Teller Shell' }, kind: 'bank', action: 'payments.authorize', sector: 'finance', jurisdiction: 'us',
     bills: [{ id: 'water', name: 'the water bill', amount: 30 }, { id: 'rent', name: 'a month of rent', amount: 120 }, { id: 'wire', name: 'a wire to an unknown account', amount: 900 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'passkey', budget: true },
   },
   exchange: {
     name: 'Thistle Exchange', keeper: { face: '🐂', who: 'Bullock' }, kind: 'exchange', action: 'trading.order', sector: 'finance', jurisdiction: 'us',
     symbols: [{ id: 'MOON', name: 'Moonflower futures', price: 12 }, { id: 'COPR', name: 'Copper', price: 8 }, { id: 'GRAN', name: 'Grain', price: 5 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'passkey' },
   },
   forge: {
     name: 'Compute Forge', keeper: { face: '🦫', who: 'Forgemaster Bea' }, kind: 'forge', action: 'compute.provision', sector: 'compute', jurisdiction: 'us',
     jobs: [{ id: 'small', name: 'a small job, 4 GPU-hours', units: 4 }, { id: 'large', name: 'a large job, 32 GPU-hours', units: 32 }],
-    policy: { aaf: 'required' },
+    policy: { aaf: 'required', people: 'passkey' },
   },
   fair: {
     name: 'Harvest Fair', keeper: { face: '🐿️', who: 'Nutmeg' }, kind: 'fair', action: 'fair.claim', sector: 'public', jurisdiction: 'us',
-    policy: { aaf: 'required', worldid: true },
+    policy: { aaf: 'required', worldid: true, people: 'worldid' },
   },
   toll: {
     name: 'Bridge Toll', keeper: { face: '🦆', who: 'Dabble' }, kind: 'toll', action: 'payments.authorize', sector: 'transport', jurisdiction: 'eu',
-    policy: { aaf: 'off', x402: 0.5 },
+    policy: { aaf: 'off', x402: 0.5, people: 'assume' },
   },
 };
 
@@ -165,7 +182,7 @@ export function needsOf(req) {
   return { identity: req?.accountability === 'disclosed', attributes: [...(req?.attributes ?? [])], provenance: Boolean(req?.provenance) };
 }
 
-export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null }) {
+export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null, keeper = null }) {
   const live = world.trust;
   const down = world.regA ? world.trust.withUrlOverrides({ [world.regA.id]: 'http://127.0.0.1:9' }) : live;
   const outage = { until: 0 };
@@ -234,7 +251,9 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         const i = t.findIndex((x) => !x.restricted);
         t = [...t.slice(0, i), { label: `pilot: orders up to $${PILOT_LIMIT}, anyone`, when: (x) => amountOf(x) <= PILOT_LIMIT, require: { accountability: 'none' } }, ...t.slice(i)];
       }
-      out[action] = rulebook.apply(place, action, t);
+      // People sign in to an account and approve with a passkey (the framework's human path);
+      // an agent naming an account needs its holder's authorization.
+      out[action] = [{ label: 'a signed-in customer', when: (x) => Boolean(x?.account), require: { accountability: 'agent_or_human', account: 'owner' } }, ...rulebook.apply(place, action, t)];
     }
     return out;
   }
@@ -259,13 +278,16 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const cfg = config[id] ?? {};
     const place = {
       id, ...def, adoption: cfg.adoption ?? def.adoption ?? 'full', rules: {}, requests: {}, handlers,
-      policy: { accepts: null, aaf: 'required', age: false, worldid: false, x402: null, ...def.policy, ...cfg },
+      policy: { accepts: null, aaf: 'required', age: false, worldid: false, x402: null, people: 'assume', budget: false, facts: [], ...def.policy, ...cfg },
     };
     delete place.policy.adoption;
     place.policy.accepts = resolveAccepts(place.policy.accepts);
     place.default = { adoption: place.adoption, policy: { ...place.policy } };
     refresh(place);
-    place.rp = await world.relyingParty({ id: `${id}.agenttown.test`, name: def.name, trust: trustFor(place), rules: place.rules, requests: place.requests, handlers, ...extra });
+    place.rp = await world.relyingParty({
+      id: `${id}.agenttown.test`, name: def.name, trust: trustFor(place), rules: place.rules, requests: place.requests, handlers,
+      accounts: { rpId: new URL(origin).hostname, origin }, ...extra,
+    });
     places[id] = place;
     return place;
   };
@@ -398,8 +420,10 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return HOUSES[account] ? account : 'home';
   };
 
-  function plainLearned(ev, tier, legacy) {
+  function plainLearned(ev, tier, legacy, seenAs) {
     if (legacy) return [{ icon: '🙈', kind: 'none', text: 'Nothing. This place doesn’t check badges, so it can’t tell an agent from a person, and has nobody to report a problem to.' }];
+    if (ev?.classification === C.HUMAN) return [{ icon: '🔑', kind: 'human', text: 'The account holder approved this exact request with their passkey. Not whether a person or an agent sent it.' }];
+    if (!ev?.ppid && seenAs) return [{ icon: '🧍', kind: 'none', text: `No badge, so nothing it can rely on: it took the visitor for ${seenAs}.` }];
     if (!ev?.ppid) return [{ icon: '❔', kind: 'none', text: 'Nothing about who is behind this request: no badge was shown.' }];
     const out = [{ icon: '🔢', kind: 'ppid', text: ev.ppid_mode === 'ephemeral' ? `A one-time badge number (…${ev.ppid.slice(-6)}): it won't recognize this agent next time` : `A badge number that only works here (…${ev.ppid.slice(-6)}): no other place sees the same one`, detail: ev.ppid }];
     if (ev.root) {
@@ -425,21 +449,21 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       type: 'check', place: place.name, placeId: place.id, keeper: place.keeper ?? null, action, actor,
       decision: r.decision, classification: r.classification ?? null, reasons: r.reasons ?? [],
       approval_request: r.approval_request ?? null, result: r.result ?? null,
-      checks: ev?.checks ?? [], learned: ev ? whatWasLearned(ev) : [], plain: plainLearned(ev, tier, extra.legacy), ppid: ev?.ppid ?? null, chain_length: ev?.chain_length ?? null,
+      checks: ev?.checks ?? [], learned: ev ? whatWasLearned(ev) : [], plain: plainLearned(ev, tier, extra.legacy, extra.card?.seenAs), ppid: ev?.ppid ?? null, chain_length: ev?.chain_length ?? null,
       registry: ev?.registry ?? null, sealed_ref: ev?.sealed_ref ?? null, account: ev?.account_gate?.account ?? null, txn: r.txn ?? null,
       receipt: receipt ? { log: receipt.log_id, index: receipt.index, verified: world.verifyReceipt(receipt).ok } : null,
       steps, policy: describePolicy(place), adoption: adoptionOf(place), jurisdiction: place.jurisdiction ?? null,
-      tier: tier && !extra.legacy ? { label: tier.label, needs: needText(tier.require), law: tier.law ?? [], capped: tier.capped ?? null } : null,
+      tier: tier && !extra.legacy && extra.card?.lane !== 'people' ? { label: tier.label, needs: needText(tier.require), law: tier.law ?? [], capped: tier.capped ?? null } : null,
       ...extra.card,
     };
   }
 
   /** The same card for everyone else: a name shared with one place stays with that place. */
   function publicCard(card) {
-    if (!card?.plain?.some((x) => x.kind === 'identity') && !card?.result?.holder) return card;
+    if (!card?.plain?.some((x) => x.kind === 'identity' || x.kind === 'statement') && !card?.result?.holder) return card;
     return {
       ...card,
-      plain: card.plain.map((x) => (x.kind === 'identity' ? { ...x, text: 'Their name (shared with this place only)' } : x)),
+      plain: card.plain.map((x) => (x.kind === 'identity' ? { ...x, text: 'Their name (shared with this place only)' } : x.kind === 'statement' ? { ...x, text: "A fact from the owner's record (shared with this place only)" } : x)),
       learned: card.learned.map((x) => (x.startsWith('identity, disclosed') ? 'identity, disclosed to this place with consent (not shown to others)' : x)),
       result: card.result?.holder ? { ...card.result, holder: '(shared with the bank only)' } : card.result,
     };
@@ -458,13 +482,17 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const lines = [];
     const adoption = adoptionOf(place);
     lines.push({ from: 'adoption', text: adoption !== place.adoption ? `${ADOPTION[adoption].label} (required by law; it chose “${ADOPTION[place.adoption].label}”)` : ADOPTION[adoption].label });
-    if (adoption === 'none' || adoption === 'block') return lines;
+    if (adoption === 'none') return [...lines, { from: 'people', text: 'everyone is served the same: no badge looked at, nobody checked' }];
+    lines.push({ from: 'people', text: `no badge: ${PEOPLE[p.people ?? 'assume'].label.toLowerCase()}` });
+    if (adoption === 'block') return lines;
     if (adoption === 'pilot') lines.push({ from: 'adoption', text: `orders up to $${PILOT_LIMIT}: anyone` });
     lines.push({ from: 'keeper', text: p.aaf === 'off' ? 'no badge needed' : 'an accountable agent with permission' });
     if (p.age && place.kind === 'shop') lines.push({ from: 'keeper', text: 'age-restricted goods: verified proof of age' });
     if (p.accepts) lines.push({ from: 'keeper', text: `badges from ${p.accepts.map(world.registryName).join(' or ')} only` });
     if (p.worldid) lines.push({ from: 'rails', text: 'World ID: one per person (simulated)' });
     if (p.x402) lines.push({ from: 'rails', text: `x402: ${p.x402} ${ASSET}` });
+    if (p.budget) lines.push({ from: 'proposed', text: "agents: proof it's within its owner's spending limits" });
+    if (p.facts?.length) lines.push({ from: 'proposed', text: `agents: state ${p.facts.map((f) => f.replace(/_/g, ' ')).join(', ')} from their owner's record` });
     for (const r of rulebook.active(place.jurisdiction ?? 'us')) {
       const touched = Object.values(place.rules).flat().filter((t) => t.law?.includes(r.name) || t.capped === r.name);
       if (touched.length) lines.push({ from: 'law', text: `${r.name}: ${[...new Set(touched.map((t) => `${t.label} → ${needText(t.require)}`))].join('; ')}` });
@@ -478,8 +506,18 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const stats = {};
   function tally(place, by, card, legacy) {
     if (!PLACE_DEFS[place.id]) return;
-    const s = (stats[place.id] ??= { visits: 0, accountable: 0, unbadged: 0, invalid: 0, unseen: 0, served: 0, refused: 0, reportable: 0, rogueServed: 0, rogueUnseen: 0, rogueStopped: 0 });
+    const s = (stats[place.id] ??= { visits: 0, accountable: 0, unbadged: 0, invalid: 0, unseen: 0, served: 0, refused: 0, reportable: 0, rogueServed: 0, rogueUnseen: 0, rogueStopped: 0, people: 0, peopleTurnedAway: 0, posed: 0, posersStopped: 0 });
     s.visits++;
+    // What only the narrator knows: who was really a person.
+    if (card.lane === 'people' || legacy) {
+      if (by.kind === 'person') {
+        s.people++;
+        if (card.decision !== 'allow') s.peopleTurnedAway++;
+      } else if (!(legacy && by.agent && by.badge !== false)) {
+        if (card.decision === 'allow') s.posed++;
+        else s.posersStopped++;
+      }
+    }
     if (legacy) s.unseen++;
     else if (ACCOUNTABLE.includes(card.classification)) s.accountable++;
     else if (!card.classification || card.classification === C.UNLABELED) s.unbadged++;
@@ -500,7 +538,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       return { id, name: place.name, adoption: adoptionOf(place), chose: place.adoption, mandated: adoptionOf(place) !== place.adoption, jurisdiction: place.jurisdiction, sector: place.sector, ...(stats[id] ?? {}) };
     });
     const sum = (k) => rows.reduce((n, r) => n + (r[k] ?? 0), 0);
-    const totals = Object.fromEntries(['visits', 'accountable', 'unbadged', 'invalid', 'unseen', 'served', 'refused', 'reportable', 'rogueServed', 'rogueUnseen', 'rogueStopped'].map((k) => [k, sum(k)]));
+    const totals = Object.fromEntries(['visits', 'accountable', 'unbadged', 'invalid', 'unseen', 'served', 'refused', 'reportable', 'rogueServed', 'rogueUnseen', 'rogueStopped', 'people', 'peopleTurnedAway', 'posed', 'posersStopped'].map((k) => [k, sum(k)]));
     const adopted = rows.filter((r) => r.adoption === 'full').length;
     return { rows, totals, adopted, of: rows.length };
   }
@@ -519,26 +557,70 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     };
   }
 
-  /** A disclosure request: the place asks for something the agent didn't show. */
-  function askFrom(place, r, tier, shared) {
-    if (r.decision !== 'step_up' || r.approval_request || !tier) return null;
-    const need = needsOf(tier.require);
-    const what = [
-      ...(need.identity ? [{ kind: 'identity', label: 'your name', shared: shared.identity }] : []),
-      ...need.attributes.map((a) => ({ kind: 'attribute', name: a, label: ATTRIBUTES[a]?.label ?? a, shared: shared.attributes.includes(a) })),
-      ...(need.provenance ? [{ kind: 'provenance', label: "your agent's bill of materials (which model and tools it runs)", shared: shared.provenance }] : []),
+  /** What a place asks agents for under the proposed extension: spending limits, facts on record. */
+  function extensionNeeds(place, params) {
+    const p = place.policy;
+    return [
+      ...(p.budget && amountOf(params) > 0 ? [{ kind: 'allowance', label: "proof it's within its owner's spending limits" }] : []),
+      ...(p.facts ?? []).map((name) => ({ kind: 'statement', name, label: name.replace(/_/g, ' ') })),
     ];
-    return what.length ? { place: place.name, placeId: place.id, tier: tier.label, law: tier.law ?? [], what } : null;
   }
 
   /**
-   * One request at a place, by an agent (with or without its badge) or a bare client.
-   *   by: { name, agent?, badge, mode, disclose, worldIdentity?, wallet?, rogue? }
+   * A place's question, in a neutral form: the framework's credential claims in
+   * DCQL shape (OpenID4VP), plus the proposed items. `want` lists every item,
+   * marking what the agent already showed.
+   */
+  function askOf(place, tier, shared, ext = []) {
+    const need = needsOf(tier?.require);
+    const want = [
+      ...(need.identity ? [{ kind: 'identity', label: 'your name', shared: shared.identity }] : []),
+      ...need.attributes.map((a) => ({ kind: 'attribute', name: a, label: ATTRIBUTES[a]?.label ?? a, shared: shared.attributes.includes(a) })),
+      ...(need.provenance ? [{ kind: 'provenance', label: "your agent's bill of materials (which model and tools it runs)", shared: shared.provenance }] : []),
+      ...ext,
+    ];
+    if (!want.length) return null;
+    const claims = [
+      ...(need.identity ? [{ path: ['accountability', 'root_principal', 'disclosed_identity', 'legal_name'] }] : []),
+      ...need.attributes.map((a) => ({ path: ['accountability', 'attributes', null, 'claims', a] })),
+      ...(need.provenance ? [{ path: ['records', null, 'role'], values: ['provenance'] }] : []),
+    ];
+    return {
+      place: place.name, placeId: place.id, tier: tier?.label ?? 'this', law: tier?.law ?? [], want,
+      dcql: claims.length ? { credentials: [{ id: 'accountability', format: 'dc+sd-jwt', claims }] } : null,
+      proposed: ext.map((e) => e.kind),
+    };
+  }
+
+  /** "Seems human?": a guess. Deterministic per place, so a run of visits is repeatable. */
+  const rolls = {};
+  function seemsHuman(place, kind) {
+    rolls[place.id] = ((rolls[place.id] ?? 12345) * 48271) % 2147483647;
+    return rolls[place.id] / 2147483647 < CHECK_PASS[kind === 'person' ? 'person' : 'agent'];
+  }
+
+  const legacyCards = new WeakSet();
+
+  /**
+   * One request at a place, by a person, an agent with its badge, or an agent without one.
+   *   by: { name, kind: 'person' | 'agent', agent?, badge, mode, disclose, worldIdentity?, wallet?, rogue?,
+   *         extras?: { allowance?, statement? },   (proposed) answers from the Records Office
+   *         answer?: (ask, { action, params }) => more }   townsfolk who answer a place's question on their own
    *       disclose: true (whatever a tier needs), or (place, need) => what the principal allows
-   * Order: verify a World ID proof and an x402 payment first, then the place's
-   * framework check, then (only if allowed) use the nullifier and settle.
+   * A request with no badge goes to the place's rule for people; one with a badge
+   * to the framework. World ID and x402 come first, and are settled only if served.
    */
   async function visit(placeId, action, params, by, { headers } = {}) {
+    let card = await attempt(placeId, action, params, by, { headers });
+    if (card.ask && card.decision === 'step_up' && typeof by.answer === 'function') {
+      const more = await by.answer(card.ask, { action, params, card });
+      if (more) card = await attempt(placeId, action, params, { ...by, ...more }, { headers });
+    }
+    tally(places[placeId], by, card, legacyCards.has(card));
+    return card;
+  }
+
+  async function attempt(placeId, action, params, by, { headers } = {}) {
     const place = places[placeId];
     if (!place) throw new HttpError(404, 'unknown_place', `no place ${placeId}`);
     const steps = [];
@@ -546,21 +628,27 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const node = buildingOf(place, params);
     const hop = (from, to, label, ok = true) => trace.push({ from: from === 'place' ? node : from, to: to === 'place' ? node : to, label, ok });
     const tier = pickTier(place.rules, action, params);
-    const extra = (more = {}) => ({ tier, ...more, card: { trace, building: node, amount: amountOf(params) || null, ...more.card } });
+    const kind = by.kind ?? 'agent'; // the truth, which only the narrator knows
+    const badged = Boolean(kind !== 'person' && by.agent && by.badge !== false);
+    const extra = (more = {}) => ({ tier, ...more, card: { trace, building: node, amount: amountOf(params) || null, truth: kind, lane: badged ? 'agents' : 'people', ...more.card } });
     const finish = (card, legacy = false) => {
-      tally(place, by, card, legacy);
+      if (legacy) legacyCards.add(card);
       return card;
     };
     const refuse = (reason, more) => finish(cardFrom(place, action, by.name, { decision: 'deny', reasons: [reason] }, steps, extra(more)));
 
     let proof = null;
-    if (place.policy.worldid) {
+    const worldIdStep = () => {
       const app = place.rp.id;
       const signal = `${action}:${JSON.stringify(params)}:${Date.now()}`;
       proof = by.worldIdentity ? worldid.prove(by.worldIdentity, { app, action, signal }) : null;
       const check = worldid.check(proof, { app, action, signal });
       hop('actor', 'orb', proof ? 'A World ID proof: a unique human, for this place and action (simulated)' : 'No World ID to prove with', Boolean(proof));
       steps.push({ via: 'World ID (simulated)', ok: check.ok, text: check.ok ? `a verified human (${proof.verification_level}), nullifier …${check.nullifier.slice(-8)}, not used here before` : check.reason });
+      return check;
+    };
+    if (place.policy.worldid) {
+      const check = worldIdStep();
       if (!check.ok) return refuse(check.reason);
     }
     let payment = null;
@@ -581,26 +669,88 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       if (!v.isValid) return refuse(`payment not accepted: ${v.invalidReason}`);
     }
 
-    // Places that aren't on the framework look at nothing, or only at whether a visitor says it's an agent.
-    const adoption = adoptionOf(place);
-    const badged = Boolean(by.agent && by.badge !== false);
-    if (adoption === 'none' || adoption === 'block') {
-      if (adoption === 'block' && badged) {
-        hop('actor', 'place', 'A request that says it comes from an agent');
-        hop('place', 'actor', 'Turned away: no agents served', false);
-        return finish(cardFrom(place, action, by.name, { decision: 'deny', reasons: [`${place.name} turns away anything that says it is an agent (its own rule, not the framework)`] }, steps, extra({ legacy: true, card: { legacy: adoption } })), true);
-      }
-      hop('actor', 'place', badged ? 'A request with a badge the place never looks at' : 'A request that looks like any customer');
+    /** Serve without the framework: the place's own counter. */
+    const serve = async (seenAs, more = {}) => {
       const result = await place.handlers[action]?.(params, {}, place.rp);
-      hop('place', 'actor', 'Served, no questions asked');
+      hop('place', 'actor', 'Served');
+      if (proof) worldid.consume(proof, { app: place.rp.id, action });
       if (payment) x402.facilitator.settle(payment, required);
-      return finish(cardFrom(place, action, by.name, { decision: 'allow', reasons: [], result }, steps, extra({ legacy: true, card: { legacy: adoption } })), true);
+      return finish(cardFrom(place, action, by.name, { decision: 'allow', reasons: [], result }, steps, extra({ ...more, card: { lane: 'people', seenAs, ...more.card } })), Boolean(more.legacy));
+    };
+    const turnAway = (reason, seenAs, more = {}) => {
+      hop('place', 'actor', 'Turned away', false);
+      return finish(cardFrom(place, action, by.name, { decision: 'deny', reasons: [reason] }, steps, extra({ ...more, card: { lane: 'people', seenAs, ...more.card } })), Boolean(more.legacy));
+    };
+
+    const adoption = adoptionOf(place);
+    if (adoption === 'none') {
+      hop('actor', 'place', badged ? 'A request with a badge the place never looks at' : 'A request like any other');
+      return serve('nobody checked', { legacy: true, card: { legacy: 'none' } });
+    }
+    if (adoption === 'block' && badged) {
+      hop('actor', 'place', 'A request that says it comes from an agent');
+      return turnAway(`${place.name} turns away anything that says it is an agent (its own rule, not the framework)`, 'an agent, turned away', { legacy: true, card: { legacy: 'block', lane: 'agents' } });
     }
 
-    const shared = shareFor(by, place, tier);
-    const opts = { mode: by.mode ?? 'pairwise', ...(headers ? { headers } : {}), disclose: shared };
+    // No badge: a person, or an agent that isn't saying. The place's rule for people decides.
+    // (Doors and your badge reader have no rule for people: the framework's own human path applies.)
     let r;
-    if (badged) {
+    let shared = { identity: false, attributes: [], provenance: false };
+    if (!badged && !PLACE_DEFS[place.id]) {
+      r = await world.rawRequest(place.rp.url, action, params, headers);
+      hop('actor', 'place', 'A request with no badge');
+    } else if (!badged) {
+      const rule = place.policy.people ?? 'assume';
+      hop('actor', 'place', kind === 'person' ? 'A person, in person' : 'A request with no badge');
+      if (rule === 'agents_only') return turnAway(`${place.name} serves agents only: requests without a badge aren't taken here`, 'turned away: agents only');
+      if (rule === 'check') {
+        const ok = seemsHuman(place, kind);
+        steps.push({ via: '"Seems human?" check', ok, text: ok ? 'satisfied: served as a person' : 'not satisfied: turned away' });
+        return ok ? serve('a person (passed a "seems human?" check)') : turnAway(`${place.name}'s "seems human?" check wasn't satisfied`, 'failed a "seems human?" check');
+      }
+      if (rule === 'worldid') {
+        if (!place.policy.worldid) {
+          const check = worldIdStep();
+          if (!check.ok) return turnAway(check.reason, 'no World ID proof');
+        }
+        return serve('a unique human (World ID)');
+      }
+      if (rule === 'passkey') {
+        if (!params.account) return turnAway(`${place.name} asks people to sign in to an account and approve with a passkey`, 'not signed in', { card: { signin: place.id } });
+        r = await world.rawRequest(place.rp.url, action, params, headers);
+      } else {
+        return serve('a person (taken at their word)');
+      }
+    } else {
+      // The proposed checks come before the framework's: is the purchase within the owner's limits, and the facts asked for.
+      const ext = keeper ? extensionNeeds(place, params) : [];
+      const extPlain = [];
+      for (const need of ext) {
+        const jws = need.kind === 'allowance' ? by.extras?.allowance : by.extras?.statement;
+        if (!jws) continue;
+        const check = keeper.check(jws, { typ: need.kind === 'allowance' ? TYP.allowance : TYP.statement, aud: place.rp.id, params_digest: need.kind === 'allowance' ? digestOf(params) : undefined });
+        if (need.kind === 'allowance') {
+          hop('actor', 'records', "Asks the Records Office: is this within my owner's limits?");
+          hop('records', 'actor', 'A signed yes, for this request only (no balance shown)');
+          steps.push({ via: 'Spending limits (proposed)', ok: check.ok, text: check.ok ? `within its owner's limits${check.payload.approved_by_principal ? ', approved by the owner with a passkey' : ''}, vouched for by the ${keeper.name}` : `not accepted: ${check.reason}` });
+          if (check.ok) {
+            need.shared = true;
+            extPlain.push({ icon: '💰', kind: 'allowance', text: `Within its owner's spending limits${check.payload.approved_by_principal ? ', with the owner\'s passkey approval' : ''} (vouched for by the ${keeper.name}; no balance shown)` });
+          }
+        } else if (check.ok && need.name in (check.payload.claims ?? {})) {
+          need.shared = true;
+          steps.push({ via: 'Facts on record (proposed)', ok: true, text: `${need.label}: stated by the owner, kept by the ${keeper.name}; not verified` });
+          extPlain.push({ icon: '📝', kind: 'statement', text: `${need.label[0].toUpperCase()}${need.label.slice(1)}: ${check.payload.claims[need.name]} (the owner's own statement, not verified)` });
+        }
+      }
+      shared = shareFor(by, place, tier);
+      if (ext.some((e) => !e.shared)) {
+        hop('actor', 'place', 'A signed request with its badge');
+        hop('place', 'actor', 'Not yet: it asks first', false);
+        const ask = askOf(place, tier, shared, ext);
+        return finish(cardFrom(place, action, by.name, { decision: 'step_up', reasons: [`${place.name} asks for ${ask.want.filter((w) => !w.shared).map((w) => w.label).join(', ')}`] }, steps, extra({ card: { ask, shared, lane: 'agents' } })));
+      }
+      const opts = { mode: by.mode ?? 'pairwise', ...(headers ? { headers } : {}), disclose: shared };
       const before = by.agent.contexts?.get(place.rp.id);
       const had = { attestation: before?.attestation, authorization: before?.authorization };
       r = await by.agent.act(place.rp.url, action, params, opts).catch((err) => ({ decision: 'refused', reasons: [err.message], code: err.code }));
@@ -614,12 +764,11 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         hop('actor', 'records', 'Swaps its grant for a permission slip for this place (token exchange)');
         hop('records', 'actor', 'A permission slip that shows only what it may do here');
       }
-      const showing = [shared.identity && 'your name', ...shared.attributes.map((a) => ATTRIBUTES[a]?.short ?? a), shared.provenance && 'its bill of materials'].filter(Boolean);
+      const showing = [shared.identity && 'your name', ...shared.attributes.map((a) => ATTRIBUTES[a]?.short ?? a), shared.provenance && 'its bill of materials', ...ext.map((e) => e.kind === 'allowance' && 'a spending allowance'), ...ext.filter((e) => e.kind === 'statement').map((e) => e.label)].filter(Boolean);
       hop('actor', 'place', `A signed request with its badge${showing.length ? `, showing ${showing.join(' and ')}` : ''}`);
-    } else {
-      r = await world.rawRequest(place.rp.url, action, params, headers);
-      hop('actor', 'place', 'A request with no badge');
+      r.extPlain = extPlain;
     }
+
     const ev = r.txn ? place.rp.evidence.find((e) => e.txn === r.txn) : null;
     for (const c of ev?.checks ?? []) {
       if (c.name.startsWith('status list entry')) hop('place', registryBuilding(ev.registry), c.ok ? 'Is this badge still good? Yes' : `Is this badge still good? ${c.detail ?? 'no'}`, c.ok);
@@ -631,14 +780,18 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     if (r.decision === 'allow') {
       if (proof) worldid.consume(proof, { app: place.rp.id, action });
       if (payment) {
-        const s = x402.facilitator.settle(payment, required);
-        hop('place', 'facilitator', 'Settles the payment, now the work is done', s.success);
-        steps.push({ via: 'x402 (simulated)', ok: s.success, text: s.success ? `settled after the work was done: ${s.transaction} (PAYMENT-RESPONSE)` : `settlement failed: ${s.errorReason}` });
+        const settled = x402.facilitator.settle(payment, required);
+        hop('place', 'facilitator', 'Settles the payment, now the work is done', settled.success);
+        steps.push({ via: 'x402 (simulated)', ok: settled.success, text: settled.success ? `settled after the work was done: ${settled.transaction} (PAYMENT-RESPONSE)` : `settlement failed: ${settled.errorReason}` });
       }
     } else if (payment) {
       steps.push({ via: 'x402 (simulated)', ok: true, text: 'not settled: the request was refused, so no money moved' });
     }
-    return finish(cardFrom(place, action, by.name, r, steps, extra({ card: { ask: askFrom(place, r, tier, shared), shared } })));
+    const people = !badged;
+    const ask = !people && r.decision === 'step_up' && !r.approval_request ? askOf(place, tier, shared) : null;
+    const card = cardFrom(place, action, by.name, r, steps, extra({ card: { ask, shared, lane: people ? 'people' : 'agents', ...(people ? { seenAs: r.classification === C.HUMAN ? 'a person (signed in with a passkey)' : 'not signed in' } : {}) } }));
+    if (r.extPlain?.length) card.plain = [...card.plain, ...r.extPlain];
+    return finish(card);
   }
 
   /** A place reports a customer's agent to the registry that issued its badge, which relays it to the principal. */
@@ -665,7 +818,13 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   });
 
   return {
-    places, hearth, reader, outage, visit, cardFrom, publicCard, describePolicy, policyLines, asks, resetHomes, takeHouse, claimPlace, report, rulebook, scoreboard, adoptionOf,
+    places, hearth, reader, outage, visit, cardFrom, publicCard, describePolicy, policyLines, asks, resetHomes, takeHouse, claimPlace, report, rulebook, scoreboard, adoptionOf, keeper,
+    /** A person opens an account at a place, to sign in there with a passkey. */
+    signup(placeId, account, owner) {
+      const place = places[placeId];
+      if (!place?.rp.accounts) throw new HttpError(404, 'unknown_place', `no place ${placeId}`);
+      return place.rp.accounts.get(account) ?? place.rp.accounts.create(account, owner);
+    },
     isClaimed: (account) => claimed.has(account),
     market: () => PLACE_DEFS.exchange.symbols.map((s) => ({ id: s.id, name: s.name, price: market.prices[s.id], change: Math.round((market.prices[s.id] / market.opening[s.id] - 1) * 100) })),
     quote: (symbol) => market.prices[symbol],
@@ -678,6 +837,9 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         const next = { ...place.policy, ...patch };
         if ('accepts' in patch) next.accepts = resolveAccepts(patch.accepts);
         if ('age' in patch) next.age = Boolean(patch.age);
+        if ('budget' in patch) next.budget = Boolean(patch.budget);
+        if ('people' in patch && !PEOPLE[patch.people]) throw new HttpError(400, 'bad_people', `people is one of ${Object.keys(PEOPLE).join(', ')}`);
+        if ('facts' in patch) next.facts = (Array.isArray(patch.facts) ? patch.facts : String(patch.facts ?? '').split(',')).map((f) => f.trim().toLowerCase().replace(/[^a-z0-9_ ]/g, '').replace(/\s+/g, '_')).filter(Boolean).slice(0, 4);
         place.policy = next;
       });
       if ('worldid' in patch && placeId === 'fair') worldid.reset(place.rp.id, 'fair.claim');

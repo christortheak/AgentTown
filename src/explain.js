@@ -52,6 +52,9 @@ export function explain(card) {
   const place = card.place;
   const ask = card.ask;
 
+  const you = card.truth === 'person';
+  if (card.lane === 'people' && !card.legacy) return people(card, place, you);
+
   if (card.decision === 'allow') {
     const got = gotWhat(card);
     if (card.legacy === 'none') return { tone: 'ok', headline: `${got}, no questions asked`, why: `${place} isn't on the framework. It checked nothing, so it can't tell an agent from a person, and if this goes wrong there's nobody to report it to.` };
@@ -63,9 +66,9 @@ export function explain(card) {
 
   if (card.decision === 'step_up') {
     if (ask) {
-      const missing = ask.what.filter((w) => !w.shared).map((w) => w.label);
+      const missing = ask.want.filter((w) => !w.shared).map((w) => w.label);
       const because = ask.law?.length ? `${listOf(ask.law)} requires it` : `that's ${place}'s own policy`;
-      return { tone: 'ask', headline: `${place} asks for ${listOf(missing.length ? missing : ask.what.map((w) => w.label))}`, why: `For ${ask.tier}, ${because}. You decide: your agent shows only that, and only to ${place}.` };
+      return { tone: 'ask', headline: `${place} asks for ${listOf(missing.length ? missing : ask.want.map((w) => w.label))}`, why: `For ${ask.tier}, ${because}. You decide: your agent shows only that, and only to ${place}.` };
     }
     if (card.approval_request) return { tone: 'warn', headline: "Waiting for the owner's OK", why: "The lock sent a request to the owner's phone. It shows who answers for the agent in general terms, never a name." };
     return { tone: 'warn', headline: 'Needs more', why: cap(card.reasons?.[0] ?? '') };
@@ -110,6 +113,27 @@ export function explain(card) {
   return { tone: 'bad', headline: 'Refused', why: cap(r || card.classification || '') };
 }
 
+/** A request with no badge: a person, or an agent that isn't saying. Only the narrator knows which. */
+function people(card, place, you) {
+  const who = you ? 'you' : card.actor;
+  const posing = !you && card.decision === 'allow';
+  const caught = posing ? ` It was an agent; ${place} couldn't tell.` : '';
+  if (card.decision === 'allow') {
+    const got = gotWhat(card);
+    if (card.classification === C.HUMAN) return { tone: 'ok', headline: got, why: 'The account holder signed in and approved this exact request with their passkey.' };
+    if (/World ID/.test(card.seenAs ?? '')) return { tone: 'ok', headline: got, why: you ? `${place} serves people one per person, by World ID (simulated).` : `${card.actor} used its owner's World ID: a human made that proof, but an agent was at the counter.` };
+    if (/seems human/.test(card.seenAs ?? '')) return { tone: posing ? 'warn' : 'ok', headline: got, why: you ? `Passed ${place}'s "seems human?" check.` : `${card.actor} passed the "seems human?" check. It's a guess, and this time it guessed wrong.` };
+    return { tone: posing ? 'warn' : 'ok', headline: got, why: you ? `${place} takes anyone without a badge at their word, as a person.` : `${place} took ${card.actor} for a person: nothing in the request said "agent".${caught}` };
+  }
+  const r = card.reasons?.[0] ?? '';
+  if (card.signin) return { tone: 'bad', headline: 'Sign in first', why: `${place} asks people to sign in to an account and approve each request with a passkey.${you ? '' : ` ${card.actor} has no passkey to sign in with.`}` };
+  if (/agents only/.test(r)) return { tone: 'bad', headline: 'Turned away: agents only', why: `${place} only takes requests that come with a badge.` };
+  if (/seems human/.test(r)) return { tone: 'bad', headline: you ? "Turned away: the check wasn't convinced" : 'Caught by the "seems human?" check', why: you ? `${place}'s "seems human?" check is a guess, and this time it turned away a real person.` : `${place}'s guess was right this time. It won't always be.` };
+  if (/World ID/.test(r)) return { tone: 'bad', headline: 'Refused: proof of a unique human needed', why: you ? 'No World ID to prove with. Get one at the Orb (simulated).' : `${who} has no World ID it may use.` };
+  if (/passkey|bearer/.test(r)) return { tone: 'bad', headline: 'Refused: no passkey approval', why: `${place} needs the account holder's passkey for every request without a badge.` };
+  return { tone: 'bad', headline: 'Refused', why: cap(r) };
+}
+
 /** A line in the town ledger from a place's decision, with the plain words added to the card. */
 export function eventFromCard(card, by = {}) {
   const plain = explain(card);
@@ -117,6 +141,7 @@ export function eventFromCard(card, by = {}) {
   return {
     kind: 'check', who: by.id ?? null, actor: card.actor, place: card.place, placeId: card.placeId,
     decision: card.decision, classification: card.classification, badge: card.ppid ? `…${card.ppid.slice(-6)}` : null,
+    lane: card.lane ?? null, posing: card.lane === 'people' && card.truth === 'agent' && card.decision === 'allow',
     tone: card.decision === 'allow' ? 'ok' : card.decision === 'deny' || card.decision === 'refused' ? 'bad' : 'warn',
     text: `${card.place} → ${card.actor}: ${card.headline ?? card.decision}`, owner: by.owner ?? null, card,
   };

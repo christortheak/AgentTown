@@ -59,9 +59,12 @@ export function passkeysUsable() {
   return null;
 }
 
-/** Put a passkey on your front door (Touch ID, Face ID, a security key or your device PIN). */
-export async function registerPasskey() {
-  const { publicKey } = await post('/api/passkey/options');
+/**
+ * Put a passkey somewhere (Touch ID, Face ID, a security key or your device PIN):
+ * 'door' (your front door), 'phone' (your phone, for approvals) or 'place:<id>' (an account at a place).
+ */
+export async function registerPasskey(service = 'door') {
+  const { publicKey } = await post('/api/passkey/options', { service });
   publicKey.challenge = b64u.dec(publicKey.challenge);
   publicKey.user.id = b64u.dec(publicKey.user.id);
   const cred = await navigator.credentials.create({ publicKey });
@@ -69,7 +72,7 @@ export async function registerPasskey() {
     id: cred.id, rawId: b64u.enc(cred.rawId), type: cred.type, authenticatorAttachment: cred.authenticatorAttachment,
     response: { clientDataJSON: b64u.enc(cred.response.clientDataJSON), attestationObject: b64u.enc(cred.response.attestationObject) },
   };
-  return post('/api/passkey', { credential });
+  return post('/api/passkey', { service, credential });
 }
 
 /** Approve one request with your passkey. The challenge commits to exactly what is being approved. */

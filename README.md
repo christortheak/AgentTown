@@ -2,7 +2,7 @@
 
 A cozy town where you play an accountable agent. It is a launch demo for the *Accountable Agents* framework, and it is a separate project from the framework's reference implementation, which it uses as a dependency.
 
-Many people can play at once, each in a role: an **agent** (you are its principal), a **shopkeeper**, a **homeowner**, the **police**, **the judge** or the **town council**. Simulated residents, a newcomer, sub-agents, an honest agent nobody registered and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, told in plain words first (what happened, why, and what would fix it), with every check it ran, what it learned, and a verified receipt for its activity-log entry underneath.
+Many people can play at once, each in a role: a **resident** (you walk the town yourself, and can register an agent and send it), a **shopkeeper**, a **homeowner**, the **police**, **the judge** or the **town council**. Simulated residents' agents, a person who shops in person, a newcomer, sub-agents, an honest agent nobody registered and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, told in plain words first (what happened, why, and what would fix it), with every check it ran, what it learned, and a verified receipt for its activity-log entry underneath.
 
 What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
 
@@ -21,7 +21,7 @@ Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because p
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster), including disclosure requests answered once, always or not at all; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; and runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for.
+Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; and plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer.
 
 ## Roles
 
@@ -29,7 +29,7 @@ Open the town and pick a role. Each browser tab is its own player, so two tabs (
 
 | Role | What you do |
 |---|---|
-| 🤖 Agent | You are the principal; your agent walks the town. Get verified, register, sign a grant, shop, bank, trade, spawn sub-agents and send them on errands. Play it straight, or try to get away with something. |
+| 🧍 Resident | You walk the town yourself and shop in person. Get verified, register an agent (it follows you; **T** chooses who goes), set your record, bank, trade, spawn sub-agents and send them on errands. Play it straight, or try to get away with something: send your agent without its badge and see who notices. |
 | 🏪 Shopkeeper | Run a shop, the bank, the exchange, the fair or the toll. Choose whether to use the framework at all (check badges, pilot it, ignore it, or block agents), which registries you trust and what you ask for (badge, proof of age, World ID, x402); see which of your questions come from you and which from the law; watch every customer's ID check, report a customer to its registry (its principal hears about it, you still don't learn who), or file it with the police. |
 | 🏡 Homeowner | Own a house in Hearthside. Put a passkey on your door; when an agent knocks, your phone shows who stands behind it and you decide. Change the locks when keys go astray. |
 | 👮 Police | Cases arrive from places: refused payments the bank flags, attempted break-ins, a pump spotted at the Exchange. Open cases from any ledger line, and petition the court. |
@@ -42,12 +42,34 @@ Nobody playing police or judge? A simulated inspector and judge take over: refus
 
 **Who sees what.** A badge never names its principal, so neither do the town's shared views: other players see your agent's name, never yours, and ledger lines that would link the two are visible only to you. If you share your name with one place, that place sees it; everyone else's view of the same visit says only that a name was shared. A court order changes that, and its findings are public: a banner tells the whole town.
 
+## People and agents
+
+You start as a person. Places can't see who is at the counter: a request with no badge might be a person or an agent that isn't saying. Each place has a rule for requests with no badge, set by its keeper:
+
+| Rule | Example | What happens |
+|---|---|---|
+| Take them at their word | Bramble Books, the bakery, the Old Quarter | People are served; so is any agent that hides its badge |
+| "Seems human?" check | The Blue Door's doorman | A guess: some agents pass, some people are turned away |
+| Sign in with a passkey | Copper Kettle, the bank, the Exchange, the Forge | Sign up once, then approve each request with your passkey: the framework's human path. No passkey, no service |
+| World ID (simulated) | The Harvest Fair | One per person |
+| Agents only | (set it in a shop) | No service without a badge |
+
+The ledger marks agents taken for people (🥸): only the narrator knows; the places never do. Tom shops in person, and sometimes fails the doorman's check. Clank, an honest agent nobody registered, is taken for a person wherever people are taken at their word.
+
+## Your record (a proposed extension)
+
+The framework's grant says what an agent may do in one request. Your **record** at the Records Office says the rest: a limit per purchase, a total per day, purchases per day, kinds of purchase, the amount above which your phone asks you first, which places always get your name or proof of age (otherwise ask, or never), and facts on file such as a loyalty card. Before spending, your agent asks the Records Office for an **allowance**: a signed "within the record", for one place and one request, that never states your balance. A place may ask to see it. Over your limit, your agent doesn't go ahead, and the place is never asked. Your **register** shows every purchase your agents tried.
+
+When a place asks a question, your agent answers each part from your record: **yes**, **ask you** (a passkey on your phone), **won't**, or **can't** (its software doesn't support that question, or there's nothing on file). When you register an agent you choose its software: Pocket Agent answers everything; Tinybot can show only a badge, a permission and a name.
+
+None of this is part of the framework's reference implementation: it is prototyped in `src/proposed/`, and [docs/PROPOSED.md](docs/PROPOSED.md) sets it out for discussion.
+
 ## Asking and answering
 
 The core loop. A place's policy may ask for more than a badge: the bank wants your name to open an account, the apothecary wants proof you're over 18 for a sleeping draught, the Compute Forge wants your name and your agent's bill of materials for a large job. The place answers *not yet* and says exactly what it needs; the question goes to your **phone** (and onto the result card):
 
-- **Share once**: the registry adds just that to a fresh badge for that place, your agent shows it, and it's gone again afterwards.
-- **Always here**: standing consent for that place; take it back on your phone any time.
+- **Share once**: approved with your passkey. The registry adds just that to a fresh badge for that place, your agent shows it, and it's gone again afterwards.
+- **Always here**: approved with your passkey, and added to your record; take it back on your phone any time.
 - **Decline**: you aren't served, and the place learns nothing more.
 
 Your agent never shows more than the place's rule needs: "over 18", not a birth date or a name. Verification at Town Hall records that one fact; your agent's maker publishes its bill of materials when you register it.
@@ -59,6 +81,7 @@ Your agent never shows more than the place's rule needs: "over 18", not a birth 
 | **Q** | The **action deck**: every action in town, grouped and searchable, with what you can do right here at the top. Picking an action somewhere else walks you there first. Nothing is hidden. Some actions are refused, and the refusal comes from the service that refused. |
 | **E** | Talk to the place you're standing at (opens the deck there). |
 | **B** | Take your badge off or put it back on. |
+| **T** | Who goes: you, or your agent. |
 | **X** | The **X-ray**: watch each request travel. Your agent asks its registry for a badge made out to this place only, swaps its grant for a permission slip at the Records Office, sends a signed request; the place checks the badge's status with the registry and the grant with the Records Office, writes to the activity log and answers. The camera pulls back to fit it all in, and the steps are listed in words. Every result card has an X-ray button too. |
 | Click | Walk; click a building to go and talk to it; click anyone to ask for their badge; click the minimap to run there. |
 | 🎬 | The **director**: cues for demos and videos, the law, adoption, each place's policy, and a presenter view. |
@@ -138,6 +161,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/world.js` | The town's view of the federation: registries, record keepers, verifier, court |
 | `src/places.js` | Places as relying parties: adoption, live policies, disclosure requests, plain-language results, X-ray traces, the scoreboard, and the World ID and x402 layers |
 | `src/rulebook.js` | Jurisdictions, regimes, floors, caps and mandates |
+| `src/proposed/keeper.js`, `src/proposed/driver.js` | Proposed: the principal's record, allowances, statements and the phone's passkey; the agent software that answers a place's question |
 | `src/explain.js` | Headlines and reasons in plain words, and ledger lines |
 | `src/sim.js` | Residents, newcomers, sub-agents' errands, bots, the swarm; walks timed on the shared routes |
 | `src/player.js` | A player with an agent, and the full action catalog |
@@ -147,7 +171,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/worldid.js`, `src/x402.js` | The simulations |
 | `public/map.js`, `public/route.js` | The town's layout and drawing; routes shared with the server |
 | `public/game.js`, `public/palette.js`, `public/roles.js`, `public/ui.js`, `public/api.js` | The game, the action deck, joining and the role panels, cards and HUD, server calls and WebAuthn |
-| `public/xray.js`, `public/lens.js` | The X-ray, and the comparison with other approaches |
+| `public/xray.js`, `public/lens.js`, `public/records.js` | The X-ray, the comparison with other approaches, and the Records Office counter |
 
 ## Limits of this prototype
 
@@ -156,4 +180,5 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 - **The town ledger is a narrator's view**, for the demo: it shows what every place decided. Names of principals stay out of it unless a court finds them.
 - **World ID and x402 are simulated**, as above.
 - **The comparison is simplified.** "Compare" gives typical answers for each approach, not a full analysis, and several of them combine with the framework rather than compete with it.
+- **The record, allowances, statements and the way agents answer are a prototype** of proposed extensions, not the framework; see docs/PROPOSED.md for what a real version would need (allowances bound to the presentation key, the registry checking the principal's signature itself).
 - **The laws are illustrative.** The regimes are loosely modeled on real ones to show how one infrastructure serves different rules; they are not legal advice or faithful implementations.

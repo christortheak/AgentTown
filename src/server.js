@@ -23,14 +23,10 @@ export async function startServer({
   const townOrigin = origin ?? `http://localhost:${port}`;
   const town = await createTown({ origin: townOrigin, portOffset, residents, timeScale, ...(config ? { config } : {}) });
   const { sessions } = town;
-  const { accounts } = town.places.hearth.rp;
   const app = createApp('agenttown');
   const me = (headers) => sessions.get(headers['x-session']);
-  const mine = (s, rid) => {
-    const account = sessions.accountOf(s);
-    if (!accounts.pendingFor(account).some((r) => r.id === rid)) throw new HttpError(403, 'not_yours', 'That request is not for your door.');
-    return account;
-  };
+  // An approval belongs to one of the session's own services: its phone, its door, or a place it signs in to.
+  const mine = (s, rid) => sessions.approvalFor(s, rid);
 
   app.get('/api/info', () => ({ ...town.info(), director_locked: Boolean(directorKey) }));
   app.get('/api/roles', () => sessions.roles());
@@ -53,21 +49,18 @@ export async function startServer({
     return town.direct(body?.cue, body?.params ?? {});
   });
 
-  // Front-door passkeys: each player's own door, or the house a homeowner holds.
-  app.post('/api/passkey/options', ({ headers }) => accounts.passkeyRegistrationOptions(sessions.accountOf(me(headers))));
-  app.post('/api/passkey', ({ body, headers }) => accounts.registerPasskey(sessions.accountOf(me(headers)), body?.credential));
-  app.post('/api/approvals/:rid/options', ({ params, headers }) => {
-    mine(me(headers), params.rid);
-    return accounts.approvalOptions(params.rid);
+  // Passkeys: a player's phone (proposed), their front door or a place they sign in to; a homeowner's door.
+  app.post('/api/passkey/options', ({ body, headers }) => {
+    const sv = sessions.serviceFor(me(headers), body?.service);
+    return sv.accounts.passkeyRegistrationOptions(sv.account);
   });
-  app.post('/api/approvals/:rid/approve', ({ params, body, headers }) => {
-    mine(me(headers), params.rid);
-    return accounts.approve(params.rid, body?.credential);
+  app.post('/api/passkey', ({ body, headers }) => {
+    const sv = sessions.serviceFor(me(headers), body?.service);
+    return sv.accounts.registerPasskey(sv.account, body?.credential);
   });
-  app.post('/api/approvals/:rid/decline', ({ params, headers }) => {
-    mine(me(headers), params.rid);
-    return accounts.decline(params.rid);
-  });
+  app.post('/api/approvals/:rid/options', ({ params, headers }) => mine(me(headers), params.rid).approvalOptions(params.rid));
+  app.post('/api/approvals/:rid/approve', ({ params, body, headers }) => mine(me(headers), params.rid).approve(params.rid, body?.credential));
+  app.post('/api/approvals/:rid/decline', ({ params, headers }) => mine(me(headers), params.rid).decline(params.rid));
 
   const page = (file) => fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
   app.get('/', () => html(page('index.html')));
