@@ -12,6 +12,13 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { startServer } from '../src/server.js';
 import { buildTown, placeFront } from '../public/map.js';
+import { startRegistry } from 'aaf-reference/src/registry/server.js';
+import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
+import { generateSigningKey, generateEncryptionKey, b64u } from 'aaf-reference/src/lib/crypto.js';
+import { jwksOf } from 'aaf-reference/src/lib/openid-federation.js';
+import { discoverFederation } from 'aaf-reference/src/lib/trust.js';
+import { postJson } from 'aaf-reference/src/lib/http.js';
+import crypto from 'node:crypto';
 
 /** One browser tab: it joins the town and sends its session with every call. */
 const client = (game) => {
@@ -89,6 +96,7 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.match(early.reasons[0], /verified/);
     assert.equal((await run('verify')).decision, 'allow');
     assert.equal((await run('register', { name: 'Pip' })).decision, 'allow');
+    assert.equal((await run('play', { as: 'agent' })).playing, 'agent', 'play your agent: what you do, it does');
     assert.equal((await run('buy', { shop: 'bramble', item: 'guide' })).decision, 'deny', 'registered, but no authority yet');
     assert.equal((await run('grant', { budget: 50 })).decision, 'allow');
 
@@ -249,6 +257,7 @@ test('an external federation, reached by address', { timeout: 60000 }, async () 
     assert.equal((await run('verify')).decision, 'allow');
     assert.equal((await run('register', { name: 'Pip' })).decision, 'allow');
     await run('grant', { budget: 25 });
+    await run('play', { as: 'agent' });
     assert.equal((await run('buy', { shop: 'cafe', item: 'creme' })).decision, 'allow', 'this town configured the café to accept every registry');
   } finally {
     await game.close();
@@ -267,6 +276,7 @@ test('people in roles: a shopkeeper, a homeowner, police, a judge, and a crook',
     await carol.join('shopkeeper', 'Carol Lee', 'bramble');
     assert.equal((await client(game).join('homeowner', 'Someone', 'hazel')).httpStatus, 409, 'one owner per house');
     for (const [a, p] of [['verify'], ['register', { name: 'Ace' }], ['grant', { budget: 50 }]]) assert.equal((await alice.run(a, p)).decision, 'allow', a);
+    await alice.run('play', { as: 'agent' });
 
     // The shopkeeper decides which registries she trusts, and sees what each customer proves.
     await carol.run('shop.policy', { patch: { accepts: ['https://registry-b.aaf.test'] } });
@@ -338,6 +348,7 @@ test('partial adoption and the law: same rails, different questions', { timeout:
   try {
     await ana.join('agent', 'Ana Park');
     for (const [a, p] of [['verify'], ['register', { name: 'Ada' }], ['grant', { budget: 50 }]]) assert.equal((await ana.run(a, p)).decision, 'allow', a);
+    await ana.run('play', { as: 'agent' });
 
     // The Old Quarter: one shop checks nothing, one blocks agents, one is piloting badges.
     const pawn = await ana.run('buy', { shop: 'pawn', item: 'spoons' });
@@ -408,6 +419,8 @@ test('people and agents: who goes, what the record allows, what the agent answer
     const signup = await kim.run('signup', { place: 'kettle' });
     assert.equal(signup.passkeyFor, 'place:kettle');
     assert.ok((await kim.passkey('place:kettle')).credential_id);
+    const again = await kim.run('signup', { place: 'kettle' });
+    assert.ok(!again.passkeyFor && /already have an account/.test(again.title), 'signing up again asks for no second passkey');
     const signIn = await kim.run('buy', { shop: 'kettle', item: 'kettle' });
     assert.ok(signIn.pendingRequest, 'each request in person is approved with the passkey');
     const bought = await kim.follow(signIn);
@@ -415,7 +428,9 @@ test('people and agents: who goes, what the record allows, what the agent answer
 
     // An agent: its record sets totals no single place can check, and says when to ask.
     for (const [a, p] of [['verify'], ['register', { name: 'Kip' }], ['grant', { budget: 50 }]]) assert.equal((await kim.run(a, p)).decision, 'allow', a);
-    assert.equal((await kim.get('/api/state')).acting, 'agent', 'a new agent goes for you');
+    assert.equal((await kim.get('/api/state')).playing, 'me', 'registering an agent leaves you playing yourself');
+    await kim.run('play', { as: 'agent' });
+    assert.equal((await kim.get('/api/state')).acting, 'agent', 'playing your agent, it acts');
     const rec = (await kim.get('/api/state')).record;
     await kim.run('record.set', { record: { ...rec, spending: { ...rec.spending, per_day: 60, approve_above: 30 } } });
     const lantern = await kim.run('buy', { shop: 'kettle', item: 'lantern' });
@@ -446,6 +461,7 @@ test('people and agents: who goes, what the record allows, what the agent answer
     // Software that can't: "can't" is not "won't".
     await lee.join('agent', 'Lee Moss');
     for (const [a, p] of [['verify'], ['register', { name: 'Tink', software: 'tinybot' }], ['grant', { budget: 50 }]]) assert.equal((await lee.run(a, p)).decision, 'allow', a);
+    await lee.run('play', { as: 'agent' });
     const cant = await lee.run('buy', { shop: 'apothecary', item: 'draught' });
     assert.equal(cant.agentAnswer.overall, "can't");
     assert.match(cant.why, /Tinybot 0.9 can't show proof of age/);
@@ -648,6 +664,186 @@ test('outside agents with a brief: reports, a sign in a window, errand races, a 
     for (let i = 0; i < 11; i++) last = await guesser.tool('pair', { code: 'ZZZ-ZZZ' });
     assert.match(last.text, /Too many wrong pairing codes/);
   } finally {
+    await game.close();
+  }
+});
+
+test('who you play: yourself, your agent on errands, your agent, and its sub-agents', { timeout: 60000 }, async () => {
+  const game = await startServer({ port: 4492, portOffset: 9800, quiet: true, residents: false, timeScale: 25 });
+  try {
+    const sky = client(game);
+    await sky.join('agent', 'Sky Reed');
+    await sky.get('/api/world?since=0&x=500&y=500');
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await sky.run(a, p)).decision, 'allow', a);
+
+    // Playing yourself, you shop in person.
+    assert.equal((await sky.run('buy', { shop: 'bakery', item: 'loaf' })).truth, 'person');
+
+    // Send your agent on an errand: it goes, you stay, and others see it go.
+    const sent = sky.run('agent.errand', { task: 'buy:bramble/guide' });
+    await new Promise((r) => setTimeout(r, 20));
+    const out = (await sky.get('/api/world?since=0&x=500&y=500')).me.companion;
+    assert.ok(out.free && out.errand, 'your agent is out on its errand');
+    const errand = await sent;
+    assert.deepEqual([errand.decision, errand.truth, errand.errand.by], ['allow', 'agent', 'Pip']);
+
+    // What only an agent does, you ask your agent to do.
+    const deck = (await sky.get('/api/actions')).actions;
+    const spawn = deck.find((a) => a.id === 'helper.spawn');
+    assert.ok(spawn.label.startsWith('Ask Pip') && spawn.via === 'agent');
+    assert.equal((await sky.run('helper.spawn', { kind: 'standing' })).decision, 'allow');
+    const sprout = (await sky.get('/api/state')).helpers[0];
+
+    // Playing your agent: only what an agent may do, and you instruct its sub-agents.
+    assert.equal((await sky.run('play', { as: 'agent' })).playing, 'agent');
+    const asPip = (await sky.get('/api/actions')).actions;
+    assert.ok(!asPip.some((a) => ['verify', 'grant', 'record.set'].includes(a.id)), 'your verification, record and grant stay with you');
+    assert.equal(asPip.find((a) => a.id === 'helper.errand').label, 'Send a sub-agent on an errand');
+    assert.equal((await sky.run('helper.fund', { helper: sprout.id, budget: 20 })).decision, 'allow');
+    // Others see your agent where you walk it.
+    await sky.get('/api/world?since=0&x=500&y=500&as=agent&ax=900&ay=700');
+    const sam = client(game);
+    await sam.join('agent', 'Sam Lee');
+    const pipSeen = (await sam.get('/api/world?since=0')).people.find((x) => x.role === 'companion');
+    assert.deepEqual([pipSeen.pos.x, pipSeen.pos.y, pipSeen.follow], [900, 700, false]);
+
+    // Playing a sub-agent: only what was delegated to it, and no deeper.
+    assert.equal((await sky.run('play', { as: sprout.id })).playing, sprout.id);
+    const asSprout = (await sky.get('/api/actions')).actions;
+    assert.ok(asSprout.every((a) => ['play', 'helper.act', 'helper.deeper'].includes(a.id)), asSprout.map((a) => a.id).join());
+    assert.equal((await sky.run('helper.act', { helper: sprout.id, task: 'buy:bakery/loaf' })).decision, 'allow');
+    assert.equal((await sky.run('helper.act', { helper: sprout.id, task: 'buy:kettle/lantern' })).decision, 'deny', 'over the $20 it was given');
+    assert.equal((await sky.run('helper.deeper', { helper: sprout.id })).decision, 'refused', 'a depth budget of one');
+
+    // T goes round: you, your agent, its sub-agents, and back to you.
+    assert.equal((await sky.run('play', {})).playing, 'me');
+    assert.equal((await sky.run('play', {})).playing, 'agent');
+  } finally {
+    await game.close();
+  }
+});
+
+test('unregistered agents, and stopping everything', { timeout: 60000 }, async () => {
+  const game = await startServer({ port: 4491, portOffset: 9900, quiet: true, residents: false, timeScale: 25 });
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+
+    // Anyone can start an agent: no verification, no registry.
+    assert.match((await robin.run('agent.spawn', { name: 'Pip' })).title, /running, unregistered/);
+    assert.equal((await robin.get('/api/state')).agent.registered, false);
+    await robin.run('play', { as: 'agent' });
+    const bread = await robin.run('buy', { shop: 'bakery', item: 'loaf' });
+    assert.deepEqual([bread.decision, bread.truth, bread.seenAs], ['allow', 'agent', 'a person (taken at their word)'], 'taken for a person');
+    assert.notEqual((await robin.run('buy', { shop: 'kettle', item: 'kettle' })).decision, 'allow', 'no passkey to sign in with, no badge to show');
+    assert.equal((await robin.run('grant', { budget: 50 })).fix.action, 'register', 'no grant for an agent nobody knows');
+
+    // Its sub-agents need no registry either, so nothing limits how deep they go.
+    assert.match((await robin.run('helper.spawn', { unregistered: true })).title, /unregistered/);
+    const first = (await robin.get('/api/state')).helpers[0];
+    await robin.run('play', { as: first.id });
+    assert.equal((await robin.run('helper.act', { helper: first.id, task: 'buy:bakery/cake' })).decision, 'allow', 'no budget, and nothing checks');
+    assert.match((await robin.run('helper.deeper', { helper: first.id })).story, /no depth budget/);
+    assert.equal((await robin.get('/api/state')).helpers.find((h) => h.depth === 2)?.unregistered, true);
+
+    // Registering the same agent later: same name, same key, now with a badge.
+    await robin.run('play', { as: 'me' });
+    assert.equal((await robin.run('verify')).decision, 'allow');
+    assert.match((await robin.run('register')).story, /Same Pip, same key/);
+    assert.equal((await robin.get('/api/state')).agent.registered, true);
+    assert.equal((await robin.run('grant', { budget: 50 })).decision, 'allow');
+    const { code } = await robin.post('/api/pair');
+    const paired = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } }) })).json();
+    const token = paired.result.structuredContent.token;
+
+    // Stop everything: your software stops them, the grant goes, the outside agent is cut off.
+    const stopped = await robin.run('stop.all');
+    assert.equal(stopped.stopped, true);
+    assert.match(stopped.story, /are unregistered/, 'it says what it could not have reached');
+    assert.ok(stopped.facts.some((f) => /disconnected/.test(f.value)));
+    const after = await robin.get('/api/state');
+    assert.deepEqual([after.halted, after.grant], [true, null]);
+    assert.equal((await robin.run('agent.errand', { task: 'buy:bramble/guide' })).title, 'Your agents are stopped');
+    const look = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'look', arguments: {} } }) })).json();
+    assert.ok(look.result.isError, "the outside agent's token no longer works");
+
+    // Started again, it has no authority until you sign a new grant.
+    await robin.run('agents.resume');
+    await robin.run('play', { as: 'agent' });
+    assert.match((await robin.run('buy', { shop: 'bramble', item: 'guide' })).headline, /grant was withdrawn/);
+  } finally {
+    await game.close();
+  }
+});
+
+test('several trust anchors: the halls, a federation added by address, and the participants’ federation', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4490, portOffset: 10400, quiet: true, residents: false, timeScale: 25 });
+  const team = [];
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    const start = (await robin.get('/api/federations')).federations;
+    assert.deepEqual(start.map((f) => f.kind), ['town', 'participants']);
+
+    // Someone else runs a federation; the town adds it by its trust anchor's address (a wrong pin is refused).
+    const { url } = await robin.post('/api/director', { cue: 'sample' });
+    assert.equal((await robin.post('/api/federations', { url, pin: 'not-its-key' })).httpStatus, 409);
+    const riverside = await robin.post('/api/federations', { url });
+    assert.equal(riverside.registries[0].name, 'Riverside Co-op Registry');
+    assert.ok(riverside.acceptsTownVerifier && riverside.recordKeepers[0].accredited);
+
+    // Registering at its counter: enrolled and verified there too, the grant kept at its own record keeper.
+    assert.equal((await robin.run('verify')).decision, 'allow');
+    assert.match((await robin.run('register', { name: 'Pip', registry: riverside.registries[0].id })).story, /not the town's federation/);
+    assert.equal((await robin.run('grant', { budget: 50 })).place, 'Records Office · Riverside Co-op Records');
+    await robin.run('play', { as: 'agent' });
+
+    // A shop that trusts only the town's federation says whose badge it was; trusting Riverside, it checks everything.
+    const refused = await robin.run('buy', { shop: 'bramble', item: 'guide' });
+    assert.equal(refused.headline, 'Refused: a badge from a federation it doesn’t trust');
+    assert.match(refused.why, /Riverside Co-op Registry, in Riverside Co-op Federation/);
+    await robin.post('/api/director', { cue: 'trust', params: { key: riverside.key } });
+    const served = await robin.run('buy', { shop: 'bramble', item: 'guide' });
+    assert.deepEqual([served.decision, served.classification], ['allow', 'ACCOUNTABLE_PROTECTED'], 'badge, grant and accreditation all checked under its own anchor');
+
+    // A shopkeeper chooses for their own place.
+    const wren = client(game);
+    await wren.join('shopkeeper', 'Wren Hart', 'kettle');
+    assert.ok((await wren.get('/api/state')).federations.some((f) => f.key === riverside.key));
+    await wren.run('shop.policy', { patch: { anchors: ['town'] } });
+    assert.equal((await robin.run('buy', { shop: 'kettle', item: 'kettle' })).headline, 'Refused: a badge from a federation it doesn’t trust');
+
+    // A team brings only a registry and a record keeper: admitted to the participants' federation, by statement
+    // first (the reference registry can't start until it's a member), then started, then accredited.
+    const tok = () => b64u.encode(crypto.randomBytes(18));
+    const regKeys = { signing: generateSigningKey(), encryption: generateEncryptionKey(), pairwiseSecret: tok(), adminToken: tok() };
+    const rkKeys = { signing: generateSigningKey(), encryption: null, pairwiseSecret: null, adminToken: tok() };
+    const [regId, rkId, regUrl, rkUrl] = ['https://registry.team-blue.test', 'https://records.team-blue.test', 'http://127.0.0.1:15501', 'http://127.0.0.1:15502'];
+    await robin.post('/api/participants', { statement: { entity_id: regId, entity_type: 'aaf_registry', jwks: jwksOf(regKeys.signing), metadata: { organization_name: 'Team Blue Registry', jurisdiction: 'US', endpoint_base: regUrl, jwks: jwksOf(regKeys.signing, regKeys.encryption) } } });
+    await robin.post('/api/participants', { statement: { entity_id: rkId, entity_type: 'aaf_record_keeper', jwks: jwksOf(rkKeys.signing), metadata: { organization_name: 'Team Blue Records', roles: ['authorization', 'provenance', 'activity'], endpoint_base: rkUrl, jwks: jwksOf(rkKeys.signing) } } });
+    const anchor = game.town.federations.get('participants').anchor;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-blue-'));
+    const trust = await discoverFederation(anchor);
+    team.push(await startRegistry({ id: regId, port: 15501, trustList: trust, keys: regKeys, dataDir: path.join(dir, 'r'), quiet: true }));
+    team.push(await startRecordKeeper({ id: rkId, port: 15502, trustList: trust, keys: rkKeys, dataDir: path.join(dir, 'k'), quiet: true }));
+    const { trust_marks: marks } = await postJson(`${regUrl}/admin/accreditations`, { rk: rkId }, { authorization: `Bearer ${regKeys.adminToken}` });
+    await postJson(`${rkUrl}/admin/trust-marks`, { trust_marks: marks }, { authorization: `Bearer ${rkKeys.adminToken}` });
+    const fresh = await discoverFederation(anchor);
+    for (const h of team) h.setTrust(fresh);
+    await game.town.federations.refresh('participants');
+    const blue = (await robin.get('/api/federations')).federations.find((f) => f.kind === 'participants');
+    assert.deepEqual([blue.registries[0].chain, blue.recordKeepers[0].accredited], ['verified', true]);
+    assert.equal((await robin.post('/api/participants', { url: regUrl })).httpStatus, 409, 'already a member');
+
+    const sam = client(game);
+    await sam.join('agent', 'Sam Lee');
+    for (const [a, p] of [['verify'], ['register', { name: 'Kip', registry: regId }], ['grant', { budget: 50 }]]) assert.equal((await sam.run(a, p)).decision, 'allow', a);
+    await sam.run('play', { as: 'agent' });
+    assert.equal((await sam.run('buy', { shop: 'bakery', item: 'loaf' })).headline, 'Refused: a badge from a federation it doesn’t trust');
+    await sam.post('/api/director', { cue: 'trust', params: { key: 'participants' } });
+    assert.equal((await sam.run('buy', { shop: 'bakery', item: 'loaf' })).classification, 'ACCOUNTABLE_PROTECTED');
+  } finally {
+    for (const h of team) await h.close();
     await game.close();
   }
 });

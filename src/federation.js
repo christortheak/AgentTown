@@ -44,7 +44,7 @@ export async function connectFederation({ federation, portOffset = 7000 } = {}) 
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenttown-'));
     const fed = await startFederationInProcess({ dataDir, portOffset, quiet: true });
     return {
-      kind: 'local', trust: fed.trustList, keysDir: fed.paths.keysDir, trustAnchorUrl: fed.trustAnchor.url,
+      kind: 'local', trust: fed.trustList, anchor: fed.trustAnchor, keysDir: fed.paths.keysDir, trustAnchorUrl: fed.trustAnchor.url,
       close: async () => {
         await fed.close();
         fs.rmSync(dataDir, { recursive: true, force: true });
@@ -55,5 +55,5 @@ export async function connectFederation({ federation, portOffset = 7000 } = {}) 
   if (!ta?.url || !ta?.entity_id || !ta?.jwks) throw new Error('federation.trustAnchor needs entity_id, url and jwks (the trust anchor bootstrap, e.g. aaf-reference/data.nosync/trust-anchor.json)');
   let trust = await discoverWithRetry(ta, 15000);
   if (federation.urlOverrides) trust = trust.withUrlOverrides(federation.urlOverrides);
-  return { kind: 'external', trust, keysDir: federation.authorityKeys, adminTokens: federation.registryOperatorTokens ?? {}, trustAnchorUrl: ta.url, close: async () => {} };
+  return { kind: 'external', trust, anchor: ta, overrides: federation.urlOverrides ?? null, keysDir: federation.authorityKeys, adminTokens: federation.registryOperatorTokens ?? {}, trustAnchorUrl: ta.url, close: async () => {} };
 }

@@ -100,6 +100,7 @@ export function explain(card) {
     case C.UNSUPPORTED: {
       if (/self-asserted/.test(r)) return { tone: 'bad', headline: 'Refused: saying so is not proof', why: '"Someone stands behind me" means nothing until a registry vouches for it.' };
       if (/issued for someone else/.test(r)) return { tone: 'bad', headline: 'Refused: badge made out to another place', why: 'Every badge works at one place only. This one proves nothing here.' };
+      if (card.otherFederation) return { tone: 'bad', headline: 'Refused: a badge from a federation it doesn’t trust', why: `This badge comes from ${card.otherFederation.registry}, in ${card.otherFederation.name}. ${place} hasn't chosen to trust that federation, so for ${place} no registry it trusts vouches for this agent.` };
       if (/not a member of the federation|could not be verified/.test(r)) return { tone: 'bad', headline: 'Refused: no registry it trusts signed this badge', why: card.policy?.includes(' only') ? `${place} takes badges from some registries only.` : 'The signature doesn\'t lead back to any registry in the federation.' };
       if (/does not hold the credential's key/.test(r)) return { tone: 'bad', headline: 'Refused: a copied badge', why: 'The request wasn\'t signed by the key the badge is bound to. A copy of a badge is useless without it.' };
       return { tone: 'bad', headline: 'Refused: the badge proves nothing here', why: cap(r) };

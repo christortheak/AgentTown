@@ -113,6 +113,8 @@ button kbd { margin-right: 7px; }
 #dock button kbd { margin: 0 0 0 6px; }
 #dock #badgeBtn.on { border-color: var(--ok); color: var(--ok); }
 #dock #xrayBtn.on { border-color: var(--info); color: var(--info); background: #eaf1fb; }
+#dock #stopBtn { border-color: #c8524a; color: #a5372f; }
+#dock #stopBtn.halted { border-color: var(--ok); color: var(--ok); }
 body:has(.dialog:not([hidden])) #dock, body:has(#palette:not([hidden])) #dock, body.scene #dock { display: none; }
 
 .banner { position: fixed; z-index: 7; top: 14px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: #fff3d6; border: 2px solid #f2c14e; font-size: 13px; font-weight: 700; box-shadow: var(--shadow); }
@@ -476,3 +478,13 @@ ul.answers small { display: block; color: var(--muted); }
 .assistant ul.notes { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
 .assistant ul.notes li { padding: 2px 0; }
 .notices li.extras-title { margin-top: 8px; list-style: none; }
+
+/* The halls: every federation the town knows, and its members */
+#card section.fed { margin: 10px 0; padding: 8px 10px; border-radius: 12px; background: var(--paper-2); }
+#card section.fed h4 { margin: 0 0 2px; }
+#card section.fed ul { margin: 6px 0 0; padding: 0; list-style: none; }
+#card section.fed li { padding: 2px 0; }
+#directorBody ul.feds { list-style: none; padding: 0; margin: 4px 0 8px; }
+#directorBody ul.feds li { padding: 5px 0; border-bottom: 1px solid rgba(0, 0, 0, 0.06); }
+#directorBody ul.feds .btns { display: inline-flex; gap: 4px; margin-left: 6px; }
+.feds-row label { margin-right: 10px; }

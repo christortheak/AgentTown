@@ -21,7 +21,7 @@ Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because p
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; and gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper.
+Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper; plays yourself, your agent on errands, your agent, and its sub-agents; runs agents nobody registered and stops everything; and adds a federation by its trust anchor's address and a team's registry and record keeper to the participants' federation, which places trust only if they choose to.
 
 ## Roles
 
@@ -29,7 +29,7 @@ Open the town and pick a role. Each browser tab is its own player, so two tabs (
 
 | Role | What you do |
 |---|---|
-| 🧍 Resident | You walk the town yourself and shop in person. Get verified, register an agent (it follows you; **T** chooses who goes), set your record, bank, trade, spawn sub-agents and send them on errands. Play it straight, or try to get away with something: send your agent without its badge and see who notices. |
+| 🧍 Resident | You walk the town yourself and shop in person. Get verified, register an agent (it follows you), set your record, bank and trade. Send your agent on errands while you stay put, or press **T** to play it yourself, or one of its sub-agents. Play it straight, or try to get away with something: send your agent without its badge and see who notices. |
 | 🏪 Shopkeeper | Run a shop, the bank, the exchange, the fair or the toll. Choose whether to use the framework at all (check badges, pilot it, ignore it, or block agents), which registries you trust and what you ask for (badge, proof of age, World ID, x402); see which of your questions come from you and which from the law; watch every customer's ID check, report a customer to its registry (its principal hears about it, you still don't learn who), or file it with the police. |
 | 🏡 Homeowner | Own a house in Hearthside. Put a passkey on your door; when an agent knocks, your phone shows who stands behind it and you decide. Change the locks when keys go astray. |
 | 👮 Police | Cases arrive from places: refused payments the bank flags, attempted break-ins, a pump spotted at the Exchange. Open cases from any ledger line, and petition the court. |
@@ -73,7 +73,7 @@ The town serves its guide for agents at `/agents.md`, with an index at `/llms.tx
 
 ## People and agents
 
-You start as a person. Places can't see who is at the counter: a request with no badge might be a person or an agent that isn't saying. Each place has a rule for requests with no badge, set by its keeper:
+You start as a person. In town, people are drawn as people (a head, hair, arms and legs) and agents as the round ones with a light on top; the narrator can always tell them apart. Places can't see who is at the counter: a request with no badge might be a person or an agent that isn't saying. Each place has a rule for requests with no badge, set by its keeper:
 
 | Rule | Example | What happens |
 |---|---|---|
@@ -84,6 +84,17 @@ You start as a person. Places can't see who is at the counter: a request with no
 | Agents only | (set it in a shop) | No service without a badge |
 
 The ledger marks agents taken for people (🥸): only the narrator knows; the places never do. Tom shops in person, and sometimes fails the doorman's check. Clank, an honest agent nobody registered, is taken for a person wherever people are taken at their word.
+
+## Agents nobody registered, and stopping everything
+
+You can start an agent without registering it (**Actions → Start an agent without registering it**), as most agents run today. It has no badge, nobody outside can trace it to you, and nothing checks its spending against your record. Places that take people at their word take it for a person; places that check badges turn it away, and it can't sign in with your passkey. Its sub-agents need no registry either, so nothing limits how deep they go. Register it at Town Hall later and it is the same agent, with the same key, now with a badge. **Start and register an agent** does both at once.
+
+**Stop everything** (in the dock) is your kill switch:
+- your own software stops your agent and its sub-agents, and anything out on an errand turns back;
+- your agent's grant is revoked at the Records Office, and every budget it delegated goes with it, so places refuse anything that needs permission;
+- an outside agent you paired is disconnected.
+
+It says what it couldn't reach. A registered agent keeps its badge until you revoke it at Town Hall, and that revocation cascades to every sub-agent. An unregistered one stopped only because it is your software: running anywhere else, nothing would stop it. **Start again** brings your agents back, with no authority until you sign a new grant.
 
 ## Your record (a proposed extension)
 
@@ -110,7 +121,7 @@ Your agent never shows more than the place's rule needs: "over 18", not a birth 
 | **Q** | The **action deck**: every action in town, grouped and searchable, with what you can do right here at the top. Picking an action somewhere else walks you there first. Nothing is hidden. Some actions are refused, and the refusal comes from the service that refused. |
 | **E** | Talk to the place you're standing at (opens the deck there). |
 | **B** | Take your badge off or put it back on. |
-| **T** | Who goes: you, or your agent. |
+| **T** | Who you play: yourself, your agent, or one of its sub-agents. Whoever you play walks and does what you pick; the others stay where you left them, or follow. Playing yourself, you do things in person, and what only an agent does (sub-agents, mischief) you ask your agent to do: it walks there on its own. **Actions → Send Pip on an errand** sends it while you stay. Playing your agent, you can do only what an agent may: verifying, your record and approvals stay with the person. Playing a sub-agent, only what your agent delegated to it. |
 | **X** | The **X-ray**: watch each request travel. Your agent asks its registry for a badge made out to this place only, swaps its grant for a permission slip at the Records Office, sends a signed request; the place checks the badge's status with the registry and the grant with the Records Office, writes to the activity log and answers. The camera pulls back to fit it all in, and the steps are listed in words. Every result card has an X-ray button too. |
 | Click | Walk; click a building to go and talk to it; click anyone to ask for their badge; click the minimap to run there. |
 | 🎬 | The **director**: cues for demos and videos, the law, adoption, each place's policy, and a presenter view. |
@@ -161,6 +172,17 @@ Switching a regime on rebuilds the affected places' rules in place and announces
 
 They are here to show how they relate to the framework, not to implement them. World ID's stand-in keeps its properties (one nullifier per person per action, unlinkable across actions, bound to a signal) but replaces the zero-knowledge proof with a MAC. x402's stand-in follows the v2 shape (402 with `PAYMENT-REQUIRED`, a signed `PAYMENT-SIGNATURE`, a facilitator that verifies before the work and settles after, `PAYMENT-RESPONSE`) with in-memory wallets. What the town shows: personhood is not accountability, and payment is not authority. Each answers a different question, and a place can ask for any combination.
 
+## The halls: several federations
+
+Town Hall is the **Hall of Registries** and the Records Office the **Hall of Record Keepers** (Actions → The Hall of Registries). They list every registry and record keeper in every federation the town knows, and offer two ways to add more:
+
+- **Add a federation by address**: give its trust anchor's address (and, to be sure of its key, a thumbprint to pin). The town learns whom that anchor vouches for. **Start a sample outside federation** in the director's panel runs one, Riverside Co-op, with its own anchor, registry and record keeper.
+- **Admit a registry or record keeper**: into **AgentTown Participants**, a federation the town runs for teams bringing their own implementations. Give the service's address, and the town reads what it says about itself there; or, for a service that must be a member before it can start, paste its entity statement.
+
+Each place decides which federations it trusts: the town's own by default. Shopkeepers tick the others in their panel, and the director can make every place trust one. A badge from a federation a place doesn't trust is refused, and the card says whose it was. Register your agent at any counter whose federation accepts the town's identity verifier: you're enrolled there too, and your grant is kept by that federation's record keeper. When a federation is added, an agent from there visits town.
+
+The reference implementation assumes a single trust anchor. This is prototyped in `src/proposed/` and set out for discussion in [docs/PROPOSED.md](docs/PROPOSED.md) §6.
+
 ## External registries and record keepers
 
 By default the town starts its own in-process federation. To use real, separately hosted services, point it at a trust anchor; every registry and record keeper is discovered from there.
@@ -194,6 +216,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/challenges.js` | Errand races and the board |
 | `AGENTS.md`, `CLAUDE.md` | For coding agents working on AgentTown |
 | `src/proposed/keeper.js`, `src/proposed/driver.js` | Proposed: the principal's record, allowances, statements and the phone's passkey; the agent software that answers a place's question |
+| `src/proposed/anchors.js`, `src/proposed/sample-federation.js` | Proposed: several trust anchors, a view across them, an anchor that admits members while it runs; a sample outside federation |
 | `src/explain.js` | Headlines and reasons in plain words, and ledger lines |
 | `src/sim.js` | Residents, newcomers, sub-agents' errands, bots, the swarm; walks timed on the shared routes |
 | `src/player.js` | A player with an agent, and the full action catalog |

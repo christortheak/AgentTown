@@ -14,7 +14,7 @@ npm start        # http://localhost:4400 (use localhost, not 127.0.0.1: passkeys
 npm test         # the whole suite, one test file at a time; a few minutes
 ```
 
-- Each test starts its own town on its own port (4490s, with its own `portOffset`) and runs town time 25× faster (`timeScale: 25`). Pick a free port and offset for a new test.
+- Each test starts its own town on its own port (4490s, with its own `portOffset`) and runs town time 25× faster (`timeScale: 25`). Pick a free port and offset for a new test. A town's sample outside federation listens at `4150 + portOffset` and the next port, and the participants' test uses 15501–15502.
 - Tests that run the CLI give it a scratch `HOME`: the CLI writes `~/.agenttown.json`, and a test must never touch the real one.
 - There is no build step and no bundler. The browser loads `public/*.js` as ES modules; the server shares `public/map.js` and `public/route.js`, so keep those free of DOM code.
 
@@ -22,6 +22,7 @@ npm test         # the whole suite, one test file at a time; a few minutes
 
 - **Don't edit `../aaf-reference`.** The local folder is a snapshot, not a git checkout, and may be behind the framework's own repository. Use it as it is.
 - Changes we'd like in the framework are prototyped here, in `src/proposed/`, and set out for discussion in [docs/PROPOSED.md](docs/PROPOSED.md). Label anything built on them as proposed in the UI.
+- The framework assumes one trust anchor; the town prototypes several (`src/proposed/anchors.js`). `world.trust` is a view across every federation the town knows, and each place's view keeps to the federations it trusts. Use `world.keeperFor(registryId, role)` and `world.recordsFor(registryId)`, not `world.authRk` or `world.records()`, wherever an agent may be registered outside the town's federation.
 - The framework's router (`createApp` in `aaf-reference/src/lib/http.js`) handles GET, POST and PUT only. Handlers get `{ req, url, params, query, body, headers }`; return `{ __raw: true, status, body, headers }` for anything that isn't a 200 JSON reply.
 
 ## Rules the code keeps

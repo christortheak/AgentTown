@@ -43,7 +43,7 @@ export async function startServer({
   app.get('/api/actions', ({ headers }) => ({ actions: town.actions(me(headers)) }));
   app.get('/api/world', ({ query, headers }) => {
     const s = headers['x-session'] ? me(headers) : null;
-    if (s) sessions.setPos(s, { x: Number(query.x), y: Number(query.y) });
+    if (s) sessions.setPos(s, { x: Number(query.x), y: Number(query.y) }, query.as ? { as: query.as, x: Number(query.ax), y: Number(query.ay) } : null);
     return town.world_(Number(query.since ?? 0), s);
   });
   app.post('/api/do', ({ body, headers }) => sessions.run(me(headers), body?.action, body?.params ?? {}));
@@ -82,6 +82,17 @@ export async function startServer({
   app.post('/api/pair/end', ({ headers }) => ({ ended: sessions.unpair(me(headers)) }));
   app.post('/api/pair/brief', ({ body, headers }) => sessions.setBrief(me(headers), body?.text));
   app.get('/api/board', () => ({ board: sessions.board() }));
+  // The halls: every federation the town knows. Anyone in town may add one or admit a service (each place still
+  // decides whom to trust), and so may the director.
+  app.get('/api/federations', () => ({ federations: town.federationsView() }));
+  app.post('/api/federations', async ({ body, headers }) => {
+    if (!headers['x-director-key'] || headers['x-director-key'] !== directorKey) me(headers);
+    return town.addFederation({ url: body?.url, pin: body?.pin });
+  });
+  app.post('/api/participants', async ({ body, headers }) => {
+    if (!headers['x-director-key'] || headers['x-director-key'] !== directorKey) me(headers);
+    return town.admit({ url: body?.url, statement: body?.statement });
+  });
   // Wrong pairing codes are counted per address (the socket's, not a header anyone can set).
   app.post('/mcp', ({ body, headers, query, req }) => mcp.handle({ body, headers, query, ip: req.socket.remoteAddress ?? 'unknown' }));
   app.get('/mcp', () => ({ __raw: true, status: 405, body: { error: 'method_not_allowed', message: 'This server sends no event stream; POST JSON-RPC to /mcp.' } }));

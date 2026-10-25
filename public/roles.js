@@ -129,6 +129,7 @@ export function renderRolePanel(S) {
         <label title="Proposed extension"><input type="checkbox" data-k="budget" ${p.policy.budget ? 'checked' : ''}> Within its owner's budget</label>
         <label title="Proposed extension: facts from the owner's record, labelled not verified">Also ask for <input data-k="facts" value="${esc((p.policy.facts ?? []).join(', ').replace(/_/g, ' '))}" placeholder="e.g. loyalty card" size="12"></label>
       </div>` : ''}
+      ${checking && S.federations?.length > 1 ? `<div class="policy-row feds-row"><span>Federations you trust:</span>${S.federations.map((f) => `<label title="${esc(f.kind === 'town' ? 'The town’s own federation' : f.kind === 'participants' ? 'Run by the town for teams bringing their own registries and record keepers' : 'Added by its trust anchor’s address')}"><input type="checkbox" data-anchor="${esc(f.key)}" ${!p.policy.anchors || p.policy.anchors.includes(f.key) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>` : ''}
       <h5>What you ask for, and why</h5>
       <ul class="lines">${p.lines.map((l) => `<li><span class="tag ${esc(l.from)}">${esc(FROM[l.from] ?? l.from)}</span>${esc(l.text)}</li>`).join('')}</ul>
       ${S.market ? `<div class="ticker">${S.market.map((m) => `<span><b>${esc(m.id)}</b> $${esc(m.price)} <em class="${m.change >= 0 ? 'up' : 'down'}">${m.change >= 0 ? '▲' : '▼'}${Math.abs(m.change)}%</em></span>`).join('')}</div>` : ''}

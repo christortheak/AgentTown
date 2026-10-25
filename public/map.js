@@ -1788,8 +1788,119 @@ export function drawKey(ctx, t) {
  * `badge` draws the ID card it presents; `mask` is for night visitors;
  * `revoked` greys it out with crossed-out eyes.
  */
+/**
+ * A person: a head with hair, a shirt, arms and legs, and no antenna. Agents are
+ * the round ones with a light on top; a person never has one.
+ */
+function drawPerson(ctx, a, t, look) {
+  const s = look.scale ?? 1;
+  ctx.save();
+  ctx.translate(a.x, a.y);
+  ctx.scale(s, s);
+  if (a.alpha !== undefined) ctx.globalAlpha = a.alpha;
+  const walking = a.walking;
+  const bob = walking ? Math.abs(Math.sin(a.phase)) * 1.5 : Math.sin(t * 2 + (a.seed ?? 0)) * 0.4;
+  const step = walking ? Math.sin(a.phase) * 2.5 : 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath(); ctx.ellipse(0, 0, 9, 3.2, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 2;
+
+  if (!look.robe) {
+    // Legs and shoes, stepping in turn.
+    for (const [x, lift] of [[-4.5, Math.max(0, step)], [4.5, Math.max(0, -step)]]) {
+      ctx.fillStyle = look.pants ?? '#5b6b8a';
+      roundRect(ctx, x - 2.6, -13 - bob, 5.2, 11 - lift, 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = look.feet ?? '#6b4f3a';
+      ctx.beginPath(); ctx.ellipse(x, -2 - lift, 3.6, 2.2, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // Arms, swinging opposite the legs.
+  for (const [x, swing] of [[-10, -step], [10, step]]) {
+    ctx.fillStyle = look.shirt ?? look.body;
+    ctx.beginPath(); ctx.ellipse(x, -20 - bob + swing * 0.6, 3.2, 6.5, x < 0 ? 0.15 : -0.15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = look.skin ?? '#f4d3b5';
+    ctx.beginPath(); ctx.arc(x * 1.04, -14.5 - bob + swing * 0.6, 2.4, 0, Math.PI * 2); ctx.fill();
+  }
+  // Body: a shirt, or a robe to the ground.
+  ctx.fillStyle = look.shirt ?? look.body;
+  ctx.beginPath();
+  if (look.robe) {
+    ctx.moveTo(-8.5, -29 - bob); ctx.lineTo(8.5, -29 - bob); ctx.lineTo(11, -1); ctx.lineTo(-11, -1);
+  } else {
+    ctx.moveTo(-8.5, -29 - bob); ctx.lineTo(8.5, -29 - bob); ctx.lineTo(7.5, -12 - bob); ctx.lineTo(-7.5, -12 - bob);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  if (look.apron) {
+    ctx.fillStyle = look.apron;
+    roundRect(ctx, -5.5, -22 - bob, 11, 10, 2); ctx.fill();
+  }
+  if (look.badge === 'on') {
+    ctx.fillStyle = look.badgeColor ?? '#ffe08a';
+    ctx.beginPath(); ctx.arc(-3.5, -24 - bob, 2.6, 0, Math.PI * 2); ctx.fill(); ctx.lineWidth = 1.2; ctx.stroke(); ctx.lineWidth = 2;
+  }
+
+  // Head, hair and face.
+  const hy = -37 - bob;
+  const fx = a.facing?.x ?? 0;
+  const fy = a.facing?.y ?? 1;
+  const away = fy < 0 && Math.abs(fx) < 0.3;
+  ctx.fillStyle = look.skin ?? '#f4d3b5';
+  ctx.beginPath(); ctx.arc(0, hy, 8.5, 0, Math.PI * 2); ctx.fill();
+  ctx.save();
+  ctx.beginPath(); ctx.arc(0, hy, 8.5, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = look.hair ?? '#6b4a32';
+  ctx.fillRect(-9, hy - 9, 18, away ? 18 : 6);
+  if (!away) ctx.fillRect(fx > 0.3 ? -9 : fx < -0.3 ? 4 : -9, hy - 9, 5, 9);
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(0, hy, 8.5, 0, Math.PI * 2); ctx.stroke();
+  if (look.cap) {
+    ctx.fillStyle = look.cap;
+    roundRect(ctx, -8, hy - 11, 16, 5, 2); ctx.fill(); ctx.stroke();
+    ctx.fillRect(fx * 4 - 5, hy - 6.5, 10, 2);
+  }
+  if (!away) {
+    const ex = fx * 3;
+    ctx.fillStyle = '#3a2c2c';
+    for (const dx of [-3.2, 3.2]) { ctx.beginPath(); ctx.ellipse(ex + dx, hy + 1, 1.2, 1.7, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = 'rgba(255,140,150,0.4)';
+    for (const dx of [-5.5, 5.5]) { ctx.beginPath(); ctx.ellipse(ex + dx, hy + 4, 1.8, 1.1, 0, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.restore();
+  if (a.label) {
+    ctx.font = `700 9px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const w = ctx.measureText(a.label).width + 14;
+    const ly = a.y - 54 * s;
+    ctx.fillStyle = 'rgba(255,250,240,0.92)';
+    roundRect(ctx, a.x - w / 2, ly - 7, w, 13, 6); ctx.fill();
+    ctx.fillStyle = '#5a4636';
+    ctx.fillText(a.label, a.x, ly);
+  }
+}
+
+/** People who play, and the town's own people: one look each, by role. */
+export const PEOPLE_LOOKS = {
+  resident: { person: true, shirt: '#e98a6b', pants: '#5b6b8a', hair: '#6b4a32' },
+  shopkeeper: { person: true, shirt: '#f2c879', apron: '#fffaf0', pants: '#6b5444', hair: '#3e2f25' },
+  homeowner: { person: true, shirt: '#8cc1e8', pants: '#556070', hair: '#b07a4a' },
+  police: { person: true, shirt: '#4f6fa8', pants: '#2c3e66', hair: '#2b2220', cap: '#2c3e66', badge: 'on' },
+  judge: { person: true, shirt: '#2f2a38', robe: true, hair: '#d9d2c8' },
+  council: { person: true, shirt: '#a88bd1', pants: '#4a3f63', hair: '#7a5a3a' },
+  townsfolk: { person: true, shirt: '#7fb685', pants: '#6b5444', hair: '#c48a4a' },
+};
+const SHIRTS = ['#e98a6b', '#7fb685', '#8cc1e8', '#f2c879', '#d98cb3', '#9fa8da', '#e0a96d'];
+const HAIRS = ['#6b4a32', '#2b2220', '#b07a4a', '#d9b26a', '#8a4b2a', '#4a3a30'];
+/** A resident's look, the same every time for the same id, so people can tell residents apart. */
+export function residentLook(id = '') {
+  const h = [...String(id)].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return { ...PEOPLE_LOOKS.resident, shirt: SHIRTS[h % SHIRTS.length], hair: HAIRS[(h >> 4) % HAIRS.length] };
+}
+
 export function drawAgent(ctx, a, t) {
   const look = a.look;
+  if (look?.person) return drawPerson(ctx, a, t, look);
   const s = look.scale ?? 1;
   const revoked = Boolean(look.revoked);
   ctx.save();
@@ -1869,7 +1980,7 @@ export function drawAgent(ctx, a, t) {
     ctx.font = `700 9px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const w = ctx.measureText(a.label).width + 10;
+    const w = ctx.measureText(a.label).width + 14;
     const ly = a.y - 46 * s;
     ctx.fillStyle = 'rgba(255,250,240,0.92)';
     roundRect(ctx, a.x - w / 2, ly - 7, w, 13, 6); ctx.fill();
@@ -1884,7 +1995,7 @@ export function drawBubble(ctx, x, y, text, tone, age) {
   ctx.font = `700 10px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const w = Math.max(24, ctx.measureText(text).width + 14);
+  const w = Math.max(24, ctx.measureText(text).width + 22); // room for the rounded ends
   const by = y - 60 - rise;
   const colors = { ok: '#3f9b5c', bad: '#c8524a', warn: '#c98a1b', info: '#5a4636', think: '#7a68a8' };
   ctx.fillStyle = tone === 'think' ? '#f4f0ff' : '#fffaf0';

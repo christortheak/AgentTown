@@ -18,7 +18,7 @@ import { startRelyingParty } from 'aaf-reference/src/rp/server.js';
 const hasKeys = (keysDir, id) => Boolean(keysDir && fs.existsSync(path.join(keysDir, `${fileNameFor(id)}.json`)));
 const prefer = (list, hint) => list.find((e) => e.id.includes(hint)) ?? null;
 
-export function buildWorld({ trust, keysDir, adminTokens = {} }) {
+export function buildWorld({ trust, keysDir, adminTokens = {}, federations = null }) {
   const registries = trust.registries;
   if (!registries.length) throw new Error('the federation has no registries');
   const regA = prefer(registries, 'registry-a') ?? registries[0];
@@ -33,6 +33,7 @@ export function buildWorld({ trust, keysDir, adminTokens = {} }) {
 
   const world = {
     trust,
+    federations,
     registries,
     regA,
     regB,
@@ -41,7 +42,25 @@ export function buildWorld({ trust, keysDir, adminTokens = {} }) {
     activityRk,
     kyc: verifierEntry ? new IdentityVerifier({ id: verifierEntry.id, keys: loadKeys(verifierEntry.id, keysDir) }) : null,
     court: courtEntry ? new ResolutionAuthority({ id: courtEntry.id, name: courtEntry.name, keys: loadKeys(courtEntry.id, keysDir) }) : null,
-    registryName: (id) => registries.find((r) => r.id === id)?.name ?? id,
+    registryName: (id) => trust.registry(id)?.name ?? id,
+
+    /**
+     * A registry's own record keepers: the ones in its federation for each role. An agent registered in another
+     * federation keeps its grant there, since the town's record keepers can't check its badge (one anchor each).
+     */
+    keeperFor(registryId, role) {
+      const f = federations?.of(registryId);
+      if (!f || f.kind === 'town') return { authorization: authRk, provenance: provRk, activity: activityRk }[role] ?? null;
+      return f.view.recordKeepers.find((rk) => rk.roles?.includes(role)) ?? null;
+    },
+    recordsFor(registryId, provenanceId) {
+      const rk = (role) => world.keeperFor(registryId, role);
+      return [
+        ...(rk('authorization') ? [{ role: 'authorization', rk: rk('authorization').id }] : []),
+        ...(provenanceId && rk('provenance') ? [{ role: 'provenance', rk: rk('provenance').id, ref: provenanceId }] : []),
+        ...(rk('activity') ? [{ role: 'activity', rk: rk('activity').id }] : []),
+      ];
+    },
 
     /** The operator token for a registry, if this town may instruct its operator (court orders). */
     adminToken: (id) => adminTokens[id] ?? (id && hasKeys(keysDir, id) ? loadKeys(id, keysDir).adminToken : null),

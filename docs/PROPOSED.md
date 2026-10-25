@@ -2,7 +2,7 @@
 
 Status: a prototype for discussion. Nothing here is part of the Reference Profile or of `aaf-reference`; it lives in `src/proposed/` and is wired into the game so it can be tried. If it holds up, it would be proposed as a change to the profile and the reference implementation.
 
-The framework's central claim is that a counterparty can ask for information and the other side can decide whether to provide it, reliably. AgentTown prototypes four things that make that loop richer, and one that makes its limits visible.
+The framework's central claim is that a counterparty can ask for information and the other side can decide whether to provide it, reliably. AgentTown prototypes four things that make that loop richer, one that makes its limits visible, and one about who gets to run the infrastructure at all (§6).
 
 ## 1. The principal's record
 
@@ -72,6 +72,58 @@ The framework labels agents. It cannot prove that no agent is involved. A reques
 | Agents only | nothing about people | nobody without a badge |
 
 The game knows who was really a person and who wasn't, and counts agents taken for people. The places never know this; only the narrator does. Laws in town govern what places ask of agents. A law that made places check people too would have to require one of the rules above.
+
+## 6. Several trust anchors
+
+### The gap
+
+The paper says: "We expect many registries, organized by jurisdiction, sector, or ecosystem, and we do not assume a single global operator." Anyone may run a registry, and each relying party decides which ones to accept.
+
+The Reference Profile and `aaf-reference` assume one trust anchor (as of the live repository's `efe1934`):
+
+- every party is configured with exactly one anchor (`trust-anchor.json`; `aaf init <url> --pin`) and builds one view of one federation;
+- credential types and trust-mark types are named after that anchor (`<anchor>/vct/accountability/1`, `<anchor>/trust-marks/record-keeper/<role>`), and registries, record keepers and relying parties check those names against their own anchor;
+- each member's Entity Configuration must name that anchor in `authority_hints`;
+- the profile lists it as a design limit: "One trust anchor and one level of subordinates."
+
+So a relying party can choose among the registries in its federation, but it can't accept one from outside it, however willing. "Anyone can run a registry" holds only in the sense that anyone can start a separate federation, an island no relying party elsewhere can use. Membership is decided by one governance body, which also cuts against the paper's aim (§5.4) of keeping participation affordable and competitive.
+
+### The proposal
+
+OpenID Federation already allows all of this; the profile would adopt it.
+
+1. **A relying party trusts a set of anchors.** Its policy names the anchors it trusts and, within them, any registries it limits itself to. No anchor is trusted by default.
+2. **Names that don't depend on one anchor.** Either the profile defines credential and trust-mark types itself (`https://aaf.example/vct/accountability/1`), or a party accepts the names of every anchor it trusts. The first is simpler and keeps one verifier for all federations.
+3. **A view across federations, each member tagged with its anchor.** Verification looks up the issuer, then checks types, trust marks and trust-mark issuers under that issuer's own anchor.
+4. **Registries and record keepers cooperate across anchors.** Cross-registry chains, status pushes and token exchange already work within a federation; with several anchors, a registry or record keeper resolves its peer through whichever anchor it trusts that vouches for that peer. Until then, chains and grants stay within a federation.
+5. **Admission while running.** An anchor admits a member without restarting (OpenID Federation enrollment), and parties pick it up at their next refresh (the profile already requires one every 30 s).
+
+This allows an open market without a gatekeeper: a low-bar anchor that admits any registry passing a technical conformance check, stricter anchors beside it (a regulated-finance federation), and relying parties choosing which to trust, as browsers trust many certificate authorities.
+
+### What AgentTown prototypes
+
+`src/proposed/anchors.js` and `src/proposed/sample-federation.js`, with nothing in `aaf-reference` changed.
+
+- **Three kinds of federation.** The town's own; **AgentTown Participants**, an anchor the town runs that admits a registry or record keeper while it runs (by reading its Entity Configuration at its address, or from its entity statement when it must be a member before it can start); and any other, added by its trust anchor's address, its key taken on first use or pinned by thumbprint. A sample, **Riverside Co-op**, runs its own anchor, registry and record keeper, built from the reference parts (director: *Start a sample outside federation*).
+- **The halls.** Town Hall is the Hall of Registries and the Records Office the Hall of Record Keepers: every registry and record keeper in every federation the town knows, and the two ways to add more.
+- **Places choose.** Each place trusts the town's federation by default; shopkeepers tick the others in their panel, and the director can make every place trust one. A badge from a federation a place doesn't trust is refused, and the card says whose it was: "This badge comes from Riverside Co-op Registry, in Riverside Co-op Federation."
+- **Registering at another counter.** A resident can register an agent at any registry whose federation accepts the town's identity verifier. They are enrolled there too (one enrollment per registry, verified by the same verifier), and the grant is kept by a record keeper in that federation. A shop that trusts that federation checks the badge, the grant and the record keeper's accreditation under that federation's own anchor.
+- **Visitors.** When a federation is added, an agent registered there visits town.
+
+**The shim.** The reference verifier names the type it expects after `trust.trustAnchor`. A `MultiView` answers with the anchor of the federation whose member it was last asked about. The verifier always looks up an issuer and checks the type in the same synchronous step, so that is the issuer's own anchor. It works, but it is exactly what point 3 would make explicit: pass the issuer's anchor to the check.
+
+**Limits.**
+- The town's own registries and record keepers are reference services with one anchor each, so sub-agents registered in another federation, or grants at the town's record keepers for agents registered elsewhere, are refused (point 4).
+- No intermediate authorities, and an anchor's key isn't rolled over.
+- Taking a key on first use is only as good as checking the thumbprint with whoever runs the anchor.
+- Every party in town can add a federation and admit services: fine for a local event, not for a public server.
+
+### Questions
+
+- Who runs anchors, and on what criteria do they admit? Is a conformance check enough for a low-bar anchor?
+- Should relying parties trust no anchor by default, or a well-known few?
+- How is a whole federation withdrawn from trust, and how fast must parties notice?
+- Should a registry belong to several federations (several `authority_hints`), and what does it mean if they disagree about it?
 
 ## Open questions
 

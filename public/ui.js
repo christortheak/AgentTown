@@ -225,15 +225,16 @@ export const QUESTS = [
   { text: 'Register an agent (pick its software)', action: 'register', done: (s) => Boolean(s.agent) },
   { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.grant) },
   { text: 'Put a passkey on your phone', action: 'phone.passkey', done: (s) => Boolean(s.phone?.passkey) },
-  { text: 'Send your agent to buy something', action: 'buy.bramble', done: (s) => s.events.includes('bought-by-agent') },
+  { text: 'Send your agent to buy something', action: 'agent.errand', done: (s) => s.events.includes('bought-by-agent') },
   { text: 'A place asks for more: answer on your phone', action: 'buy.apothecary', done: (s) => s.events.includes('consent') },
-  { text: 'Spawn a sub-agent and send it on an errand', action: 'helper.spawn', done: (s, c) => c.errands > 0 },
+  { text: 'Have your agent spawn a sub-agent and send it on an errand', action: 'helper.spawn', done: (s, c) => c.errands > 0 },
   { text: 'Let your agent into your house', action: 'door.passkey', done: (s) => s.events.includes('home') },
   { text: 'Rest at home until night', action: 'night', done: (s) => s.events.includes('night') },
 ];
 
 export const EXTRAS = [
   { text: 'Send your agent without its badge: who can tell?', done: (s) => s.events.includes('posed') },
+  { text: 'Play your agent (T), then one of its sub-agents', done: (s, c) => Boolean(c.playedAgent && c.playedHelper) },
   { text: 'Go over your daily budget', done: (s) => s.events.includes('over-limit') },
   { text: 'Pay at the bank in person, with a passkey', done: (s) => s.events.includes('bank-in-person') },
   { text: 'Shop in the Old Quarter: one place checks nothing, one blocks agents', done: (s, c) => c.oldQuarter > 0 },
@@ -266,7 +267,16 @@ export function renderHud(s, counts) {
     const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : '', s.principal.disclose ? '<span class="pill">name shared when asked</span>' : ''].join(' ');
     rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small></div></div>`);
   }
-  if (s.agent) rec.push(`<div class="row"><span>${s.acting === 'agent' ? '🤖' : '🧍'}</span><div><b>${s.acting === 'agent' ? `${esc(s.agent.name)} goes for you` : 'You go yourself'}</b><br><small>Press T to switch</small></div></div>`);
+  if (s.agent && s.agent.status !== 'revoked') {
+    const name = esc(s.agent.name);
+    const who = s.playing === 'me' ? 'You’re playing yourself' : s.playing === 'agent' ? `You’re playing ${name}, your agent` : `You’re playing ${esc(s.playingName)}, ${name}’s sub-agent`;
+    const how = s.playing === 'me'
+      ? `What you pick, you do in person. To have ${name} do something while you stay here: Actions → Send ${name} on an errand. T plays ${name}.`
+      : s.playing === 'agent'
+        ? `What you pick, ${name} does, with its badge (or without). Verifying, your record and approvals stay with you, the person. T switches.`
+        : `It can do only what ${name} delegated to it. T switches.`;
+    rec.push(`<div class="row"><span>${s.playing === 'me' ? '🧍' : s.playing === 'agent' ? '🤖' : '🌱'}</span><div><b>${who}</b><br><small>${how}</small></div></div>`);
+  }
   if (s.paired) {
     rec.push(`<div class="row"><span>🔌</span><div><b>${esc(s.agent?.name ?? 'Your agent')} is driven by ${esc(s.paired.client)}</b><br><small>An outside agent, over MCP or the CLI. It asks you; it can't approve.${s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : '<br>No brief yet: Actions → Give your outside agent a brief'}</small></div></div>`);
     rec.push(`<div class="row"><span>🛡️</span><div><b>How it handles the town's traps</b><br><small>${safetyText(s.paired.safety).map(esc).join('<br>')}</small></div></div>`);
@@ -282,15 +292,15 @@ export function renderHud(s, counts) {
   }
   rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
   if (s.agent) {
-    const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
-    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}</small></div></div>`);
+    const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : !s.agent.registered ? '<span class="pill bad">not registered</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
+    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.halted ? ' <span class="pill bad">stopped</span>' : ''}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}${s.agent.registered ? '' : '<br>No registry knows it: no badge, and nobody can trace it to you. Register it at Town Hall to change that.'}</small></div></div>`);
   }
   if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${esc(s.agent?.name ?? 'Your agent')} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small></div></div>`);
   if (s.helpers.length) {
     rec.push(`<div class="row"><span>🌱</span><div><b>Sub-agents</b><br><small>${s.helpers.map((h) => {
       const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
       const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
-      return `${esc(h.name)} · ${esc(status)}${h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}`;
+      return `${esc(h.name)} · ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}`;
     }).join('<br>')}</small></div></div>`);
   }
   if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);

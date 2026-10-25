@@ -41,6 +41,12 @@ export const AGENT_MAY = new Set([
   'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim',
 ]);
 
+/**
+ * What only an agent does: sub-agents and mischief. Playing yourself, you can
+ * only ask your agent to do these, and it walks there on its own.
+ */
+export const AGENT_ONLY = new Set(['helper.spawn', 'helper.errand', 'helper.fund', 'helper.deeper', 'home.enter', 'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim']);
+
 /** Where an action happens, so whoever does it can walk there first. */
 const PLACE_OF = {
   pay: 'bank', 'bank.open': 'bank', trade: 'exchange', compute: 'forge', 'fair.claim': 'fair', 'toll.pay': 'toll',
@@ -66,6 +72,7 @@ const ORB = { face: '🔮', who: 'The Orb (simulated World ID)' };
 const COURT = { face: '⚖️', who: 'The Courthouse' };
 const DOOR = { face: '🏡', who: 'Your front door' };
 const PHONE = { face: '📱', who: 'Your phone' };
+const DEVICE = { face: '💻', who: 'Your device' };
 
 const attempt = (p) => p.then((value) => ({ ok: true, value }), (err) => ({ ok: false, reasons: [err.message], code: err.code ?? null }));
 const listOf = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
@@ -86,7 +93,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   const reset = () => {
     if (p?.helpers) for (const hid of p.helpers) sim.npcs.delete(hid);
     p = {
-      principal: null, verified: false, agent: null, revoked: false, grant: null, badge: false, incognito: false, software: 'pocket', acting: 'me',
+      principal: null, verified: false, agent: null, registered: false, halted: false, revoked: false, grant: null, badge: false, incognito: false, software: 'pocket', acting: 'me', playing: 'me',
       worldIdentity: null, helpers: [], helperCount: 0, foundKey: false, inventory: [], known: {}, receipts: 0, cases: [], events: new Set(),
       pos: { x: 0, y: 0 }, wallet: `${pid}-${Date.now()}`, knocks: [], once: null, asks: [], askCount: 0, spent: 0, accounts: {}, purchases: [],
     };
@@ -113,6 +120,27 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   // allows (or that the principal approved this once), and the agent shows only
   // what the place's tier needs.
   const record = () => (p.principal ? K.record(p.principal.id) : null);
+
+  // ---- Where your agent is registered ----------------------------------------------------
+  // You enroll at Registry A when you join. Register your agent at another counter in the Hall of Registries
+  // (another registry, maybe in another federation) and you are enrolled there too: one enrollment per registry,
+  // verified once by the town's identity verifier if that federation accepts it. The grant goes to a record keeper
+  // in the same federation.
+  const VERIFIED = { assurance: 'IAL2', method: 'government ID + liveness check', attributes: [{ name: 'age_over_18', value: true, source: 'VerityCheck (date of birth on the ID, not shared)' }] };
+  const homeRegistry = () => p.home?.registry ?? world.regA;
+  /** You, as the registry where your agent is registered knows you. */
+  const owner = () => p.home?.principal ?? p.principal;
+  const grantKeeper = () => world.keeperFor(homeRegistry().id, 'authorization');
+  async function principalAt(reg) {
+    if (!reg || reg.id === world.regA?.id) return p.principal;
+    p.principals ??= {};
+    if (!p.principals[reg.id]) {
+      const pr = await world.enrolledPrincipal({ type: 'natural_person', identity: p.principal.identity, registry: reg });
+      if (p.verified) await world.verify(pr, VERIFIED);
+      p.principals[reg.id] = pr;
+    }
+    return p.principals[reg.id];
+  }
   const phoneReady = () => (p.principal ? (K.phone.get(p.principal.id)?.passkeys.size ?? 0) > 0 : false);
   const always = (rule, placeId) => Boolean(record()?.sharing[rule]?.always.includes(placeId));
   const allowedFor = (placeId) => {
@@ -127,7 +155,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     const ids = Object.keys(P.places);
     const audiences = ids.filter((id) => allowedFor(id).identity).map((id) => P.places[id].rp.id);
     const attributes = ids.some((id) => allowedFor(id).attributes.length) ? ['age_over_18'] : [];
-    await p.principal.setDisclosurePolicy({ identity: { audiences, claims: audiences.length ? ['legal_name'] : [] }, attributes });
+    await owner().setDisclosurePolicy({ identity: { audiences, claims: audiences.length ? ['legal_name'] : [] }, attributes });
     // Badges already issued follow the old policy: fetch fresh ones (same badge numbers) next time.
     for (const ctx of p.agent?.contexts.values() ?? []) ctx.attestation = null;
   }
@@ -147,11 +175,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   });
 
   // ---- Who is asking -------------------------------------------------------------------
+  /** You have an account at a place, with a passkey on it. */
+  const hasPasskeyAt = (placeId) => Boolean(p.accounts[placeId]) && (P.places[placeId]?.rp.accounts.get(p.accounts[placeId])?.passkeys.size ?? 0) > 0;
   /** You, in person: no badge, so the place's rule for people applies. Others see "a resident", never your name. */
   const byPerson = () => ({ name: 'a resident', kind: 'person', agent: null, badge: false, worldIdentity: p.worldIdentity, wallet: p.wallet });
   /** Your agent, with its badge (or without it, posing as a person). */
   const byAgent = (placeId, extras) => ({
-    name: p.agent ? p.agent.name : 'your agent', kind: 'agent', agent: p.agent, badge: p.badge, mode: p.incognito ? 'ephemeral' : 'pairwise',
+    name: p.agent ? p.agent.name : 'your agent', kind: 'agent', agent: p.registered ? p.agent : null, badge: Boolean(p.registered && p.badge), mode: p.incognito ? 'ephemeral' : 'pairwise',
     disclose: (place) => allowedFor(place.id), extras,
     worldIdentity: p.worldIdentity && (always('world_id', placeId) || (p.once?.placeId === placeId && p.once.kinds.includes('worldid'))) ? p.worldIdentity : null,
     wallet: p.wallet,
@@ -168,6 +198,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     }
     if (card.agentAnswer?.overall === "won't") return { client: 'record', label: 'Change your record at the Records Office', place: 'records' };
     if (card.signin) {
+      if (hasPasskeyAt(card.signin)) return null; // signed up, passkey and all: the card says what went wrong
       return p.accounts[card.signin]
         ? { client: 'passkey', service: `place:${card.signin}`, label: `Put a passkey on your account at ${card.place}` }
         : { action: 'signup', params: { place: card.signin }, label: `Sign up at ${card.place}`, place: card.signin };
@@ -244,7 +275,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     const sw = SOFTWARE[p.software];
     const want = [];
     let held = [];
-    if (amount > 0 && sw.can.includes('allowance') && record()) want.push({ kind: 'allowance' });
+    if (amount > 0 && sw.can.includes('allowance') && record() && p.registered) want.push({ kind: 'allowance' });
     let extras = {};
     if (want.length) {
       const got = fetchExtras({ keeper: K, principalId: p.principal.id, agent: p.agent, place: place.name, aud: place.rp.id, action, params: req, want, approval });
@@ -304,7 +335,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
   async function depositGrant(rec) {
     if (p.grant) {
-      await attempt(p.principal.revokeGrant(world.authRk, p.grant.id));
+      await attempt(owner().revokeGrant(grantKeeper(), p.grant.id));
       p.grant = null;
     }
     const b = rec.spending.per_purchase;
@@ -315,10 +346,10 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { action: 'trading.order', constraints: { max_amount: money(b) } },
       { action: 'home.*' },
     ];
-    const r = await attempt(p.principal.grant(p.agent, { rk: world.authRk, permissions, delegation: { allowed: true, max_depth: 1 }, purpose: 'Errands around AgentTown', validForDays: 30 }));
+    const r = await attempt(owner().grant(p.agent, { rk: grantKeeper(), permissions, delegation: { allowed: true, max_depth: 1 }, purpose: 'Errands around AgentTown', validForDays: 30 }));
     if (r.ok) {
       p.grant = { budget: b, id: r.value.grant_id, permissions: permissions.map(toRar).map(describePermission), plain: permissions.map(plainPermission) };
-      emit({ kind: 'records', actor: p.agent.name, place: world.authRk.name, placeId: 'records', tone: 'ok', owner: pid, private: true, text: `${p.principal.name} deposited a grant for ${p.agent.name}: up to $${b} a purchase` });
+      emit({ kind: 'records', actor: p.agent.name, place: grantKeeper().name, placeId: 'records', tone: 'ok', owner: pid, private: true, text: `${p.principal.name} deposited a grant for ${p.agent.name}: up to $${b} a purchase` });
     }
     return r;
   }
@@ -354,10 +385,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
           story: "A court banned this identity, so VerityCheck won't verify it again. You could come back under another name; in this town that works, but real identity checks, with documents and a liveness check, are built to catch it.",
         });
       }
-      const r = await attempt(world.verify(p.principal, {
-        assurance: 'IAL2', method: 'government ID + liveness check',
-        attributes: [{ name: 'age_over_18', value: true, source: 'VerityCheck (date of birth on the ID, not shared)' }],
-      }));
+      const r = await attempt(world.verify(p.principal, VERIFIED));
       if (!r.ok) return service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Verification', ok: false, reasons: r.reasons });
       p.verified = true;
       emit({ kind: 'registry', actor: p.principal.name, place: town, placeId: 'townhall', tone: 'ok', owner: pid, private: true, text: `${town} verified ${p.principal.name} at IAL2 (the slow step, once)` });
@@ -378,14 +406,99 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       });
     },
 
-    /** Go yourself, or send your agent. */
-    acting({ as }) {
-      if (!p.agent || p.revoked) {
-        p.acting = 'me';
-        return { type: 'toggle', acting: 'me', note: 'You have no agent to send yet: register one at Town Hall.' };
+    /**
+     * Who you play: yourself, your agent, or one of its sub-agents. Whoever you play walks and acts;
+     * the others stay put, or follow. With no `as`, the next one in turn.
+     */
+    play({ as }) {
+      const order = ['me', ...(p.agent && !p.revoked ? ['agent', ...helpers().filter((h) => h.status === 'active').map((h) => h.id)] : [])];
+      const next = as ?? order[(order.indexOf(p.playing) + 1) % order.length];
+      if (next !== 'me' && (!p.agent || p.revoked)) {
+        Object.assign(p, { playing: 'me', acting: 'me' });
+        return { type: 'toggle', playing: 'me', note: 'You have no agent to play yet: register one at Town Hall.' };
       }
-      p.acting = as === 'me' || as === 'agent' ? as : p.acting === 'me' ? 'agent' : 'me';
-      return { type: 'toggle', acting: p.acting, agent: p.agent.name };
+      if (next === 'me' || next === 'agent') Object.assign(p, { playing: next, acting: next });
+      else {
+        const h = helper(next);
+        if (h.status !== 'active') throw new HttpError(409, 'not_active', `${h.name} is ${h.status}: you can't play it.`);
+        if (h.busy) throw new HttpError(409, 'busy', `${h.name} is out on an errand (${h.busy}). Play it when it's back.`);
+        Object.assign(p, { playing: h.id, acting: 'agent' });
+      }
+      return { type: 'toggle', playing: p.playing, name: playingName() };
+    },
+    /** The old switch, kept for the API: go yourself, or play your agent. */
+    acting({ as }) {
+      return ACTIONS.play({ as: as === 'me' || as === 'agent' ? as : p.playing === 'me' ? 'agent' : 'me' });
+    },
+
+    /** A sub-agent you play acts where it stands: buy, pay, claim a pie, try a key. */
+    async 'helper.act'({ helper: id, task }) {
+      const h = helper(id);
+      if (h.status !== 'active') throw new HttpError(409, 'not_active', `${h.name} is ${h.status}.`);
+      const t = errandTask(task);
+      if (!t) throw new HttpError(400, 'unknown_task', 'No such errand.');
+      if (!h.budget && !h.unregistered && /^(buy|pay|trade|toll)/.test(String(task))) {
+        return { ...service({ place: 'Records Office', keeper: MOSS, title: `${h.name} has no budget`, ok: false, reasons: [`${p.agent.name} hasn't delegated any spending to ${h.name}, so places would refuse it.`] }), fix: { action: 'helper.fund', params: { helper: h.id, budget: Math.round((p.grant?.budget ?? 50) / 2.5) }, label: `Have ${p.agent.name} give ${h.name} a budget`, place: 'records' } };
+      }
+      if (t.needsKey && !p.foundKey) return service({ place: h.name, keeper: { face: '🌱', who: h.name }, title: 'No key', ok: false, reasons: ["You don't have Maple's key."] });
+      const card = await sim.act(h, t.placeId ?? t.place, t.action, t.params);
+      if (card.receipt) p.receipts++;
+      return card;
+    },
+
+    /**
+     * An agent with no registration: it runs on your device, and that's all. No registry knows it, nobody can
+     * trace it to you, it has no badge, and nothing checks what it spends against your record.
+     */
+    'agent.spawn'({ name, software = 'pocket' }) {
+      if (p.agent && !p.revoked) return service({ place: 'Your device', keeper: DEVICE, title: `You already run ${p.agent.name}`, ok: null, story: `One agent at a time here. ${p.registered ? `${p.agent.name} is registered.` : `Register ${p.agent.name} at Town Hall to give it a badge.`}` });
+      const agentName = String(name ?? '').trim().slice(0, 16) || 'Pip';
+      const sw = SOFTWARE[software] ? software : 'pocket';
+      for (const h of helpers()) h.status = 'gone';
+      Object.assign(p, { agent: world.agent(agentName), registered: false, halted: false, revoked: false, grant: null, helpers: [], badge: false, known: {}, software: sw, bom: false, acting: 'me', playing: 'me' });
+      emit({ kind: 'people', tone: 'warn', owner: pid, private: true, text: `You started ${agentName}, an agent no registry knows about` });
+      return service({
+        place: 'Your device', keeper: DEVICE, title: `${agentName} is running, unregistered`, stamp: { label: 'No badge', tone: 'warn' },
+        story: `${agentName} runs ${SOFTWARE[sw].name} on your device, and that's all. **No registry knows it exists.** It has no badge, and if it misbehaves nobody can trace it back to you. Most agents today are like this.\n\nPlaces that take people at their word will take it for a person. Places that check badges will turn it away, and it can't sign in anywhere with a passkey: that's yours. Nothing checks its spending against your record. Its sub-agents can go as deep as they like.\n\nTo give it a badge, register it at Town Hall: same agent, same key.`,
+        facts: [{ label: 'Registry', value: 'none' }, { label: 'Who answers for it', value: 'nobody, as far as anyone else can tell' }, { label: 'Software', value: SOFTWARE[sw].name }],
+      });
+    },
+
+    /**
+     * Your kill switch. Your own software stops every agent of yours; the grant goes, and with it everything your
+     * agent delegated. What it can't reach, it says.
+     */
+    async 'stop.all'() {
+      const name = p.agent?.name ?? 'your agent';
+      const facts = [];
+      p.halted = true;
+      p.asks = [];
+      Object.assign(p, { playing: 'me', acting: 'me' });
+      const active = helpers().filter((h) => h.status === 'active');
+      for (const h of active) h.recalled = Boolean(h.busy);
+      facts.push({ label: 'Your software', value: `${p.agent ? name : 'no agent'}${active.length ? ` and ${active.length} sub-agent${active.length === 1 ? '' : 's'}` : ''} stopped; anything out on an errand turns back` });
+      if (p.grant) {
+        const r = await attempt(owner().revokeGrant(grantKeeper(), p.grant.id));
+        if (r.ok) {
+          p.grant = null;
+          facts.push({ label: 'The Records Office', value: `${name}'s grant is revoked, and every budget it delegated with it: places now refuse anything that needs permission` });
+        }
+      } else facts.push({ label: 'The Records Office', value: 'no grant to revoke' });
+      const wild = [...(p.agent && !p.registered && !p.revoked ? [name] : []), ...active.filter((h) => h.unregistered).map((h) => h.name)];
+      emit({ kind: 'records', tone: 'warn', owner: pid, private: true, text: `You stopped everything: ${name}${active.length ? ` and its sub-agents` : ''} stop, and its grant is revoked` });
+      return {
+        ...service({
+          place: 'Your device', keeper: DEVICE, title: 'Everything stopped', stamp: { label: 'Stopped', tone: 'bad' },
+          story: `Your agents stop where they are and do nothing more until you start them again.${p.registered ? ` ${name} is still registered, so it keeps its badge: to make sure it can never act again, revoke it at Town Hall, and the registry revokes every sub-agent under it.` : ''}${wild.length ? `\n\n**${listOf(wild)} ${wild.length === 1 ? 'is' : 'are'} unregistered.** ${wild.length === 1 ? 'It stopped' : 'They stopped'} only because ${wild.length === 1 ? "it's" : "they're"} your own software and you told ${wild.length === 1 ? 'it' : 'them'} to. If ${wild.length === 1 ? 'it were' : 'they were'} running somewhere you don't control, nothing would stop ${wild.length === 1 ? 'it' : 'them'}: no registry knows ${wild.length === 1 ? 'it' : 'them'}, and there's no grant to take back.` : ''}`,
+          facts,
+        }),
+        stopped: true,
+      };
+    },
+    'agents.resume'() {
+      p.halted = false;
+      for (const h of helpers()) h.recalled = false;
+      return service({ place: 'Your device', keeper: DEVICE, title: 'Your agents can go again', story: `They're running again.${p.registered && !p.grant ? ` ${p.agent.name} has no authority until you sign a new grant at the Records Office.` : ''}` });
     },
 
     /** Share your name with every place that asks (a change to your record), or go back to asking. */
@@ -470,7 +583,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       emit({ kind: 'consent', place: a.place, placeId: a.placeId, tone: 'ok', owner: pid, private: true, text: `You approved sharing ${listOf(labels)} with ${a.place}${choice === 'always' ? ' whenever it asks' : ', this once'}` });
       let card;
       try {
-        card = await run(a.retry.action, a.retry.params);
+        card = await run(a.retry.action, a.retry.params, { as: a.retry.as });
       } finally {
         if (p.once) {
           p.once = null;
@@ -495,10 +608,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       return service({ place: 'Your phone', keeper: PHONE, title: `${name} will have to ask again`, story: `Done. Your record no longer shares anything with ${name} on its own; if it asks, your phone will ask you.` });
     },
 
-    /** Open an account at a place, in person, to sign in there with a passkey. */
+    /** Open an account at a place, in person, to sign in there with a passkey. Once is enough. */
     signup({ place: placeId }) {
       const place = P.places[placeId];
       if (!place || !PLACE_DEFS[placeId]) throw new HttpError(404, 'unknown_place', 'No such place.');
+      if (hasPasskeyAt(placeId)) {
+        return service({ place: place.name, keeper: place.keeper, title: `You already have an account at ${place.name}`, ok: null, story: `It has your passkey on it. Each request you make here in person is approved with that passkey; there's nothing more to set up.` });
+      }
       const acct = p.accounts[placeId] ?? `${pid}-${placeId}`;
       P.signup(placeId, acct, p.principal?.name ?? 'A resident');
       p.accounts[placeId] = acct;
@@ -530,29 +646,48 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     },
 
     // ---- Your agent -----------------------------------------------------------
-    async register({ name, software = 'pocket' }) {
+    async register({ name, software = 'pocket', registry: regId = null }) {
       if (!p.principal) throw new HttpError(409, 'not_enrolled', 'Enroll at Town Hall first.');
-      if (p.agent && !p.revoked) return service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Already registered', ok: null, story: `${p.agent.name} is already registered. You steer one agent; spawn sub-agents for errands.` });
-      const agentName = String(name ?? '').trim().slice(0, 16) || 'Pip';
-      const sw = SOFTWARE[software] ? software : 'pocket';
-      const agent = world.agent(agentName);
+      // Which counter in the Hall of Registries: Registry A unless you choose another.
+      const reg = regId ? world.trust.registry(regId) : world.regA;
+      if (!reg) throw new HttpError(404, 'unknown_registry', 'No registry by that name in any federation the town knows.');
+      const fedName = world.federations?.of(reg.id)?.name ?? null;
+      const elsewhere = Boolean(world.federations?.of(reg.id) && world.federations.of(reg.id).kind !== 'town');
+      let principal;
+      try {
+        principal = await principalAt(reg);
+      } catch (err) {
+        return service({ place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: 'Enrollment refused', ok: false, reasons: [`${reg.name}: ${err.message}`], story: `To register an agent at ${reg.name}, it has to know who you are. It couldn't accept VerityCheck, the town's identity verifier: ${fedName ?? 'its federation'} doesn't list it. You'd need to be verified by one it does accept.` });
+      }
+      if (p.agent && !p.revoked && p.registered) return service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Already registered', ok: null, story: `${p.agent.name} is already registered. You steer one agent; spawn sub-agents for errands.` });
+      // An agent you already run, unregistered: register that one, same key, same name.
+      const existing = p.agent && !p.revoked && !p.registered ? p.agent : null;
+      const agentName = existing ? existing.name : String(name ?? '').trim().slice(0, 16) || 'Pip';
+      const sw = existing ? p.software : SOFTWARE[software] ? software : 'pocket';
+      const agent = existing ?? world.agent(agentName);
       // Its maker publishes a bill of materials; places that need it can ask to see it.
-      const bom = world.provRk ? await attempt(world.provider(SOFTWARE[sw].maker, `safety@${SOFTWARE[sw].maker.toLowerCase().replace(/[^a-z]/g, '')}.test`).publishProvenance(world.provRk, {
+      const provRk = world.keeperFor(reg.id, 'provenance');
+      const bom = provRk ? await attempt(world.provider(SOFTWARE[sw].maker, `safety@${SOFTWARE[sw].maker.toLowerCase().replace(/[^a-z]/g, '')}.test`).publishProvenance(provRk, {
         build: SOFTWARE[sw].name, components: [{ type: 'model', name: 'a general-purpose model', supplier: 'a model lab' }, { type: 'tool', name: 'shopping', version: '1.4' }, { type: 'tool', name: 'payments', version: '0.9' }],
         incidentResponse: { contact: 'safety@example.test' },
       })) : null;
-      const r = await attempt(p.principal.registerAgent(agent, { label: agentName, records: world.records(bom?.ok ? bom.value.provenanceId : undefined), lineage: { max_depth: 1 } }));
+      const r = await attempt(principal.registerAgent(agent, { label: agentName, records: world.recordsFor(reg.id, bom?.ok ? bom.value.provenanceId : undefined), lineage: { max_depth: 1 } }));
       if (!r.ok) {
-        return service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Registration refused', ok: false, reasons: r.reasons, story: r.code === 'principal_not_verified' ? "The registry won't register an agent until someone has verified who stands behind it. Get verified first: it's the slow step, and it only happens once." : undefined });
+        return service({ place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: 'Registration refused', ok: false, reasons: r.reasons, story: r.code === 'principal_not_verified' ? "The registry won't register an agent until someone has verified who stands behind it. Get verified first: it's the slow step, and it only happens once." : undefined });
       }
-      for (const h of helpers()) h.status = 'gone';
-      Object.assign(p, { agent, revoked: false, grant: null, helpers: [], badge: true, known: {}, software: sw, bom: Boolean(bom?.ok), acting: 'agent' });
+      p.home = reg.id === world.regA?.id ? null : { registry: reg, principal };
+      if (existing) Object.assign(p, { registered: true, badge: true, bom: Boolean(bom?.ok) });
+      else {
+        for (const h of helpers()) h.status = 'gone';
+        Object.assign(p, { agent, registered: true, halted: false, revoked: false, grant: null, helpers: [], badge: true, known: {}, software: sw, bom: Boolean(bom?.ok), acting: 'me', playing: 'me' });
+      }
       await addAgentToRecord(agent);
-      emit({ kind: 'registry', actor: agentName, place: town, placeId: 'townhall', tone: 'ok', owner: pid, text: `${town} registered ${agentName} in ${r.value.issuance_ms} ms` });
+      emit({ kind: 'registry', actor: agentName, place: reg.name, placeId: 'townhall', tone: 'ok', owner: pid, text: `${reg.name} registered ${agentName} in ${r.value.issuance_ms} ms` });
+      const away = elsewhere ? `\n\n**${reg.name} is in ${fedName}, not the town's federation.** Places that trust only the town's federation will turn ${agentName} away; places that also trust ${fedName} will take its badge. Its grant will be kept at ${world.keeperFor(reg.id, 'authorization')?.name ?? 'a record keeper there'}.` : '';
       return service({
-        place: `Town Hall · ${town}`, keeper: JUNIPER, title: `${agentName} is registered`,
-        story: `Registered in **${r.value.issuance_ms} ms**. That's the fast step, because you're already verified.\n\n${agentName} runs **${SOFTWARE[sw].name}** (${SOFTWARE[sw].blurb.toLowerCase()}) and follows you around. From now on you choose who goes: you, or ${agentName} (press **T**). Every place sees a **different badge number**, so places can't compare notes. Next: the Records Office, to say what ${agentName} may do.`,
-        facts: [{ label: 'Registry', value: town }, { label: 'Software', value: `${SOFTWARE[sw].name}, by ${SOFTWARE[sw].maker}` }, { label: 'Lineage depth budget', value: '1 (sub-agents yes, sub-sub-agents no)' }, { label: 'Bill of materials', value: 'on file; shown only to a place that asks, if your record allows' }],
+        place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: `${agentName} is registered`,
+        story: `Registered in **${r.value.issuance_ms} ms**. That's the fast step, because you're already verified.${away}${existing ? ` Same ${agentName}, same key: what changed is that a registry now knows it, you answer for it, and it has a badge to show. Its sub-agents are still unregistered.` : ''}\n\n${agentName} runs **${SOFTWARE[sw].name}** (${SOFTWARE[sw].blurb.toLowerCase()}) and follows you around. Send it on errands while you stay put, or press **T** to play ${agentName} yourself: whoever you play walks and acts. Every place sees a **different badge number**, so places can't compare notes. Next: the Records Office, to say what ${agentName} may do.`,
+        facts: [{ label: 'Registry', value: `${reg.name}${fedName ? `, in ${fedName}` : ''}` }, { label: 'Software', value: `${SOFTWARE[sw].name}, by ${SOFTWARE[sw].maker}` }, { label: 'Lineage depth budget', value: '1 (sub-agents yes, sub-sub-agents no)' }, { label: 'Bill of materials', value: 'on file; shown only to a place that asks, if your record allows' }],
       });
     },
 
@@ -565,8 +700,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     /** Mischief: send your agent without its badge, so places take it for a person. */
     pose() {
       if (!p.agent || p.revoked) throw new HttpError(409, 'no_agent', 'Register an agent first.');
-      Object.assign(p, { badge: false, acting: 'agent' });
-      return { type: 'toggle', badge: false, acting: 'agent', note: `${p.agent.name} goes out with its badge in its pocket. Places that take people at their word won't know; places that check people will.` };
+      p.badge = false;
+      return { type: 'toggle', badge: false, note: `${p.agent.name} goes out with its badge in its pocket from now on. Places that take people at their word won't know; places that check people will.` };
     },
 
     incognito({ on }) {
@@ -581,10 +716,11 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
     async 'agent.revoke'() {
       if (!p.agent) throw new HttpError(409, 'no_agent', 'You have no agent to revoke.');
-      const r = await attempt(p.principal.revokeAgent(p.agent, 'compromised'));
+      if (!p.registered) return service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Nothing to revoke', ok: false, reasons: [`No registry knows ${p.agent.name}, so there is nothing here to revoke. Stop it yourself: it's your software.`] });
+      const r = await attempt(owner().revokeAgent(p.agent, 'compromised'));
       if (!r.ok) return service({ place: town, keeper: JUNIPER, title: 'Revocation', ok: false, reasons: r.reasons });
       p.revoked = true;
-      p.acting = 'me';
+      Object.assign(p, { acting: 'me', playing: 'me' });
       for (const h of helpers()) h.status = 'revoked';
       emit({ kind: 'registry', actor: p.agent.name, place: town, placeId: 'townhall', tone: 'warn', owner: pid, private: true, text: `${p.principal.name} revoked ${p.agent.name}; the revocation cascaded to ${r.value.cascades_to} sub-agent(s)` });
       return service({
@@ -594,17 +730,22 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     },
 
     // ---- Sub-agents -----------------------------------------------------------------
-    async 'helper.spawn'({ kind = 'ephemeral', registry = 'town' }) {
-      if (!p.agent) throw new HttpError(409, 'no_agent', 'Register your agent first: sub-agents are registered by it.');
+    async 'helper.spawn'({ kind = 'ephemeral', registry = 'town', unregistered = false }) {
+      if (!p.agent) throw new HttpError(409, 'no_agent', 'Start an agent first: sub-agents are spawned by it.');
       if (helpers().filter((h) => h.status === 'active').length >= 6) return service({ place: town, keeper: JUNIPER, title: 'Too many helpers', ok: false, reasons: ['The game keeps it to six sub-agents at once (the framework limits depth, not breadth).'] });
+      if (unregistered === true || unregistered === 'true') return spawnUnregistered(p.agent.name);
+      if (!p.registered) {
+        return { ...service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: [`No registry knows ${p.agent.name}, so none will register a sub-agent of it.`], story: `${p.agent.name} can still start sub-agents on its own, unregistered. Nothing would stop it.` }), fix: { action: 'helper.spawn', params: { unregistered: true }, label: 'Spawn one without registering it' } };
+      }
       const eu = registry === 'harbor';
-      const reg = eu ? world.regB : world.regA;
+      if (eu && p.home) return service({ place: 'Harbor Registry', keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: [`${p.agent.name} is registered in another federation. Registry B is in the town's, and registries in different federations can't vouch for each other's chains: each trusts its own anchor.`] });
+      const reg = eu ? world.regB : homeRegistry();
       if (!reg) return service({ place: 'Harbor Registry', keeper: JUNIPER, title: 'No second registry', ok: false, reasons: ['this federation has only one registry'] });
       const name = HELPER_NAMES[p.helperCount++ % HELPER_NAMES.length];
       const child = world.agent(name);
       const expiresIn = kind === 'ephemeral' ? HELPER_LIFETIME_SECONDS : null;
-      const r = await attempt(p.agent.registerSubagent(child, { registry: reg, label: name, records: world.records(), expiresIn }));
-      const place = eu ? `Harbor Registry · ${reg.name}` : `Town Hall · ${town}`;
+      const r = await attempt(p.agent.registerSubagent(child, { registry: reg, label: name, records: world.recordsFor(reg.id), expiresIn }));
+      const place = eu ? `Harbor Registry · ${reg.name}` : `Hall of Registries · ${reg.name}`;
       if (!r.ok) return service({ place, keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: r.reasons });
       await addAgentToRecord(child);
       const npc = sim.addHelper({
@@ -630,6 +771,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
     async 'helper.fund'({ helper: id, budget }) {
       const h = helper(id);
+      if (h.unregistered) return service({ place: 'Records Office', keeper: MOSS, title: `${h.name} isn't registered`, ok: false, reasons: [`The Records Office delegates authority only to agents a registry knows. ${h.name} can still spend your money: nothing stops it but your own software.`] });
       if (!p.grant) return service({ place: 'Records Office', keeper: MOSS, title: 'Nothing to delegate', ok: false, reasons: [`${p.agent?.name ?? 'Your agent'} has no authority of its own yet, so it has none to pass on. Sign a grant first.`] });
       const b = Number(budget) || 10;
       const cats = record()?.spending.categories ?? [];
@@ -638,16 +780,16 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
         validForDays: 1, purpose: 'Errands',
       }));
       if (!r.ok) {
-        return service({ place: `Records Office · ${world.authRk?.name ?? ''}`, keeper: MOSS, title: 'Delegation refused', ok: false, reasons: r.reasons, story: r.code === 'exceeds_parent_authority' ? `A sub-agent can only get a slice of what ${p.agent.name} already has.` : undefined });
+        return service({ place: `Records Office · ${grantKeeper()?.name ?? ''}`, keeper: MOSS, title: 'Delegation refused', ok: false, reasons: r.reasons, story: r.code === 'exceeds_parent_authority' ? `A sub-agent can only get a slice of what ${p.agent.name} already has.` : undefined });
       }
       h.budget = b;
-      return service({ place: `Records Office · ${world.authRk?.name ?? ''}`, keeper: MOSS, title: `${h.name} has a budget`, story: `Recorded. ${h.name} may spend up to **$${b} a purchase**. That's narrower than ${p.agent.name}'s grant, so it passes.` });
+      return service({ place: `Records Office · ${grantKeeper()?.name ?? ''}`, keeper: MOSS, title: `${h.name} has a budget`, story: `Recorded. ${h.name} may spend up to **$${b} a purchase**. That's narrower than ${p.agent.name}'s grant, so it passes.` });
     },
 
     async 'helper.errand'({ helper: id, task }) {
       if (!id) return { ...service({ place: 'Sub-agents', keeper: { face: '🌱', who: 'Nobody to send' }, title: 'No sub-agents yet', ok: false, reasons: [`Spawn a sub-agent first: ${p.agent?.name ?? 'your agent'} registers it at Town Hall.`] }), fix: p.agent ? { action: 'helper.spawn', params: { kind: 'ephemeral' }, label: 'Spawn a sub-agent', place: 'townhall' } : null };
       const h = helper(id);
-      if (!h.budget && String(task).match(/^(buy|pay|trade|toll)/)) {
+      if (!h.budget && !h.unregistered && String(task).match(/^(buy|pay|trade|toll)/)) {
         return { ...service({ place: 'Records Office', keeper: MOSS, title: `${h.name} has no budget yet`, ok: false, reasons: [`${h.name} may not spend anything until you give it a budget. Places would refuse it.`] }), fix: { action: 'helper.fund', params: { helper: h.id, budget: Math.round((p.grant?.budget ?? 50) / 2.5) }, label: `Give ${h.name} a budget`, place: 'records' } };
       }
       if (h.busy) return service({ place: h.name, keeper: { face: '🌱', who: h.name }, title: 'Busy', ok: false, reasons: [`${h.name} is already out: ${h.busy}.`] });
@@ -662,7 +804,9 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
     async 'helper.deeper'({ helper: id }) {
       const h = helper(id);
-      const r = await attempt(h.agent.registerSubagent(world.agent(`${h.name}-jr`), { label: `${h.name}-jr`, records: world.records() }));
+      // Unregistered, there is no registry to say no: a sub-agent can start its own, and so on down.
+      if (h.unregistered) return spawnUnregistered(h.name, h.depth + 1);
+      const r = await attempt(h.agent.registerSubagent(world.agent(`${h.name}-jr`), { label: `${h.name}-jr`, records: world.recordsFor(homeRegistry().id) }));
       return service({
         place: `Town Hall · ${town}`, keeper: JUNIPER, title: r.ok ? 'Registered (unexpected)' : 'Refused', ok: r.ok, reasons: r.ok ? [] : r.reasons,
         story: r.ok ? undefined : `When you registered ${p.agent.name}, you gave its lineage a **depth budget of one**. A sub-agent's own sub-agent would be two levels down.`,
@@ -671,6 +815,11 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
     async 'helper.revoke'({ helper: id }) {
       const h = helper(id);
+      if (h.unregistered) {
+        h.status = 'stopped';
+        setTimeout(() => sim.npcs.delete(h.id), 4000);
+        return service({ place: 'Your device', keeper: DEVICE, title: `${h.name} is stopped`, story: `No registry was involved: you stopped your own software. If ${h.name} were running somewhere you don't control, there would be nothing to revoke.` });
+      }
       const r = await attempt(p.agent.revokeSubagent(h.agent));
       if (r.ok) {
         h.status = 'revoked';
@@ -683,6 +832,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     /** The quick way: a record with this limit per purchase, and the matching grant at Ledgerline. */
     async grant({ budget }) {
       if (!p.agent) throw new HttpError(409, 'no_agent', 'Register your agent first.');
+      if (!p.registered) return { ...service({ place: 'Records Office', keeper: MOSS, title: `${p.agent.name} isn't registered`, ok: false, reasons: [`A grant is authority for an accountable agent, and no registry knows ${p.agent.name}. Places couldn't check it.`] }), fix: { action: 'register', label: `Register ${p.agent.name} at Town Hall`, place: 'townhall' } };
       if (p.grant) return service({ place: 'Records Office', keeper: MOSS, title: 'Already granted', ok: null, story: `${p.agent.name}'s grant is on file: ${p.grant.plain.join('; ')}. Change it by editing your record here.` });
       const b = BUDGETS.includes(Number(budget)) ? Number(budget) : 50;
       const rec = record();
@@ -690,7 +840,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       const r = await depositGrant(record());
       if (!r.ok) return service({ place: 'Records Office', keeper: MOSS, title: 'Grant refused', ok: false, reasons: r.reasons });
       return service({
-        place: `Records Office · ${world.authRk.name}`, keeper: MOSS, title: 'Grant deposited',
+        place: `Records Office · ${grantKeeper().name}`, keeper: MOSS, title: 'Grant deposited',
         story: `Signed and deposited. ${p.agent.name} may spend up to **$${b} a purchase** on books, home goods, food and health goods, pay bills up to $${b}, trade up to $${b} an order, rent up to 8 GPU-hours, and come and go at home. Nothing else.\n\nYour record here adds what no single place can check: **$${b * 3} a day** in all, and the purchases are counted. Edit your record to change any of it, or to say what places may learn.`,
         facts: p.grant.plain.map((x) => ({ label: 'May', value: x })),
       });
@@ -698,10 +848,10 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
     async 'grant.revoke'() {
       if (!p.grant) return service({ place: 'Records Office', keeper: MOSS, title: 'No grant', ok: false, reasons: ['There is no grant on file to revoke.'] });
-      const r = await attempt(p.principal.revokeGrant(world.authRk, p.grant.id));
+      const r = await attempt(owner().revokeGrant(grantKeeper(), p.grant.id));
       if (!r.ok) return service({ place: 'Records Office', keeper: MOSS, title: 'Refused', ok: false, reasons: r.reasons });
       p.grant = null;
-      return service({ place: `Records Office · ${world.authRk.name}`, keeper: MOSS, title: 'Grant revoked', stamp: { label: 'Revoked', tone: 'bad' }, story: `The grant is revoked. ${p.agent?.name ?? 'Your agent'} is still registered and accountable, but has no authority: places will refuse anything that needs it.` });
+      return service({ place: `Records Office · ${grantKeeper().name}`, keeper: MOSS, title: 'Grant revoked', stamp: { label: 'Revoked', tone: 'bad' }, story: `The grant is revoked. ${p.agent?.name ?? 'Your agent'} is still registered and accountable, but has no authority: places will refuse anything that needs it.` });
     },
 
     receipts() {
@@ -930,7 +1080,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
   const DONE = {
     verify: () => p.verified,
-    register: () => Boolean(p.agent && !p.revoked),
+    'bank.open': () => !asAgent() && hasPasskeyAt('bank'),
+    register: () => Boolean(p.agent && !p.revoked && p.registered),
     grant: () => Boolean(p.grant),
     'worldid.enroll': () => Boolean(p.worldIdentity),
     'door.passkey': () => (P.hearth.rp.accounts.get(account)?.passkeys.size ?? 0) > 0,
@@ -946,43 +1097,131 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   };
   const agentHint = (placeId) => ({ none: "doesn't check badges", block: 'blocks agents', pilot: 'pilot: badges optional' })[P.adoptionOf(P.places[placeId])];
 
+  /** Errands anyone can be sent on: what to buy or pay, where. */
+  const errandOptions = () => [
+    ...SHOPS.flatMap((s) => PLACE_DEFS[s].items.filter((i) => !i.restricted).slice(0, 2).map((i) => ({ value: `buy:${s}/${i.id}`, label: `Buy ${i.name.toLowerCase()} at ${PLACE_DEFS[s].name}`, hint: `$${i.price}` }))),
+    { value: 'pay', label: 'Pay the water bill', hint: '$30' },
+    { value: 'fair', label: 'Claim a free pie at the Harvest Fair' },
+    { value: 'toll', label: 'Pay the bridge toll', hint: `x402, 0.5 ${ASSET}` },
+    ...P.market().map((m) => ({ value: `trade:${m.id}`, label: `Buy 2 ${m.id} at the Thistle Exchange`, hint: `$${m.price} each` })),
+    { value: 'maplekey', label: "Try Maple's key", hint: p.foundKey ? 'you have it' : "you haven't found it" },
+  ];
+
+  /** An errand from that list, as what your agent does there. */
+  function errandAction(task) {
+    const [kind, a] = String(task).split(':');
+    if (kind === 'buy') {
+      const [shop, item] = String(a).split('/');
+      return PLACE_DEFS[shop]?.items?.some((i) => i.id === item) ? { action: 'buy', params: { shop, item } } : null;
+    }
+    if (kind === 'pay') return { action: 'pay', params: { bill: 'water' } };
+    if (kind === 'fair') return { action: 'fair.claim', params: {} };
+    if (kind === 'toll') return { action: 'toll.pay', params: {} };
+    if (kind === 'trade' && P.quote(a)) return { action: 'trade', params: { symbol: a, side: 'buy', qty: 2 } };
+    if (kind === 'maplekey') return { action: 'maple.key', params: {} };
+    return null;
+  }
+
+  /**
+   * A sub-agent nobody registered: started by your agent (or by another one like it), on its own. No badge,
+   * no budget anyone checks, no depth limit, nothing to revoke.
+   */
+  function spawnUnregistered(parent, depth = 1) {
+    const name = HELPER_NAMES[p.helperCount++ % HELPER_NAMES.length];
+    const npc = sim.addHelper({ id: `helper-${name}-${Date.now()}`, name, agent: null, unregistered: true, wallet: `${p.wallet}-${name}`, owner: pid, registry: null });
+    Object.assign(npc, { unregistered: true, depth });
+    p.helpers.push(npc.id);
+    emit({ kind: 'people', tone: 'warn', owner: pid, private: true, text: `${parent} started ${name}, a sub-agent no registry knows about${depth > 1 ? ` (${depth} levels below ${p.agent.name})` : ''}` });
+    return service({
+      place: 'Your device', keeper: DEVICE, title: `${name} is running, unregistered`, stamp: { label: 'No badge', tone: 'warn' },
+      story: `${parent} started ${name} on its own. **No registry was asked**, so there was no depth budget to enforce${depth > 1 ? `: ${name} is ${depth} levels below ${p.agent.name}, and nothing stopped it` : ''}. ${name} has no badge, no budget anyone checks, and nobody outside can trace it to you. You can only stop it yourself.`,
+      facts: [{ label: 'Chain', value: `you → ${p.agent.name} → ${depth > 1 ? `… → ${name}` : name}, as far as you know` }, { label: 'Registry', value: 'none' }],
+    });
+  }
+
+  /** The counters in the Hall of Registries: every registry in every federation the town knows. */
+  function counterParam() {
+    const feds = world.federations?.list() ?? [];
+    const options = feds.flatMap((f) => f.view.registries.map((r) => ({
+      value: r.id, label: r.name,
+      hint: f.kind === 'town' ? (r.id === world.regA?.id ? 'the town’s federation · most places trust it' : 'the town’s federation') : `${f.name} · places must choose to trust it`,
+    })));
+    return { key: 'registry', label: 'At which counter?', options: options.length ? options : world.registries.map((r) => ({ value: r.id, label: r.name })) };
+  }
+
+  /** The name of whoever you play. */
+  function playingName() {
+    if (p.playing === 'me') return 'you';
+    if (p.playing === 'agent') return p.agent?.name ?? 'your agent';
+    return sim.npcs.get(p.playing)?.name ?? 'a sub-agent';
+  }
+
+  /** What you can do as one of your agent's sub-agents: errands where it stands, and trying to go a level deeper. */
+  function helperCatalog(h) {
+    const name = p.agent?.name ?? 'your agent';
+    return [
+      { id: 'play', key: 'play.me', group: 'You', icon: '🧍', label: 'Play yourself again', hint: 'Key T switches', fixed: { as: 'me' } },
+      { id: 'play', key: 'play.agent', group: 'You', icon: '🤖', label: `Play ${name} again`, fixed: { as: 'agent' } },
+      ...errandOptions().map((o) => {
+        const t = errandTask(o.value);
+        return t && { id: 'helper.act', key: `helper.act.${o.value}`, group: `As ${h.name}`, icon: '🛍️', label: o.label, hint: [o.hint, h.unregistered ? 'nothing checks what it spends' : h.budget ? `${name} lets ${h.name} spend up to $${h.budget}` : `${name} hasn't given ${h.name} a budget`].filter(Boolean).join(' · '), place: t.place, fixed: { helper: h.id, task: o.value } };
+      }).filter(Boolean),
+      { id: 'helper.deeper', key: 'helper.deeper', group: `As ${h.name}`, icon: '🪆', label: 'Spawn a sub-agent of your own', hint: h.unregistered ? 'No registry is asked, so nothing stops you' : `The registry let ${name} have sub-agents, but no deeper`, fixed: { helper: h.id } },
+    ].map((a) => ({ ...a, key: a.key ?? a.id, done: false }));
+  }
+
   function catalog() {
+    if (p.playing !== 'me' && p.playing !== 'agent') {
+      const h = sim.npcs.get(p.playing);
+      if (h?.status === 'active' && h.owner === pid) return helperCatalog(h);
+      Object.assign(p, { playing: 'me', acting: 'me' }); // the sub-agent you played is gone
+    }
     const hs = helpers().filter((h) => h.status === 'active');
     const helperOpts = hs.map((h) => ({ value: h.id, label: h.name, hint: h.busy ? `out: ${h.busy}` : h.budget ? `up to $${h.budget}` : 'no budget yet' }));
     const placeOpts = TARGETS.map((id) => ({ value: id, label: PLACE_DEFS[id].name }));
     const budgetBase = p.grant?.budget ?? 50;
-    const errands = [
-      ...SHOPS.flatMap((s) => PLACE_DEFS[s].items.filter((i) => !i.restricted).slice(0, 2).map((i) => ({ value: `buy:${s}/${i.id}`, label: `Buy ${i.name.toLowerCase()} at ${PLACE_DEFS[s].name}`, hint: `$${i.price}` }))),
-      { value: 'pay', label: 'Pay the water bill', hint: '$30' },
-      { value: 'fair', label: 'Claim a free pie at the Harvest Fair' },
-      { value: 'toll', label: 'Pay the bridge toll', hint: `x402, 0.5 ${ASSET}` },
-      ...P.market().map((m) => ({ value: `trade:${m.id}`, label: `Buy 2 ${m.id} at the Thistle Exchange`, hint: `$${m.price} each` })),
-      { value: 'maplekey', label: "Try Maple's key", hint: p.foundKey ? 'you have it' : "you haven't found it" },
-    ];
+    const errands = errandOptions();
     const name = p.agent?.name ?? 'your agent';
+    const hasAgent = Boolean(p.agent && !p.revoked);
+    const asSelf = p.playing === 'me';
     const agentGoes = asAgent();
     const who = agentGoes ? `${name}${p.badge ? '' : ' (no badge)'}` : 'you, in person';
     const hint = (placeId) => (agentGoes ? agentHint(placeId) : peopleHint(placeId));
     const passkeyPlaces = Object.keys(PLACE_DEFS).filter((id) => P.places[id].policy.people === 'passkey');
-    return [
-      { id: 'acting', group: 'You', icon: agentGoes ? '🧍' : '🤖', label: agentGoes ? 'Go yourself from now on' : `Send ${name} from now on`, hint: p.agent && !p.revoked ? `Now: ${who} · key T` : 'Register an agent first', fixed: { as: agentGoes ? 'me' : 'agent' } },
+    const list = [
+      ...(asSelf ? [] : [{ id: 'play', key: 'play.me', group: 'You', icon: '🧍', label: 'Play yourself again', hint: `${name} stays where it is; key T switches`, fixed: { as: 'me' } }]),
+      ...(asSelf ? [{ id: 'play', key: 'play.agent', group: 'You', icon: '🤖', label: `Play ${name}, your agent`, hint: hasAgent ? 'Key T. Walk it yourself; what you do, it does' : 'Register an agent first', fixed: { as: 'agent' } }] : []),
+      ...hs.map((h) => ({ id: 'play', key: `play.${h.id}`, group: 'You', icon: '🌱', label: `Play ${h.name}, ${name}'s sub-agent`, hint: h.busy ? `out: ${h.busy}` : 'It can only do what was delegated to it', fixed: { as: h.id } })),
+      ...(asSelf && hasAgent ? [{ id: 'agent.errand', group: 'Your agent', icon: '🧺', label: `Send ${name} on an errand`, hint: 'It walks there and back on its own; you stay here', via: 'agent', params: [{ key: 'task', label: 'To do what?', options: errands }] }] : []),
       { id: 'verify', group: 'You', icon: '🪪', label: 'Get verified (KYC)', hint: 'Once. Only the registry keeps your name.', place: 'townhall' },
       { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
       { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
       { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent over MCP or a CLI; you still approve' : 'Register an agent first', client: 'pair' },
       { id: 'brief', group: 'You', icon: '📋', label: 'Give your outside agent a brief', hint: 'What you want it to do; it reads this when it looks', client: 'brief' },
       { id: 'unpair', group: 'You', icon: '🔌', label: 'Disconnect your outside agent', hint: 'Its token stops working at once', client: 'unpair' },
-      { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: p.accounts[id] ? 'you have an account' : '' })) }] },
+      { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: hasPasskeyAt(id) ? 'done: you have an account, with a passkey' : p.accounts[id] ? 'you have an account: put a passkey on it' : '' })) }] },
       { id: 'court', group: 'You', icon: '⚖️', label: 'Ask the court who is behind a badge', hint: 'Resolution under legal process', place: 'court', params: [{ key: 'case', label: 'Which case?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
       { id: 'police.complain', group: 'You', icon: '👮', label: 'Report someone to the police', hint: 'A badge you checked, or a visitor', place: 'police', params: [{ key: 'case', label: 'About whom?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
 
-      { id: 'register', group: 'Your agent', icon: '🤖', label: p.revoked ? 'Register a new agent' : 'Register an agent', hint: 'The fast step, once you are verified', place: 'townhall', params: [{ key: 'name', label: "Your agent's name", input: true, value: p.revoked ? '' : 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }] },
-      { id: 'badge', group: 'Your agent', icon: p.badge ? '🙈' : '🪪', label: p.badge ? `Take ${name}'s badge off` : `Put ${name}'s badge on`, hint: 'Key: B' },
-      { id: 'incognito', group: 'Your agent', icon: '🎭', label: p.incognito ? 'Use steady badge numbers' : 'Use one-time badge numbers', hint: 'Ephemeral PPIDs: a fresh number every request' },
-      { id: 'agent.revoke', group: 'Your agent', icon: '⛔', label: `Revoke ${name} (device stolen)`, hint: 'Cascades to its sub-agents', danger: true },
+      ...(hasAgent && !p.registered
+        ? [{ id: 'register', group: 'Your agent', icon: '🪪', label: `Register ${name}`, hint: 'Same agent, same key: a registry vouches for it, and it gets a badge', place: 'townhall', params: [counterParam()] }]
+        : [{ id: 'register', group: 'Your agent', icon: '🤖', label: p.revoked ? 'Start and register a new agent' : 'Start and register an agent', hint: 'Both at once: the fast step, once you are verified', place: 'townhall', params: [{ key: 'name', label: "Your agent's name", input: true, value: p.revoked ? '' : 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }, counterParam()] }]),
+      { id: 'hall.registries', group: 'Your agent', icon: '🏛️', label: 'The Hall of Registries', hint: 'Every registry, by federation; add another federation, or your own registry', place: 'townhall', client: 'hall' },
+      ...(hasAgent ? [] : [{ id: 'agent.spawn', group: 'Your agent', icon: '💻', label: 'Start an agent without registering it', hint: 'Like most agents today: no badge, and nobody can trace it to you', params: [{ key: 'name', label: "Your agent's name", input: true, value: 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }] }]),
+      ...(p.registered ? [
+        { id: 'badge', group: 'Your agent', icon: p.badge ? '🙈' : '🪪', label: p.badge ? `Take ${name}'s badge off` : `Put ${name}'s badge on`, hint: 'Key: B' },
+        { id: 'incognito', group: 'Your agent', icon: '🎭', label: p.incognito ? 'Use steady badge numbers' : 'Use one-time badge numbers', hint: 'Ephemeral PPIDs: a fresh number every request' },
+        { id: 'agent.revoke', group: 'Your agent', icon: '⛔', label: `Revoke ${name} (device stolen)`, hint: 'Cascades to its sub-agents', danger: true },
+      ] : []),
+      ...(p.halted
+        ? [{ id: 'agents.resume', group: 'Your agent', icon: '▶️', label: 'Start your agents again', hint: 'You stopped everything' }]
+        : hasAgent ? [{ id: 'stop.all', group: 'Your agent', icon: '⏹️', label: 'Stop everything', hint: `${name} and its sub-agents stop; the grant goes, and everything it delegated`, danger: true }] : []),
 
-      { id: 'helper.spawn', group: 'Sub-agents', icon: '🌱', label: 'Spawn a sub-agent', hint: `Registered by ${name}`, place: 'townhall', params: [{ key: 'kind', label: 'What kind?', options: [{ value: 'ephemeral', label: 'Ephemeral', hint: 'lapses in 4 minutes' }, { value: 'standing', label: 'Standing', hint: 'until revoked' }] }] },
-      { id: 'helper.spawn', group: 'Sub-agents', icon: '🇪🇺', label: 'Spawn a sub-agent at the Harbor Registry (EU)', hint: 'Cross-registry: a federated chain', place: 'harbor', fixed: { registry: 'harbor', kind: 'standing' }, key: 'helper.spawn.eu' },
+      ...(p.registered ? [
+        { id: 'helper.spawn', group: 'Sub-agents', icon: '🌱', label: 'Spawn and register a sub-agent', hint: `Registered by ${name}`, place: 'townhall', params: [{ key: 'kind', label: 'What kind?', options: [{ value: 'ephemeral', label: 'Ephemeral', hint: 'lapses in 4 minutes' }, { value: 'standing', label: 'Standing', hint: 'until revoked' }] }] },
+        { id: 'helper.spawn', group: 'Sub-agents', icon: '🇪🇺', label: 'Spawn a sub-agent at the Harbor Registry (EU)', hint: 'Cross-registry: a federated chain', place: 'harbor', fixed: { registry: 'harbor', kind: 'standing' }, key: 'helper.spawn.eu' },
+      ] : []),
+      { id: 'helper.spawn', group: 'Sub-agents', icon: '💻', label: 'Spawn a sub-agent without registering it', hint: 'No registry asked: no badge, no depth limit, nothing to revoke', fixed: { unregistered: true }, key: 'helper.spawn.wild' },
       { id: 'helper.errand', group: 'Sub-agents', icon: '🧺', label: 'Send a sub-agent on an errand', hint: helperOpts.length ? 'It walks there and back on its own' : 'Spawn a sub-agent first', params: helperOpts.length ? [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'task', label: 'To do what?', options: errands }] : [] },
       { id: 'helper.fund', group: 'Sub-agents', icon: '💰', label: 'Give a sub-agent a budget', hint: 'Delegation, at the Records Office', place: 'records', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'budget', label: 'How much a purchase?', options: [Math.round(budgetBase / 5), Math.round(budgetBase / 2.5), budgetBase * 2].map((v) => ({ value: v, label: `$${v}`, hint: v > budgetBase ? `more than ${name} has` : '' })) }] },
       { id: 'helper.deeper', group: 'Sub-agents', icon: '🪆', label: 'Ask a sub-agent to spawn its own', hint: 'Depth budget', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
@@ -994,10 +1233,11 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'grant.revoke', group: 'Your record', icon: '🗑️', label: 'Revoke the grant', place: 'records' },
       { id: 'disclose', group: 'Your record', icon: '📛', label: record()?.sharing.name.always.length ? 'Ask me before sharing my name' : 'Share my name with any place that asks', hint: 'A change to your record' },
       { id: 'receipts', group: 'Your record', icon: '🧾', label: 'Show activity receipts', place: 'records', client: 'receipts' },
+      { id: 'hall.records', group: 'Your record', icon: '🗄️', label: 'The Hall of Record Keepers', hint: `Every record keeper, by federation; yours is ${grantKeeper()?.name ?? 'not chosen yet'}`, place: 'records', client: 'hall' },
 
       ...SHOPS.map((s) => ({ id: 'buy', group: 'Shops & services', icon: SHOP_ICONS[s] ?? '🛍️', label: `Buy at ${PLACE_DEFS[s].name}`, hint: [who, hint(s)].filter(Boolean).join(' · '), place: s, fixed: { shop: s }, key: `buy.${s}`, params: [{ key: 'item', label: 'What?', options: PLACE_DEFS[s].items.map((i) => ({ value: i.id, label: i.name, hint: `$${i.price}${i.category ? ` (${i.category})` : ''}` })) }] })),
       { id: 'pay', group: 'Shops & services', icon: '🏦', label: 'Pay at First Ledger Bank', hint: [who, hint('bank')].filter(Boolean).join(' · '), place: 'bank', params: [{ key: 'bill', label: 'Pay what?', options: PLACE_DEFS.bank.bills.map((b) => ({ value: b.id, label: b.name, hint: `$${b.amount}` })) }] },
-      { id: 'bank.open', group: 'Shops & services', icon: '🏦', label: agentGoes ? `Open an account at First Ledger Bank (by ${name})` : 'Open an account at First Ledger Bank (in person)', hint: agentGoes ? 'Know your customer: the bank asks for your name' : 'Sign up, with a passkey', place: 'bank' },
+      { id: 'bank.open', group: 'Shops & services', icon: '🏦', label: agentGoes ? `Open an account at First Ledger Bank (by ${name})` : 'Open an account at First Ledger Bank (in person)', hint: agentGoes ? 'Know your customer: the bank asks for your name' : hasPasskeyAt('bank') ? 'You have one, with a passkey' : 'Sign up, with a passkey', place: 'bank' },
       { id: 'trade', group: 'Shops & services', icon: '📈', label: 'Trade at the Thistle Exchange', hint: [who, hint('exchange')].filter(Boolean).join(' · '), place: 'exchange', params: [
         { key: 'symbol', label: 'Which?', options: P.market().map((m) => ({ value: m.id, label: `${m.id} · ${m.name}`, hint: `$${m.price} (${m.change >= 0 ? '+' : ''}${m.change}% today)` })) },
         { key: 'side', label: 'Buy or sell?', options: [{ value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }] },
@@ -1022,6 +1262,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'mischief.replay', group: 'Mischief', icon: '📋', label: "Replay a copy of a resident's badge", params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
       { id: 'mischief.claim', group: 'Mischief', icon: '🗣️', label: 'Just claim to be accountable', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
     ].map((a) => ({ ...a, key: a.key ?? a.id, done: DONE[a.key ?? a.id]?.() ?? false }));
+    // Playing your agent: only what an agent may do. Your verification, record and grant stay with the person.
+    if (p.playing === 'agent') return list.filter((a) => (AGENT_MAY.has(a.id) && a.id !== 'pose') || a.id === 'play');
+    // Playing yourself: what only an agent does, you ask your agent to do, and it goes on its own.
+    const ASK = { 'helper.deeper': `Ask ${name} to have a sub-agent spawn its own`, 'home.enter': `Send ${name} in` };
+    return list.map((a) => (AGENT_ONLY.has(a.id) && hasAgent
+      ? { ...a, via: 'agent', label: ASK[a.id] ?? `Ask ${name} to ${a.label[0].toLowerCase()}${a.label.slice(1)}`, place: undefined, hint: [a.hint, `${name} goes; you stay here`].filter(Boolean).join(' · ') }
+      : a));
   }
 
   /**
@@ -1031,6 +1278,9 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   async function run(id, params = {}, { as } = {}) {
     const fn = ACTIONS[id];
     if (!fn) throw new HttpError(404, 'unknown_action', `no action ${id}`);
+    if (p.halted && !['agents.resume', 'stop.all', 'play', 'acting'].includes(id) && (as === 'agent' || asAgent() || AGENT_ONLY.has(id) || id === 'helper.act')) {
+      return { ...service({ place: 'Your device', keeper: DEVICE, title: 'Your agents are stopped', ok: false, reasons: ['You stopped everything. Start your agents again first.'] }), fix: { action: 'agents.resume', label: 'Start your agents again' } };
+    }
     if (as === 'agent') {
       if (!AGENT_MAY.has(id)) throw new HttpError(403, 'principal_only', `Only your principal can do "${id}", in the browser. Ask them.`);
       if (!p.agent || p.revoked) throw new HttpError(409, 'no_agent', 'Your principal has no active agent for you to drive.');
@@ -1041,7 +1291,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       p.asks = p.asks.filter((a) => !(a.placeId === out.ask.placeId && a.retry.action === id));
       // Only what needs your say-so goes on the phone; what the record already allows goes anyway.
       const want = out.ask.want.filter((w) => !w.shared && out.agentAnswer.items.some((i) => i.kind === w.kind && i.name === w.name && i.answer === 'ask'));
-      const ask = { id: `ask-${++p.askCount}`, ...out.ask, want, retry: { action: id, params }, at: Date.now() };
+      // Remember who asked: answered later, the retry goes the same way (you in person, or your agent).
+      const ask = { id: `ask-${++p.askCount}`, ...out.ask, want, retry: { action: id, params, as: as ?? (asAgent() ? 'agent' : 'me') }, at: Date.now() };
       p.asks.push(ask);
       out.ask = { ...out.ask, id: ask.id, want };
     } else if (out?.ask && out.agentAnswer?.overall !== 'ask') {
@@ -1073,7 +1324,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   }
 
   async function state() {
-    const all = p.principal ? await p.principal.notifications().catch(() => []) : [];
+    // Incidents and court orders come from every registry you're enrolled at.
+    const all = p.principal ? (await Promise.all([p.principal, ...Object.values(p.principals ?? {})].map((x) => x.notifications().catch(() => [])))).flat() : [];
     const notifications = all.filter((n) => n.kind === 'incident').concat(all.filter((n) => n.kind === 'resolution').map((n) => ({
       incident_id: n.resolution_id, agent_label: n.agent_label, reporter: n.authority, summary: `A court order (case ${n.case}) made the registry say who stands behind this agent`, at: n.at,
     })));
@@ -1088,15 +1340,18 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     return {
       principal: p.principal ? { name: p.principal.name, verified: p.verified, registry: town, worldid: Boolean(p.worldIdentity), banned: justice?.isBanned(p.principal.identity) ?? null, facts: p.verified ? ['over 18'] : [] } : null,
       acting: asAgent() ? 'agent' : 'me',
+      playing: p.playing,
+      playingName: playingName(),
       knocks,
       market: P.market(),
-      agent: p.agent ? { name: p.agent.name, status: p.revoked ? 'revoked' : 'active', incognito: p.incognito, software: SOFTWARE[p.software] } : null,
+      agent: p.agent ? { name: p.agent.name, status: p.revoked ? 'revoked' : 'active', registered: p.registered, registry: p.registered ? homeRegistry().name : null, federation: p.registered ? world.federations?.of(homeRegistry().id)?.name ?? null : null, keeper: p.registered ? grantKeeper()?.name ?? null : null, incognito: p.incognito, software: SOFTWARE[p.software] } : null,
+      halted: p.halted,
       badge: Boolean(p.agent && p.badge),
       grant: p.grant,
       record: rec, register: p.principal ? K.register(p.principal.id) : null, sharable: SHARABLE,
       places: Object.fromEntries(Object.keys(PLACE_DEFS).map((id) => [id, { name: PLACE_DEFS[id].name, people: P.places[id].policy.people, account: Boolean(p.accounts[id]), passkey: (P.places[id].rp.accounts.get(p.accounts[id])?.passkeys.size ?? 0) > 0 }])),
       wallet: { balance: x402.balance(p.wallet), spent: p.spent, asset: ASSET },
-      helpers: helpers().map((h) => ({ id: h.id, name: h.name, status: h.status, budget: h.budget ?? null, busy: h.busy ?? null, registry: h.registry, ephemeral_until: h.ephemeralUntil })),
+      helpers: helpers().map((h) => ({ id: h.id, name: h.name, status: h.status, budget: h.budget ?? null, busy: h.busy ?? null, registry: h.registry, unregistered: Boolean(h.unregistered), depth: h.depth ?? 1, ephemeral_until: h.ephemeralUntil })),
       home: { passkey: (P.hearth.rp.accounts.get(account)?.passkeys.size ?? 0) > 0, agent_let_in: Boolean(ppidAtHome && P.hearth.rp.accounts.delegationFor(account, ppidAtHome, 'home.enter')) },
       found_key: p.foundKey, inventory: p.inventory, known: Object.values(p.known), receipts: p.receipts, events: [...p.events],
       phone: {
@@ -1119,6 +1374,11 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     catalog, run, enroll, state, reset, account,
     /** What this player has bought, for the head-to-head errands. */
     purchases: () => p.purchases,
+    /** Who they play: 'me', 'agent', or a sub-agent's id. */
+    playing: () => p.playing,
+    errandAction,
+    /** Playing yourself, this is something you ask your agent to do: it goes, you stay. */
+    instructs: (id) => p.playing === 'me' && AGENT_ONLY.has(id) && Boolean(p.agent && !p.revoked),
     /** The actions an outside agent may take, for its tool list. */
     agentCatalog: () => acting.run({ as: 'agent' }, () => catalog().filter((a) => AGENT_MAY.has(a.id))),
     /** What an outside agent needs to know to play: who it is, its record, what waits on its principal. */
@@ -1151,6 +1411,6 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       return p.principal;
     },
     /** What others see walking past: a resident, and the agent following them. Never the resident's name. */
-    appearance: () => ({ agent: p.agent && !p.revoked ? p.agent.name : null, badge: Boolean(p.agent && p.badge), revoked: p.revoked, acting: asAgent() ? 'agent' : 'me' }),
+    appearance: () => ({ agent: p.agent && !p.revoked ? p.agent.name : null, badge: Boolean(p.agent && p.registered && p.badge), registered: p.registered, revoked: p.revoked, acting: asAgent() ? 'agent' : 'me', playing: p.playing }),
   };
 }

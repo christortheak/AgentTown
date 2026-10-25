@@ -185,22 +185,34 @@ export function needsOf(req) {
   return { identity: req?.accountability === 'disclosed', attributes: [...(req?.attributes ?? [])], provenance: Boolean(req?.provenance) };
 }
 
-export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null, keeper = null }) {
-  const live = world.trust;
-  const down = world.regA ? world.trust.withUrlOverrides({ [world.regA.id]: 'http://127.0.0.1:9' }) : live;
+export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null, keeper = null, federations = null }) {
+  // Every federation the town knows (proposed: several anchors); each place keeps to the ones it trusts.
+  const live = federations ? federations.view() : world.trust;
   const outage = { until: 0 };
-  const base = () => (Date.now() < outage.until ? down : live);
+  let down = null;
+  /** What places can reach: during an outage, everything but Registry A (one view per outage, so lookups stay consistent). */
+  const base = () => {
+    if (Date.now() >= outage.until || !world.regA) return live;
+    if (down?.until !== outage.until) down = { until: outage.until, view: live.withUrlOverrides({ [world.regA.id]: 'http://127.0.0.1:9' }) };
+    return down.view;
+  };
+  /** Which federation lists an entity; a place trusts the federations in its policy (null: every one the town knows). */
+  const fedOf = (id) => federations?.of(id) ?? null;
+  const trusts = (place, id) => !place.policy.anchors || place.policy.anchors.includes(fedOf(id)?.key ?? 'town');
   const symbolic = { town: world.regA?.id, harbor: world.regB?.id };
   const resolveAccepts = (list) => (list ? list.map((x) => symbolic[x] ?? x).filter(Boolean) : null);
   const rulebook = createRulebook({ us: law?.us ?? [], eu: law?.eu ?? [] });
 
-  /** A trust list for one place: its accepted registries only, and Registry A unreachable during an outage. */
+  /** A trust list for one place: the federations it trusts, the registries it accepts, and Registry A unreachable during an outage. */
   const trustFor = (place) => new Proxy({}, {
     get(_, key) {
       const t = base();
       const accepts = place.policy.accepts;
-      if (key === 'registries') return accepts ? t.registries.filter((r) => accepts.includes(r.id)) : t.registries;
-      if (key === 'registry') return (id) => (!accepts || accepts.includes(id) ? t.registry(id) : null);
+      const ok = (id) => trusts(place, id) && (!accepts || accepts.includes(id));
+      if (key === 'registries') return t.registries.filter((r) => ok(r.id));
+      if (key === 'registry') return (id) => (ok(id) ? t.registry(id) : null);
+      if (key === 'recordKeepers') return t.recordKeepers.filter((r) => trusts(place, r.id));
+      if (key === 'recordKeeper') return (id) => (trusts(place, id) ? t.recordKeeper(id) : null);
       const v = t[key];
       return typeof v === 'function' ? v.bind(t) : v;
     },
@@ -281,7 +293,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const cfg = config[id] ?? {};
     const place = {
       id, ...def, adoption: cfg.adoption ?? def.adoption ?? 'full', rules: {}, requests: {}, handlers,
-      policy: { accepts: null, aaf: 'required', age: false, worldid: false, x402: null, people: 'assume', budget: false, facts: [], ...def.policy, ...cfg },
+      policy: { accepts: null, anchors: ['town'], aaf: 'required', age: false, worldid: false, x402: null, people: 'assume', budget: false, facts: [], ...def.policy, ...cfg },
     };
     delete place.policy.adoption;
     place.policy.accepts = resolveAccepts(place.policy.accepts);
@@ -343,7 +355,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const homes = structuredClone(HOME_CONTENTS);
   const accountOf = (rp, p) => p.account ?? rp.accounts.byToken(p.account_token)?.id;
   const hearth = {
-    id: 'hearth', name: 'Hearth & Key', keeper: { face: '🏡', who: 'Hearth & Key' }, adoption: 'full', jurisdiction: 'us', sector: 'housing', policy: { accepts: null, aaf: 'required', worldid: false, x402: null },
+    id: 'hearth', name: 'Hearth & Key', keeper: { face: '🏡', who: 'Hearth & Key' }, adoption: 'full', jurisdiction: 'us', sector: 'housing', policy: { accepts: null, anchors: ['town'], aaf: 'required', worldid: false, x402: null },
     rules: {
       'home.enter': [{ label: 'a home: its owner, or an agent the owner let in', require: { accountability: 'agent_or_human', account: 'owner' } }],
       'home.discard': [{ label: "throwing things out: the owner's passkey every time", require: { accountability: 'established', authorization: true, account: 'owner', humanApproval: true } }],
@@ -371,7 +383,8 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   places.hearth = hearth;
 
   // Your badge reader: ask anyone in town to show you their badge.
-  const reader = { id: 'reader', name: 'Your badge reader', adoption: 'full', policy: { accepts: null, aaf: 'off', worldid: false, x402: null }, rules: { 'id.check': [{ label: 'an ID check', require: { accountability: 'none' } }] } };
+  // Your own badge reader checks a badge from any federation the town knows, and says which.
+  const reader = { id: 'reader', name: 'Your badge reader', adoption: 'full', policy: { accepts: null, anchors: null, aaf: 'off', worldid: false, x402: null }, rules: { 'id.check': [{ label: 'an ID check', require: { accountability: 'none' } }] } };
   reader.rp = await world.relyingParty({
     id: 'reader.agenttown.test', name: 'Your badge reader', trust: trustFor(reader),
     rules: reader.rules,
@@ -492,6 +505,10 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     lines.push({ from: 'keeper', text: p.aaf === 'off' ? 'no badge needed' : 'an accountable agent with permission' });
     if (p.age && place.kind === 'shop') lines.push({ from: 'keeper', text: 'age-restricted goods: verified proof of age' });
     if (p.accepts) lines.push({ from: 'keeper', text: `badges from ${p.accepts.map(world.registryName).join(' or ')} only` });
+    if (p.anchors && federations && (p.anchors.length !== 1 || p.anchors[0] !== 'town')) {
+      const names = p.anchors.map((k) => federations.get(k)?.name ?? k);
+      lines.push({ from: 'keeper', text: names.length ? `trusts ${names.join(' and ')}` : 'trusts no federation at all' });
+    }
     if (p.worldid) lines.push({ from: 'rails', text: 'World ID: one per person (simulated)' });
     if (p.x402) lines.push({ from: 'rails', text: `x402: ${p.x402} ${ASSET}` });
     if (p.budget) lines.push({ from: 'proposed', text: "agents: proof it's within its owner's spending limits" });
@@ -794,6 +811,10 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const ask = !people && r.decision === 'step_up' && !r.approval_request ? askOf(place, tier, shared) : null;
     const card = cardFrom(place, action, by.name, r, steps, extra({ card: { ask, shared, lane: people ? 'people' : 'agents', ...(people ? { seenAs: r.classification === C.HUMAN ? 'a person (signed in with a passkey)' : 'not signed in' } : {}) } }));
     if (r.extPlain?.length) card.plain = [...card.plain, ...r.extPlain];
+    // A badge from a registry the town knows, in a federation this place doesn't trust: say which.
+    const issuer = /credential issuer (\S+) is not a member/.exec((r.reasons ?? []).join(' '))?.[1];
+    const other = issuer && fedOf(issuer);
+    if (other && !trusts(place, issuer)) card.otherFederation = { name: other.name, registry: other.view.registry(issuer)?.name ?? issuer };
     return finish(card);
   }
 
@@ -821,7 +842,9 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   });
 
   return {
-    places, hearth, reader, outage, visit, cardFrom, publicCard, describePolicy, policyLines, asks, resetHomes, takeHouse, claimPlace, report, rulebook, scoreboard, adoptionOf, keeper,
+    places, hearth, reader, outage, visit,
+    /** The federations a place can choose to trust. */
+    federations: () => (federations?.list() ?? []).map((f) => ({ key: f.key, name: f.name, kind: f.kind })), cardFrom, publicCard, describePolicy, policyLines, asks, resetHomes, takeHouse, claimPlace, report, rulebook, scoreboard, adoptionOf, keeper,
     /** A person opens an account at a place, to sign in there with a passkey. */
     signup(placeId, account, owner) {
       const place = places[placeId];
@@ -839,6 +862,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       const changed = changing(() => {
         const next = { ...place.policy, ...patch };
         if ('accepts' in patch) next.accepts = resolveAccepts(patch.accepts);
+        if ('anchors' in patch) next.anchors = patch.anchors === null ? null : [...new Set((Array.isArray(patch.anchors) ? patch.anchors : [patch.anchors]).filter((k) => federations?.get(k)))];
         if ('age' in patch) next.age = Boolean(patch.age);
         if ('budget' in patch) next.budget = Boolean(patch.budget);
         if ('people' in patch && !PEOPLE[patch.people]) throw new HttpError(400, 'bad_people', `people is one of ${Object.keys(PEOPLE).join(', ')}`);

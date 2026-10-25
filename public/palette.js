@@ -55,7 +55,8 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
         if (pinned) sections.push({ title: `Next step · ${pin.text}`, items: [pinned], pinned: true });
         const hereRows = here ? actions.filter((a) => a.place === here.id && matches(a)) : [];
         if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: hereRows });
-        for (const g of GROUPS) {
+        // The usual groups in order, then any others (a sub-agent you play has a group of its own).
+        for (const g of [...GROUPS, ...new Set(actions.map((a) => a.group).filter((x) => x && !GROUPS.includes(x)))]) {
           const items = actions.filter((a) => a.group === g && matches(a) && !(here && a.place === here.id));
           if (items.length) sections.push({ title: g, items });
         }

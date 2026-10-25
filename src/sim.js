@@ -9,7 +9,7 @@ import { digestOf } from 'aaf-reference/src/lib/crypto.js';
 import { HEADERS } from 'aaf-reference/src/lib/protocol.js';
 import { normalizeRecord, signRecord, agentThumbprint, CATEGORIES } from './proposed/keeper.js';
 import { fetchExtras } from './proposed/driver.js';
-import { buildTown, placeFront } from '../public/map.js';
+import { buildTown, placeFront, PEOPLE_LOOKS } from '../public/map.js';
 import { route, routeLength } from '../public/route.js';
 import { PLACE_DEFS } from './places.js';
 import { eventFromCard } from './explain.js';
@@ -21,7 +21,7 @@ export const LOOKS = {
   bot: { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55', scale: 0.85 },
   // An honest agent that was never registered: most agents, today.
   clank: { body: '#c9a77c', hood: '#a3825a', eyes: '#fff6dd', feet: '#5a4632', scale: 0.9 },
-  person: { body: '#ffd9c0', bulb: null, badge: 'none', feet: '#6b4f3a' },
+  person: PEOPLE_LOOKS.townsfolk, // a person, not an agent: no light on top
 };
 
 const RESIDENTS = [
@@ -119,21 +119,23 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   // ---- Residents ------------------------------------------------------------
 
   async function makeAccountable(def) {
-    const registry = def.registry === 'harbor' ? world.regB : world.regA;
+    // A registry by name (another federation's, for a visitor), or the town's: Registry A, or B in the Harbor.
+    const registry = def.registryId ? world.trust.registry(def.registryId) : def.registry === 'harbor' ? world.regB : world.regA;
     if (!registry) return null;
+    const keeperOf = (role) => world.keeperFor(registry.id, role);
     const principal = await world.verifiedPrincipal({ ...def.principal, registry });
     const agent = world.agent(def.name);
     let provenanceId = null;
-    if (def.provenance && world.provRk) {
-      ({ provenanceId } = await world.provider(`${def.principal.identity.legal_name} (in-house)`, 'security@example.test').publishProvenance(world.provRk, {
+    if (def.provenance && keeperOf('provenance')) {
+      ({ provenanceId } = await world.provider(`${def.principal.identity.legal_name} (in-house)`, 'security@example.test').publishProvenance(keeperOf('provenance'), {
         build: `${def.name} 1.0`, components: [{ type: 'model', name: 'a frontier model', supplier: 'a model lab' }, { type: 'tool', name: 'job-scheduler', version: '2.1' }],
         incidentResponse: { contact: 'security@example.test' },
       }));
     }
-    await principal.registerAgent(agent, { label: def.name, records: world.records(provenanceId) });
-    if (world.authRk) {
+    await principal.registerAgent(agent, { label: def.name, records: world.recordsFor(registry.id, provenanceId) });
+    if (keeperOf('authorization')) {
       await principal.grant(agent, {
-        rk: world.authRk,
+        rk: keeperOf('authorization'),
         permissions: [
           { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden', 'health'] } },
           { action: 'payments.authorize', constraints: { max_amount: money(def.budget) } },
@@ -270,6 +272,22 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     x402.wallet(npc.id, def.wallet ?? 20);
     if (def.account) await letIn(npc, def.account);
     residentLife(npc, def.routine);
+    return npc;
+  }
+
+  /**
+   * A visitor from another federation: registered at its registry, its grant kept there. Places that don't trust
+   * that federation turn it away, and say why.
+   */
+  async function visitorFrom(fed) {
+    const registry = fed.view.registries[0];
+    if (!registry || !world.kyc || !fed.view.authority(world.kyc.id, 'verifier') || npcs.has(`visitor-${fed.key}`)) return null;
+    const npc = await addResident({
+      id: `visitor-${fed.key}`, name: `Fennel (from ${fed.name.replace(/ Federation$/, '')})`, body: '#c9e4c5', budget: 40, wallet: 20, registryId: registry.id,
+      principal: { type: 'natural_person', identity: { legal_name: 'Fennel Ward', jurisdiction: 'US-OR' }, assurance: 'IAL2', method: 'government ID + liveness check' },
+      routine: ['shop', 'grocer', 'square', 'apothecary', 'fair', 'shop'],
+    }, { from: placeFront(map, 'eastGate') });
+    if (npc) emit({ kind: 'people', tone: 'info', text: `${npc.name} arrived: an agent registered at ${registry.name}, in ${fed.name}. Places that don't trust that federation will turn it away.` });
     return npc;
   }
 
@@ -471,8 +489,10 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   // ---- The player's sub-agents ---------------------------------------------------
 
-  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner }) {
-    const npc = spawn({ id, name, kind: 'helper', look: LOOKS.helper, agent, worldIdentity, wallet, follow: true, owner, ephemeralUntil, registry, speed: 120, pos: { x: 0, y: 0 } });
+  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner, unregistered = false }) {
+    // Unregistered, it has no badge and its light is dim: nobody vouches for it.
+    const look = unregistered ? { ...LOOKS.helper, bulb: '#cfc6b8', glow: false, badge: 'none' } : LOOKS.helper;
+    const npc = spawn({ id, name, kind: 'helper', look, agent, worldIdentity, wallet, follow: true, owner, ephemeralUntil, registry, speed: 120, pos: { x: 0, y: 0 } });
     x402.wallet(wallet, 5);
     return npc;
   }
@@ -484,6 +504,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     npc.busy = task.label;
     try {
       await walk(npc, task.place);
+      if (npc.recalled) {
+        // Stopped on the way: it turns back without asking the place for anything.
+        npc.recalled = false;
+        await walk(npc, playerPos);
+        return { type: 'service', decision: 'info', title: `${npc.name} turned back`, reasons: [] };
+      }
       const card = await act(npc, task.placeId ?? task.place, task.action, task.params);
       await sleep(900);
       await walk(npc, playerPos);
@@ -507,7 +533,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   }
 
   return {
-    map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor,
+    map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor, visitorFrom,
     async start() {
       for (const def of RESIDENTS) {
         try {

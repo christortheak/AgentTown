@@ -118,17 +118,19 @@ export function createXray({ town, panel, onFinish = () => {} }) {
     if (label) {
       ctx.font = '700 10px ui-rounded, system-ui, sans-serif';
       const text = h.label.length > 52 ? `${h.label.slice(0, 50)}…` : h.label;
-      const w = ctx.measureText(text).width + 12;
+      // Room on each side for the rounded ends, and the text centred on the pill, not on its baseline.
+      const w = ctx.measureText(text).width + 24;
       ctx.fillStyle = 'rgba(255,250,240,0.96)';
       ctx.strokeStyle = h.ok ? '#4f7fbf' : '#c8524a';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.roundRect(-w / 2, -26, w, 16, 8);
+      ctx.roundRect(-w / 2, -31, w, 20, 10);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#4a3a2c';
       ctx.textAlign = 'center';
-      ctx.fillText(text, 0, -14.5);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 0, -20.5);
     }
     ctx.restore();
   }
