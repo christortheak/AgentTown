@@ -658,8 +658,9 @@ const FED_KIND = { town: 'The town’s federation', participants: 'Run by the to
 async function showHall(which = 'registries') {
   const { federations } = await api.get('/api/federations');
   const fedHtml = federations.map((f) => {
-    const regs = f.registries.map((r) => `<li>🏛️ <b>${esc(r.name)}</b> <small class="muted">${esc(r.url ?? '')}${r.chain === 'verified' ? '' : ' · not answering yet'}</small></li>`).join('');
-    const rks = f.recordKeepers.map((k) => `<li>🗄️ <b>${esc(k.name)}</b> <small class="muted">${esc((k.roles ?? []).join(', '))}${k.accredited ? ' · accredited by a registry here' : ' · not accredited yet'}</small></li>`).join('');
+    const check = (id) => `<button class="small quiet" data-check="${esc(id)}" title="Probe what it must answer, without changing anything">Check</button><div class="check" data-for="${esc(id)}"></div>`;
+    const regs = f.registries.map((r) => `<li>🏛️ <b>${esc(r.name)}</b> <small class="muted">${esc(r.url ?? '')}${r.chain === 'verified' ? '' : ' · not answering yet'}</small> ${check(r.id)}</li>`).join('');
+    const rks = f.recordKeepers.map((k) => `<li>🗄️ <b>${esc(k.name)}</b> <small class="muted">${esc((k.roles ?? []).join(', '))}${k.accredited ? ' · accredited by a registry here' : ' · not accredited yet'}</small> ${check(k.id)}</li>`).join('');
     return `<section class="fed"><h4>${esc(f.name)}</h4><small class="muted">${esc(FED_KIND[f.kind] ?? '')} · trust anchor <code>${esc(f.url)}</code>${f.acceptsTownVerifier ? '' : ' · doesn’t accept the town’s ID verifier'}</small>
       <ul>${(which === 'records' ? rks + regs : regs + rks) || '<li class="muted">No registries or record keepers yet.</li>'}</ul></section>`;
   }).join('');
@@ -676,6 +677,23 @@ async function showHall(which = 'registries') {
   if (choice === 'federation') return addFederation();
   if (choice === 'admit') return admitService();
 }
+
+/** The check at the door, as a list: passed, failed, or not yet. */
+const checkHtml = (c) => `<p class="small"><b>${esc(c.passed)} passed${c.failed ? `, ${esc(c.failed)} failed` : ''}</b></p><ul class="checks">${c.results.map((r) => `<li class="${r.ok === true ? 'ok' : r.ok === false ? 'bad' : 'warn'}">${r.ok === true ? '✓' : r.ok === false ? '✗' : '…'} ${esc(r.check)} <small class="muted">${esc(r.detail)}</small></li>`).join('')}</ul>`;
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-check]');
+  if (!b) return;
+  const out = document.querySelector(`.check[data-for="${CSS.escape(b.dataset.check)}"]`);
+  b.disabled = true;
+  out.innerHTML = '<p class="small muted">Checking…</p>';
+  try {
+    out.innerHTML = checkHtml(await api.post('/api/participants/check', { entity_id: b.dataset.check }));
+  } catch (err) {
+    out.innerHTML = `<p class="small bad">${esc(err.message)}</p>`;
+  } finally {
+    b.disabled = false;
+  }
+});
 
 /** A whole federation, by its trust anchor's address, and (to be sure of its key) a thumbprint to pin. */
 async function addFederation() {
@@ -722,7 +740,11 @@ async function admitService() {
   try {
     const a = await api.post('/api/participants', body);
     closeDialog();
-    toast(`${a.name} is now a member of AgentTown Participants${a.type === 'aaf_registry' ? ': it can accredit record keepers there' : ''}`, 'ok');
+    await showCard(`
+      <header><div><span class="eyebrow">AgentTown Participants</span><h3>${esc(a.name)} is admitted</h3></div><div class="stamp ${a.check?.failed ? 'warn' : 'ok'}">${a.type === 'aaf_registry' ? 'registry' : 'record keeper'}</div></header>
+      <p class="why">${a.type === 'aaf_registry' ? 'It can now accredit record keepers in this federation. ' : 'A registry here has to accredit it before places rely on its records. '}No place trusts AgentTown Participants until it chooses to.${a.names_this_anchor || !a.check ? '' : ' It doesn’t name this federation’s trust anchor yet: point it at the bootstrap from /trust-anchor.json.'}</p>
+      ${a.check ? `<h5>The check at the door</h5>${checkHtml(a.check)}` : '<p class="muted small">Admitted by its statement: check it from the hall once it’s running.</p>'}
+      <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
   } catch (err) {
     closeDialog();
     toast(err.message, 'bad');

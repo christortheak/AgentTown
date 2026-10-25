@@ -847,3 +847,59 @@ test('several trust anchors: the halls, a federation added by address, and the p
     await game.close();
   }
 });
+
+test('an event: a team’s services join with the script, the check at the door, and federations for outside agents', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4483, portOffset: 10800, quiet: true, residents: false, timeScale: 25 });
+  let kit = null;
+  try {
+    // What a team fetches: the participants' anchor (to check its key) and the town's verifier and court.
+    const boot = await (await fetch(`${game.url}/trust-anchor.json`)).json();
+    assert.deepEqual([boot.entity_id, typeof boot.thumbprint], ['https://participants.agenttown.test', 'string']);
+    const { members } = await (await fetch(`${game.url}/api/authorities`)).json();
+    assert.ok(members.some((m) => m.entity_type === 'aaf_identity_verifier'));
+
+    // The script joins AgentTown Participants with a registry and a record keeper, and prints the check at the door.
+    kit = spawn('node', ['bin/agenttown-federation.js', '--join', '--town', game.url, '--name', 'Team Green', '--port', '15701'], { cwd: path.resolve('.') });
+    let out = '';
+    await new Promise((resolve, reject) => {
+      kit.stdout.on('data', (d) => {
+        out += d;
+        if (/Stop with Ctrl-C/.test(out)) resolve();
+      });
+      kit.stderr.on('data', (d) => { out += d; });
+      kit.on('exit', () => reject(new Error(`the script stopped: ${out}`)));
+    });
+    assert.match(out, /Team Green Registry: 10 passed, 0 failed/);
+    assert.match(out, /Team Green Records: 10 passed, 0 failed/);
+
+    // The door check on something that isn't a member says what's missing.
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    const nothing = await robin.post('/api/participants/check', { url: 'http://127.0.0.1:9' });
+    assert.deepEqual([nothing.passed, nothing.failed], [0, 1]);
+
+    // A resident registers at the team's counter; an outside agent driving it is told where its badge comes from.
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip', registry: 'https://registry.team-green.test' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
+    const { code } = await robin.post('/api/pair');
+    const rpc = async (args, query = '') => (await (await fetch(`${game.url}/mcp${query}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })).json()).result;
+    const paired = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } });
+    assert.match(paired.content[0].text, /Your badge comes from Team Green Registry, in AgentTown Participants/);
+
+    // A shop's agent sees the federations and chooses which its place trusts.
+    const wren = client(game);
+    await wren.join('shopkeeper', 'Wren Hart', 'bramble');
+    const shop = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'pair', arguments: { code: (await wren.post('/api/pair')).code } } });
+    assert.match(shop.content[0].text, /participants \(AgentTown Participants\)/);
+    const token = shop.structuredContent.token;
+    const set = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'set_policy', arguments: { federations: 'town,participants' } } }) })).json();
+    assert.match(set.result.content[0].text, /trusts The town’s federation and AgentTown Participants/);
+    // Pip's outside agent shops there now: the place checks its badge under the participants' own anchor.
+    const bought = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${paired.structuredContent.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'act', arguments: { action: 'buy', params: { shop: 'bramble', item: 'guide' } } } }) })).json();
+    assert.equal(bought.result.structuredContent.decision, 'allow');
+    assert.match(await (await fetch(`${game.url}/agents.md`)).text(), /## Federations/);
+  } finally {
+    kit?.kill('SIGINT');
+    await new Promise((r) => setTimeout(r, 300));
+    await game.close();
+  }
+});

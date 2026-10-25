@@ -1383,7 +1383,10 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     agentCatalog: () => acting.run({ as: 'agent' }, () => catalog().filter((a) => AGENT_MAY.has(a.id))),
     /** What an outside agent needs to know to play: who it is, its record, what waits on its principal. */
     briefing: () => ({
-      agent: p.agent && !p.revoked ? { name: p.agent.name, software: SOFTWARE[p.software]?.name, badge: p.badge } : null,
+      agent: p.agent && !p.revoked ? {
+        name: p.agent.name, software: SOFTWARE[p.software]?.name, badge: p.badge && p.registered, registered: p.registered,
+        registry: p.registered ? homeRegistry().name : null, federation: p.registered ? world.federations?.of(homeRegistry().id)?.name ?? null : null,
+      } : null,
       record: record(), register: p.principal ? K.register(p.principal.id) : null, grant: p.grant?.plain ?? null,
       wallet: x402.balance(p.wallet),
       asks: p.asks.map(({ id, place, placeId, want, tier, law }) => ({ id, place, placeId, want: want.map((w) => w.label), tier, law })),

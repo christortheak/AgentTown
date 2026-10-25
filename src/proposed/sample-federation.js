@@ -31,12 +31,14 @@ export const asMembers = (view) => [
  * Start it: the anchor on any free port, the registry and record keeper on basePort and basePort + 1.
  * Returns its anchor's address (what you'd give the town) and how to stop it.
  */
-export async function startSampleFederation({ name = 'Riverside Co-op', slug = 'riverside', basePort, host = '127.0.0.1', policies, authorities = [] }) {
+export async function startSampleFederation({ name = 'Riverside Co-op', slug = 'riverside', basePort, host = '127.0.0.1', address = null, anchorPort = 0, policies, authorities = [] }) {
+  // `host` is what it listens on; `address` is where others reach it (with host 0.0.0.0, say, on a network).
+  const at = address ?? host;
   const id = (sub) => `https://${sub}.${slug}.test`;
   const [taId, regId, rkId] = [id('federation'), id('registry'), id('records')];
   const regKeys = { signing: generateSigningKey(), encryption: generateEncryptionKey(), pairwiseSecret: token(), adminToken: token() };
   const rkKeys = { signing: generateSigningKey(), encryption: null, pairwiseSecret: null, adminToken: token() };
-  const url = (port) => `http://${host}:${port}`;
+  const url = (port) => `http://${at}:${port}`;
   const members = [
     { entity_id: regId, entity_type: 'aaf_registry', jwks: jwksOf(regKeys.signing), metadata: { organization_name: `${name} Registry`, jurisdiction: 'US', endpoint_base: url(basePort), jwks: jwksOf(regKeys.signing, regKeys.encryption) } },
     { entity_id: rkId, entity_type: 'aaf_record_keeper', jwks: jwksOf(rkKeys.signing), metadata: { organization_name: `${name} Records`, roles: ROLES, endpoint_base: url(basePort + 1), jwks: jwksOf(rkKeys.signing) } },
@@ -44,7 +46,7 @@ export async function startSampleFederation({ name = 'Riverside Co-op', slug = '
   ];
   // Its governance decision: its registry accredits record keepers, for every role.
   const trustMarkIssuers = Object.fromEntries(ROLES.map((r) => [trustMarkType(taId, r), [regId]]));
-  const anchor = await startAnchor({ entityId: taId, name: `${name} Federation`, key: generateSigningKey(), host, policies, members, trustMarkIssuers });
+  const anchor = await startAnchor({ entityId: taId, name: `${name} Federation`, key: generateSigningKey(), host, address, port: anchorPort, policies, members, trustMarkIssuers });
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `agenttown-${slug}-`));
   const initial = await discoverFederation(anchor.anchor);
   const reg = await startRegistry({ id: regId, port: basePort, host, trustList: initial, keys: regKeys, dataDir: path.join(dataDir, 'registry'), quiet: true });
@@ -56,7 +58,7 @@ export async function startSampleFederation({ name = 'Riverside Co-op', slug = '
   reg.setTrust(fresh);
   rk.setTrust(fresh);
   return {
-    name: `${name} Federation`, url: anchor.url, anchor: anchor.anchor, registry: regId, recordKeeper: rkId,
+    name: `${name} Federation`, url: anchor.url, anchor: anchor.anchor, thumbprint: anchor.thumbprint, registry: regId, recordKeeper: rkId,
     adminTokens: { [regId]: regKeys.adminToken },
     async close() {
       await Promise.all([reg.close(), rk.close(), anchor.close()]);

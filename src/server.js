@@ -5,6 +5,8 @@
 // AGENTTOWN_CONFIG to use an external federation (see town.config.example.json).
 // Each browser tab that joins gets a session (the x-session header).
 // Set AGENTTOWN_DIRECTOR_KEY to keep the director's cues to whoever has the key.
+// Set AGENTTOWN_ADDRESS (this machine's address on the network, e.g. 192.168.1.20)
+// to make the town's federations reachable by teams on other machines.
 // Open it at "localhost", not 127.0.0.1: passkeys are bound to the domain.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,11 +21,11 @@ const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
 export async function startServer({
-  port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), host = process.env.HOST ?? '127.0.0.1', origin = process.env.ORIGIN,
-  directorKey = process.env.AGENTTOWN_DIRECTOR_KEY ?? null, quiet = false, residents = true, timeScale = 1, config,
+  port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), host = process.env.HOST, origin = process.env.ORIGIN,
+  directorKey = process.env.AGENTTOWN_DIRECTOR_KEY ?? null, quiet = false, residents = true, timeScale = 1, config, address = process.env.AGENTTOWN_ADDRESS ?? null,
 } = {}) {
   const townOrigin = origin ?? `http://localhost:${port}`;
-  const town = await createTown({ origin: townOrigin, portOffset, residents, timeScale, ...(config ? { config } : {}) });
+  const town = await createTown({ origin: townOrigin, portOffset, residents, timeScale, address, ...(config ? { config } : {}) });
   const { sessions } = town;
   const app = createApp('agenttown');
   const me = (headers) => sessions.get(headers['x-session']);
@@ -82,17 +84,25 @@ export async function startServer({
   app.post('/api/pair/end', ({ headers }) => ({ ended: sessions.unpair(me(headers)) }));
   app.post('/api/pair/brief', ({ body, headers }) => sessions.setBrief(me(headers), body?.text));
   app.get('/api/board', () => ({ board: sessions.board() }));
-  // The halls: every federation the town knows. Anyone in town may add one or admit a service (each place still
-  // decides whom to trust), and so may the director.
+  // The halls: every federation the town knows. In a local town anyone may add one or admit a service (each place
+  // still decides whom to trust); with a director key, only the director may.
+  const mayAdd = (headers) => {
+    if (directorKey && headers['x-director-key'] !== directorKey) throw new HttpError(403, 'director_only', 'In this town only the director adds federations and admits services.');
+  };
   app.get('/api/federations', () => ({ federations: town.federationsView() }));
   app.post('/api/federations', async ({ body, headers }) => {
-    if (!headers['x-director-key'] || headers['x-director-key'] !== directorKey) me(headers);
+    mayAdd(headers);
     return town.addFederation({ url: body?.url, pin: body?.pin });
   });
   app.post('/api/participants', async ({ body, headers }) => {
-    if (!headers['x-director-key'] || headers['x-director-key'] !== directorKey) me(headers);
+    mayAdd(headers);
     return town.admit({ url: body?.url, statement: body?.statement });
   });
+  app.post('/api/participants/check', async ({ body }) => town.check({ url: body?.url, entity_id: body?.entity_id }));
+  // For teams: a federation's trust-anchor bootstrap (what a service is configured with, like aaf-reference's
+  // trust-anchor.json), and the town's identity verifier and court, to list in a federation of their own.
+  app.get('/trust-anchor.json', ({ query }) => town.bootstrap(query.federation ?? 'participants'));
+  app.get('/api/authorities', () => ({ members: town.authorities() }));
   // Wrong pairing codes are counted per address (the socket's, not a header anyone can set).
   app.post('/mcp', ({ body, headers, query, req }) => mcp.handle({ body, headers, query, ip: req.socket.remoteAddress ?? 'unknown' }));
   app.get('/mcp', () => ({ __raw: true, status: 405, body: { error: 'method_not_allowed', message: 'This server sends no event stream; POST JSON-RPC to /mcp.' } }));
@@ -108,11 +118,15 @@ export async function startServer({
     return typed(page(file), type);
   });
 
-  const server = await app.listen(port, host);
+  // With an address for the network, the game listens there too (unless HOST says otherwise), so teams can reach /trust-anchor.json and the halls.
+  const server = await app.listen(port, host ?? (address ? '0.0.0.0' : '127.0.0.1'));
   if (!quiet) {
     const info = town.info();
     console.log(`AgentTown is open at ${townOrigin}`);
     console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
+    const p = town.bootstrap('participants');
+    console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${townOrigin}/trust-anchor.json`);
+    if (!address) console.log('The federations listen on this machine only. To let teams on other machines reach them, set AGENTTOWN_ADDRESS to this machine\'s address on the network.');
     console.log(`Director: ${directorKey ? 'locked (AGENTTOWN_DIRECTOR_KEY)' : 'open to everyone'}. Use "localhost", not 127.0.0.1: passkeys are bound to the domain.`);
   }
   return { town, origin: townOrigin, url: `http://127.0.0.1:${port}`, close: async () => { await closeServer(server); await town.close(); } };

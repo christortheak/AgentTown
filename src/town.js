@@ -13,22 +13,29 @@ import { createX402 } from './x402.js';
 import { createKeeper } from './proposed/keeper.js';
 import { createFederations, startAnchor, readEntity } from './proposed/anchors.js';
 import { startSampleFederation, asMembers } from './proposed/sample-federation.js';
-import { generateSigningKey } from 'aaf-reference/src/lib/crypto.js';
+import { checkService } from './proposed/door.js';
+import { generateSigningKey, thumbprint } from 'aaf-reference/src/lib/crypto.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
-export async function createTown({ origin, portOffset = 7000, config = loadConfig(), residents = true, timeScale = 1 }) {
-  const fed = await connectFederation({ federation: config.federation, portOffset });
+export async function createTown({ origin, portOffset = 7000, config = loadConfig(), residents = true, timeScale = 1, address = null }) {
+  // With an address, the town's own federation, its participants' anchor and any sample are reachable from other
+  // machines at it (they listen on every interface); without one, they stay on this machine.
+  const listen = address ? '0.0.0.0' : '127.0.0.1';
+  const fed = await connectFederation({ federation: config.federation, portOffset, address });
   // Proposed (docs/PROPOSED.md §6): several trust anchors. The town's own federation; one the town runs for
   // participants, which admits registries and record keepers while it runs; and any others added by address.
   const federations = createFederations();
   await federations.add({ key: 'town', name: fed.kind === 'local' ? 'The town’s federation' : fed.trust.doc.federation, kind: 'town', anchor: fed.anchor, view: fed.trust, overrides: fed.overrides });
   const participants = await startAnchor({
     entityId: 'https://participants.agenttown.test', name: 'AgentTown Participants', key: generateSigningKey(), policies: fed.trust.policies,
+    host: listen, address, port: 4170 + portOffset, // a steady address to give teams; clear of the federation's own ports
     members: asMembers(fed.trust), // it accepts the town's identity verifier and court
     open: true,
   });
   await federations.add({ key: 'participants', name: 'AgentTown Participants', kind: 'participants', anchor: participants.anchor, owner: participants });
   const world = buildWorld({ trust: federations.view(), keysDir: fed.keysDir, adminTokens: fed.adminTokens, federations });
+  // Every party re-reads its federations every 30 s (Reference Profile §6.1): new members, new trust marks.
+  const refresher = setInterval(() => federations.refresh().catch(() => {}), 30000);
 
   // The town ledger: everything anyone did, newest last.
   const ledger = { seq: 0, items: [] };
@@ -76,7 +83,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     /** Someone else's federation: its own trust anchor, registry and record keeper. Not added until someone adds it. */
     async sample({ add = false } = {}) {
       if (!sample) {
-        sample = await startSampleFederation({ basePort: 4150 + portOffset, policies: fed.trust.policies, authorities: asMembers(fed.trust) });
+        sample = await startSampleFederation({ basePort: 4150 + portOffset, host: listen, address, policies: fed.trust.policies, authorities: asMembers(fed.trust) });
         emit({ kind: 'director', tone: 'info', text: `${sample.name} is running on its own, with its trust anchor at ${sample.url}. Add it in the Hall of Registries (Town Hall).` });
       }
       if (add && !federations.list().some((f) => f.anchor.entity_id === sample.anchor.entity_id)) {
@@ -180,6 +187,15 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   return {
     world, places, sim, sessions, justice, ledger, keys, npcOptions, federations,
     federationsView: () => federations.list().map(federationView),
+    /** A federation's trust-anchor bootstrap: what a service or party is configured with to join or trust it. */
+    bootstrap(key) {
+      const f = federations.get(key);
+      if (!f) throw new HttpError(404, 'unknown_federation', `No federation ${key}. Try ${federations.list().map((x) => x.key).join(', ')}.`);
+      const sig = f.anchor.jwks.keys.find((k) => k.use !== 'enc');
+      return { name: f.name, entity_id: f.anchor.entity_id, url: f.anchor.url, jwks: f.anchor.jwks, thumbprint: thumbprint(sig) };
+    },
+    /** The town's identity verifier and court, as members another federation would list to accept them. */
+    authorities: () => asMembers(fed.trust),
     /** Add a whole federation by its trust anchor's address (and, to be sure of its key, a thumbprint to pin). */
     async addFederation({ url, pin }) {
       const f = await federations.addByUrl(url, { pin: pin || null });
@@ -191,6 +207,12 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
      * Admit one registry or record keeper into the participants' federation: read what it says about itself at its
      * address, or take its entity statement as given (for a service that must be a member before it can start).
      */
+    /** The check at the door, for a service by its address, or by its entity id once the town knows where it's served. */
+    async check({ url, entity_id: id }) {
+      const entry = id ? world.trust.registry(id) ?? world.trust.recordKeeper(id) : null;
+      if (id && !entry?.url) throw new HttpError(404, 'unknown', `The town doesn't know where ${id} is served.`);
+      return checkService(entry?.url ?? url, { anchors: federations.list().map((f) => f.anchor.entity_id), registryKeys: (r) => world.trust.registry(r)?.jwks ?? null });
+    },
     async admit({ url, statement }) {
       const read = statement ? { member: statement, name: statement.metadata?.organization_name ?? statement.entity_id, type: statement.entity_type, hints: [] } : await readEntity(url);
       if (federations.of(read.member.entity_id)) throw new HttpError(409, 'known', `${read.name} is already a member of a federation the town knows.`);
@@ -198,7 +220,9 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       await federations.refresh('participants');
       const f = federations.get('participants');
       announceFederation(f, `AgentTown Participants admitted ${read.name} (${read.type === 'aaf_registry' ? 'a registry' : 'a record keeper'})`);
-      return { name: read.name, type: read.type, entity_id: read.member.entity_id, names_this_anchor: read.hints.includes(participants.entityId), federation: federationView(f) };
+      // Admitted by address, it's running: check it at the door now. Admitted by statement, check it once it starts.
+      const check = statement ? null : await this.check({ url: read.member.metadata.endpoint_base });
+      return { name: read.name, type: read.type, entity_id: read.member.entity_id, names_this_anchor: read.hints.includes(participants.entityId), check, federation: federationView(f) };
     },
     info: () => ({
       federation: fed.kind, trust_anchor: fed.trustAnchorUrl, federations: federations.list().map((f) => ({ key: f.key, name: f.name, kind: f.kind, url: f.anchor.url })),
@@ -221,6 +245,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       return cue(params);
     },
     async close() {
+      clearInterval(refresher);
       sessions.stop();
       sim.stop();
       await world.close();

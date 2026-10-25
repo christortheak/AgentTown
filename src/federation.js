@@ -18,8 +18,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startFederationInProcess } from 'aaf-reference/src/lib/federation.js';
-import { discoverWithRetry } from 'aaf-reference/src/lib/trust.js';
+import { setupFederation, accreditAll } from 'aaf-reference/src/lib/federation.js';
+import { discoverWithRetry, discoverFederation, loadFederationConfig, loadKeys, fileNameFor } from 'aaf-reference/src/lib/trust.js';
+import { startTrustAnchor } from 'aaf-reference/src/trustanchor/server.js';
+import { startRegistry } from 'aaf-reference/src/registry/server.js';
+import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
 
 export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
   if (!file) return { federation: null, places: {}, law: null };
@@ -38,11 +41,33 @@ export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
   };
 }
 
-/** Connect to the configured federation, or start a local one. */
-export async function connectFederation({ federation, portOffset = 7000 } = {}) {
+/**
+ * The local federation, as aaf-reference starts it in one process, but reachable from other machines when given
+ * an address: every URL its trust anchor publishes uses that address, and the services listen on every interface.
+ * Without one, it stays on this machine (127.0.0.1), as before.
+ */
+async function startLocalFederation({ dataDir, portOffset, address = null }) {
+  const base = loadFederationConfig();
+  const config = address ? { ...base, host: address } : base;
+  const listen = address ? '0.0.0.0' : base.host;
+  const { trustAnchor, paths } = setupFederation({ dataDir, portOffset, config });
+  const handles = [await startTrustAnchor({ dataDir, port: config.trustAnchor.port + portOffset, host: listen, quiet: true })];
+  const initial = await discoverFederation(trustAnchor);
+  for (const svc of config.services) {
+    const common = { id: svc.id, port: svc.port + portOffset, host: listen, trustList: initial, keys: loadKeys(svc.id, paths.keysDir), dataDir: path.join(dataDir, fileNameFor(svc.id)), quiet: true };
+    handles.push(svc.kind === 'registry' ? await startRegistry(common) : await startRecordKeeper({ ...common, allowTamperSimulation: Boolean(svc.allowTamperSimulation) }));
+  }
+  await accreditAll({ trustList: initial, paths, config });
+  const trustList = await discoverFederation(trustAnchor);
+  for (const h of handles) h.setTrust?.(trustList);
+  return { trustList, trustAnchor, paths, close: () => Promise.all(handles.map((h) => h.close())) };
+}
+
+/** Connect to the configured federation, or start a local one (reachable at `address` from other machines, if given). */
+export async function connectFederation({ federation, portOffset = 7000, address = null } = {}) {
   if (!federation) {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenttown-'));
-    const fed = await startFederationInProcess({ dataDir, portOffset, quiet: true });
+    const fed = await startLocalFederation({ dataDir, portOffset, address });
     return {
       kind: 'local', trust: fed.trustList, anchor: fed.trustAnchor, keysDir: fed.paths.keysDir, trustAnchorUrl: fed.trustAnchor.url,
       close: async () => {

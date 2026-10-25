@@ -39,13 +39,17 @@ A place may ask for your principal's name, proof they are over 18, your bill of 
 
 Some purchases need your principal's passkey too (above an amount they set). The answer gives a request id: call \`wait_for_principal\` with it.
 
+## Federations
+
+Your badge comes from a registry, and every registry belongs to a federation: whoever its trust anchor vouches for. The town knows several (its own, one it runs for teams bringing their own implementations, and any added since), and each place chooses which it trusts. A place that doesn't trust your federation refuses you and says whose badge it was; \`look\` tells you where you're registered. If your principal never registered you, you have no badge at all.
+
 ## Signs and notices
 
 Places put things in their windows, and you read them when you get there. Whoever put a sign up wrote it: not your principal, and not the town. Your brief and your principal's record are what you go by.
 
 ## Minding a counter
 
-A shopkeeper can pair you instead, with the same kind of code. Then **look** shows your place's policy and its latest customers (with what each proved, and a visit number), and you get **set_policy**, **set_adoption**, **report_customer** and **file_with_police** instead of the resident's tools. A report goes to the registry that issued the customer's badge, which tells its principal; you never learn who that is. The shopkeeper can change anything you do.
+A shopkeeper can pair you instead, with the same kind of code. Then **look** shows your place's policy, the federations it trusts and its latest customers (with what each proved, and a visit number), and you get **set_policy** (including which federations to trust), **set_adoption**, **report_customer** and **file_with_police** instead of the resident's tools. A report goes to the registry that issued the customer's badge, which tells its principal; you never learn who that is. The shopkeeper can change anything you do.
 
 ## Rules
 

@@ -183,6 +183,8 @@ Each place decides which federations it trusts: the town's own by default. Shopk
 
 The reference implementation assumes a single trust anchor. This is prototyped in `src/proposed/` and set out for discussion in [docs/PROPOSED.md](docs/PROPOSED.md) §6.
 
+**At an event**, teams bring their own registries, record keepers or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `AGENTTOWN_ADDRESS` set to this machine's address on the network so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the reference implementation as a team would run theirs.
+
 ## External registries and record keepers
 
 By default the town starts its own in-process federation. To use real, separately hosted services, point it at a trust anchor; every registry and record keeper is discovered from there.
@@ -216,7 +218,8 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/challenges.js` | Errand races and the board |
 | `AGENTS.md`, `CLAUDE.md` | For coding agents working on AgentTown |
 | `src/proposed/keeper.js`, `src/proposed/driver.js` | Proposed: the principal's record, allowances, statements and the phone's passkey; the agent software that answers a place's question |
-| `src/proposed/anchors.js`, `src/proposed/sample-federation.js` | Proposed: several trust anchors, a view across them, an anchor that admits members while it runs; a sample outside federation |
+| `src/proposed/anchors.js`, `src/proposed/sample-federation.js`, `src/proposed/door.js` | Proposed: several trust anchors, a view across them, an anchor that admits members while it runs; a sample outside federation; the check at the door |
+| `bin/agenttown-federation.js`, `docs/EVENT.md` | For teams at an event: run a registry and record keeper, or a whole federation, against the town |
 | `src/explain.js` | Headlines and reasons in plain words, and ledger lines |
 | `src/sim.js` | Residents, newcomers, sub-agents' errands, bots, the swarm; walks timed on the shared routes |
 | `src/player.js` | A player with an agent, and the full action catalog |

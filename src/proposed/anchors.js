@@ -32,7 +32,7 @@ const ROLES = ['authorization', 'provenance', 'activity'];
  *   members: [{ entity_id, entity_type, jwks, metadata }]
  *   open:    a registry it admits may accredit record keepers in this federation, for every role
  */
-export async function startAnchor({ entityId, name, key, port = 0, host = '127.0.0.1', policies, members = [], trustMarkIssuers = {}, open = false }) {
+export async function startAnchor({ entityId, name, key, port = 0, host = '127.0.0.1', address = null, policies, members = [], trustMarkIssuers = {}, open = false }) {
   const list = [...members];
   const issuers = structuredClone(trustMarkIssuers);
   const app = createApp(entityId);
@@ -48,10 +48,11 @@ export async function startAnchor({ entityId, name, key, port = 0, host = '127.0
     return typed(subordinateStatement({ issuer: entityId, key, sub: m.entity_id, jwks: m.jwks, metadata: { [m.entity_type]: m.metadata } }), STATEMENT);
   });
   const server = await app.listen(port, host);
-  const url = `http://${host}:${server.address().port}`;
+  const url = `http://${address ?? host}:${server.address().port}`; // where others reach it: an address, if it listens on every interface
   return {
     entityId, name, url,
     anchor: { entity_id: entityId, url, jwks: jwksOf(key) },
+    thumbprint: thumbprint(key.publicJwk),
     members: () => list,
     /** Admit a member. A registry in an open federation may then accredit record keepers here. */
     admit(m) {
@@ -194,9 +195,15 @@ export function createFederations() {
     add,
     get: (key) => feds.get(key) ?? null,
     list: () => [...feds.values()],
-    /** Rediscover one federation (or all): a new member shows up, a removed one goes. */
+    /** Rediscover one federation (or all): a new member shows up, a removed one goes. One that can't be reached keeps its last view. */
     async refresh(key) {
-      for (const f of key ? [feds.get(key)].filter(Boolean) : feds.values()) f.view = await discover(f.anchor, f.overrides);
+      for (const f of key ? [feds.get(key)].filter(Boolean) : feds.values()) {
+        try {
+          f.view = await discover(f.anchor, f.overrides);
+        } catch (err) {
+          if (key) throw err;
+        }
+      }
     },
     /** The federation that lists an entity. */
     of(entityId) {
