@@ -78,6 +78,12 @@ button kbd { margin-right: 7px; }
 #recordBody .row:first-child { border-top: none; }
 #recordBody .row > span { font-size: 16px; }
 #recordBody small { color: var(--muted); }
+#recordBody .row > div { flex: 1; min-width: 0; }
+#recordBody .set { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 12px; }
+#recordBody .set > span { flex: 1; min-width: 0; }
+button.mini { font-size: 11px; padding: 2px 8px; box-shadow: none; white-space: nowrap; }
+button.mini.on { background: var(--green); border-color: #3f8146; color: #fff; }
+button.mini.danger { color: var(--bad); }
 .pill { display: inline-block; font-size: 11px; font-weight: 800; padding: 0 7px; border-radius: 999px; background: var(--paper-2); color: var(--muted); }
 .pill.ok { background: #e3f3e6; color: var(--ok); }
 .pill.bad { background: #f8e1de; color: var(--bad); }
@@ -130,6 +136,7 @@ body.scene .panel { opacity: 0; pointer-events: none; }
 .deck { width: min(640px, 100%); max-height: 78vh; display: flex; flex-direction: column; background: var(--paper); border: 3px solid var(--frame); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden; animation: pop-card 0.16s ease-out; }
 .deck header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 6px; }
 .deck h3 { margin: 0; font-size: 16px; color: #5a4636; }
+.deck h3 small { display: block; margin-top: 2px; font-size: 12px; font-weight: normal; color: var(--muted); }
 #paletteSearch { margin: 0 14px 8px; font: 600 15px var(--font); color: var(--ink); padding: 10px 14px; border-radius: 14px; border: 2px solid var(--frame); background: #fff; outline: none; }
 #paletteSearch:focus { border-color: var(--green); }
 #paletteSearch[hidden] { display: none; }

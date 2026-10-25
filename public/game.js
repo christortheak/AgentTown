@@ -464,9 +464,11 @@ async function deck(here = nearestPlace(60)) {
   const next = isAgent() && S ? nextQuest(S, counts) : null;
   const choice = await openPalette({
     actions: A,
-    pin: next ? { key: next.action, text: next.text } : null,
-    here: here && A.some((a) => a.place === here.id) ? { id: here.id, name: here.name } : null,
+    // The day's next step is yours, the person's: it isn't pinned while you play someone else.
+    pin: next && playing === 'me' ? { key: typeof next.action === 'function' ? next.action(S) : next.action, text: next.text } : null,
+    here: here ? { id: here.id, name: here.name } : null,
     greeting: here ? greetingFor(here.id) : null,
+    actor: actorNow(),
     placeName,
     nearby: (options) => [...options].sort((a, b) => dist(a.value) - dist(b.value)).map((o) => ({ ...o, hint: `${o.hint} · ${Math.round(dist(o.value) / TILE)} steps` })),
   });
@@ -476,6 +478,15 @@ const dist = (id) => {
   const s = sprites.get(id);
   return s ? Math.hypot(s.x - player.x, s.y - player.y) : 1e9;
 };
+
+/** Who the deck is for: you, in person, or whoever you play. */
+function actorNow() {
+  if (!isAgent() || !S) return null;
+  if (playing === 'me') return { name: 'you', as: S.agent && S.agent.status !== 'revoked' ? 'You, in person' : 'You, in person, with no agent yet' };
+  if (playing === 'agent') return { name: S.agent?.name ?? 'your agent', as: `Your agent${S.agent?.registered ? (S.badge ? ', badge on' : ', badge off') : ', unregistered'}` };
+  const h = S.helpers?.find((x) => x.id === playing);
+  return { name: h?.name ?? 'your sub-agent', as: `${S.agent?.name ?? 'Your agent'}'s sub-agent${h?.unregistered ? ', unregistered' : ''}` };
+}
 
 /** Your agent, or one of its sub-agents, clicked: play it, send it somewhere, call it over, or hand it to your own AI agent. */
 async function agentMenu(target) {
@@ -696,7 +707,7 @@ async function connectAgent(target = 'agent') {
     ${block('Claude Desktop and other stdio clients (from the AgentTown folder)', `node bin/agenttown-mcp.js --url ${location.origin} --code ${r.code}`)}
     ${block('A shell', `node bin/agenttown.js pair ${r.code} --url ${location.origin}`)}
     ${block('Or just tell your agent', shop ? `Read ${r.guide} and mind my counter at ${S.place.name} in AgentTown. The pairing code is ${r.code}.` : sub ? `Read ${r.guide} and play AgentTown as ${sub.name}, my agent's sub-agent. The pairing code is ${r.code}.` : `Read ${r.guide} and play AgentTown as my agent. The pairing code is ${r.code}.`)}
-    <p class="muted small">Give it a brief, too: ${shop ? '“Brief it”, above your customers' : 'Actions → Give your outside agent a brief'}. Anyone with this code can ${shop ? 'mind your counter' : 'drive your agent'} until it expires or you disconnect it. It never gets your own session.</p>
+    <p class="muted small">Give it a brief, too: ${shop ? '“Brief it”, above your customers' : 'Brief, beside your agent in the You panel'}. Anyone with this code can ${shop ? 'mind your counter' : 'drive your agent'} until it expires or you disconnect it. It never gets your own session.</p>
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
 }
 
@@ -718,7 +729,7 @@ async function showHall(which = 'registries') {
   const mine = a?.registered ? `<p class="why">${esc(a.name)} is registered at <b>${esc(a.registry)}</b>${a.federation ? `, in ${esc(a.federation)}` : ''}; its grant is kept at <b>${esc(a.keeper ?? '…')}</b>.</p>` : '';
   const choice = await showCard(`
     <header><div><span class="eyebrow">${which === 'records' ? 'Records Office' : 'Town Hall'}</span><h3>${which === 'records' ? 'The Hall of Record Keepers' : 'The Hall of Registries'}</h3></div><div class="stamp info">proposed</div></header>
-    <p class="why">Anyone can run a registry or a record keeper. Whether a place takes its word is up to the place: each one chooses which federations it trusts, and a federation is whoever its trust anchor vouches for. ${which === 'records' ? 'Your grant is kept by a record keeper in your registry’s own federation.' : 'Register your agent at any counter here: Actions → Register.'}</p>
+    <p class="why">Anyone can run a registry or a record keeper. Whether a place takes its word is up to the place: each one chooses which federations it trusts, and a federation is whoever its trust anchor vouches for. ${which === 'records' ? 'Your grant is kept by a record keeper in your registry’s own federation.' : 'Register your agent at any counter here: Actions → Start an agent (or Register).'}</p>
     ${mine}${fedHtml}
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`, [
     { label: 'Admit a registry or record keeper', value: 'admit' },
@@ -1165,8 +1176,8 @@ document.getElementById('directorClose').addEventListener('click', () => toggleD
 document.getElementById('deckBtn').addEventListener('click', () => !busyNow() && deck());
 document.getElementById('badgeBtn').addEventListener('click', () => !busyNow() && run({ id: 'badge', label: 'badge' }, {}));
 // The kill switch works whoever you play: stopping your agents is always yours to do.
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  if (busyNow()) return;
+document.getElementById('stopBtn').addEventListener('click', () => !busyNow() && stopEverything());
+async function stopEverything() {
   if (S?.halted) return run({ id: 'agents.resume', label: 'Starting your agents again' }, {});
   const name = S?.agent?.name ?? 'your agent';
   const r = await say({
@@ -1176,9 +1187,76 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   });
   closeDialog();
   if (r?.value) run({ id: 'stop.all', label: 'Stopping everything' }, {});
-});
+}
 document.getElementById('xrayBtn').addEventListener('click', () => toggleXray());
-document.getElementById('actBtn').addEventListener('click', () => !busyNow() && run({ id: 'play', label: 'Who you play' }, {}));
+document.getElementById('actBtn').addEventListener('click', () => !busyNow() && pickWhoToPlay());
+
+/** Who you play, picked from the dock: you, your agent, or one of its sub-agents. T goes to the next one. */
+async function pickWhoToPlay() {
+  if (!S?.agent || S.agent.status === 'revoked') return;
+  const name = S.agent.name;
+  const now = (who) => (playing === who ? ' (now)' : '');
+  const r = await say({
+    face: '🎭', who: 'Who do you play?', where: 'T switches to the next one',
+    text: `Whoever you play walks and does what you pick; the others stay where they are. Play ${name}, or one of its sub-agents, to act out what an agent might do. Verifying, your record and approvals stay with you, the person.`,
+    choices: [
+      { label: `You, in person${now('me')}`, value: 'me', primary: playing !== 'me' },
+      { label: `${name}, your agent${now('agent')}`, value: 'agent', primary: playing === 'me' },
+      ...S.helpers.filter((h) => h.status === 'active').map((h) => ({ label: `${h.name}, ${name}'s sub-agent${h.busy ? ' (out on an errand)' : ''}${now(h.id)}`, value: h.id })),
+      { label: 'Close', value: null, cancel: true },
+    ],
+  });
+  closeDialog();
+  if (r?.value && r.value !== playing) run({ id: 'play', label: 'Who you play' }, { as: r.value });
+}
+
+/** The deck, opened at one action's questions. */
+async function deckAt(key, params) {
+  await loadActions();
+  const choice = await openPalette({ actions: A, here: null, greeting: null, actor: actorNow(), placeName, nearby: (o) => o, focus: { key, params } });
+  if (choice) await run(choice.action, choice.params);
+}
+
+/** Yes or no before something that can't be undone. */
+async function sure(face, who, text, yes) {
+  const r = await say({ face, who, where: 'Your device', text, choices: [{ label: yes, value: true, primary: true }, { label: 'Not now', value: false, cancel: true }] });
+  closeDialog();
+  return Boolean(r?.value);
+}
+
+// The You panel: settings, each a button. They work whoever you play, without walking anywhere; being verified
+// and registering are done in person at Town Hall.
+document.getElementById('recordBody').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-do]');
+  if (!b || busyNow()) return;
+  const [what, id] = b.dataset.do.split(':');
+  const name = S?.agent?.name ?? 'your agent';
+  if ((what === 'verify' || what === 'register') && playing !== 'me') return toast(`That's yours to do in person at Town Hall: play yourself first (T).`, 'warn');
+  if (what === 'verify') return run({ id: 'verify', label: 'Get verified (KYC)', place: 'townhall' }, {});
+  if (what === 'register') return deckAt('register');
+  if (what === 'phone.passkey') return run({ id: 'phone.passkey', label: 'Put a passkey on your phone', client: 'phone.passkey' }, {});
+  if (what === 'disclose') return run({ id: 'disclose', label: 'Sharing your name' }, {});
+  if (what === 'badge') return run({ id: 'badge', label: 'badge' }, {});
+  if (what === 'incognito') return run({ id: 'incognito', label: 'Badge numbers' }, {});
+  if (what === 'pair') return connectAgent(id ?? 'agent');
+  if (what === 'unpair') {
+    const out = await api.post('/api/pair/end', id ? { target: id } : {});
+    toast(out.ended ? 'Disconnected: its token no longer works' : 'Nothing was connected', 'info');
+    return refresh();
+  }
+  if (what === 'brief') return writeBrief();
+  if (what === 'stop') return stopEverything();
+  if (what === 'agent.revoke' && (await sure('⛔', `Revoke ${name}`, `${name}'s registry revokes it, and its sub-agents with it. Places that check will turn it away from now on. You'd start a new agent after.`, `Revoke ${name}`))) return run({ id: 'agent.revoke', label: `Revoking ${name}` }, {});
+  if (what === 'record') return editRecord();
+  if (what === 'grant.revoke' && (await sure('📜', 'Revoke the grant', `${name} stays registered, but has no authority: places will refuse anything that needs it, and every budget it delegated goes too.`, 'Revoke the grant'))) return run({ id: 'grant.revoke', label: 'Revoking the grant' }, {});
+  if (what === 'play') return run({ id: 'play', label: 'Who you play' }, { as: id });
+  if (what === 'helper.revoke') return run({ id: 'helper.revoke', label: 'Revoking a sub-agent' }, { helper: id });
+  if (what === 'register.view') {
+    await refresh();
+    return showRegister(S);
+  }
+  if (what === 'receipts') return showReceipts();
+});
 document.getElementById('townScore').addEventListener('click', () => {
   if (busyNow() || !W.director) return;
   showCard(`<header><div><span class="eyebrow">The town</span><h3>How much of town uses the framework</h3></div></header>
@@ -1335,8 +1413,8 @@ async function refresh() {
   stop.innerHTML = S.halted ? '<span>▶</span> Start again' : '<span>⏹</span> Stop everything';
   const act = document.getElementById('actBtn');
   act.hidden = !S.agent || S.agent.status === 'revoked';
-  act.innerHTML = `<span>${playing === 'me' ? '🧍' : playing === 'agent' ? '🤖' : '🌱'}</span> Playing: ${esc(playing === 'me' ? 'you' : playedName())} <kbd>T</kbd>`;
-  act.title = 'Who you play. Whoever you play walks and does what you pick; T switches.';
+  act.innerHTML = `<span>${playing === 'me' ? '🧍' : playing === 'agent' ? '🤖' : '🌱'}</span> Playing: ${esc(playing === 'me' ? 'you' : playedName())} ▾ <kbd>T</kbd>`;
+  act.title = 'Who you play: pick one. Whoever you play walks and does what you pick; T goes to the next.';
   act.classList.toggle('on', playing !== 'me');
   const active = new Set(S.helpers.filter((h) => h.status === 'active').map((h) => h.id));
   for (const id of helperWasActive) {
@@ -1537,7 +1615,7 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
 for (const id of ['phone', 'record', 'quest', 'ledger']) {
   document.getElementById(`${id}Head`).addEventListener('click', () => document.getElementById(id).classList.toggle('open'));
 }
-if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone']) document.getElementById(id).classList.add('open');
+if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone', 'record']) document.getElementById(id).classList.add('open');
 
 async function leaveTown() {
   const r = await say({ face: '🌼', who: 'Leave town?', text: "You'll let go of your role and everything that came with it. You can join again straight away, as anyone, under any name; the rest of the town carries on. (A passkey you made here stays in your password manager; delete it there.)", choices: [{ label: 'Leave town', value: true, primary: true }, { label: 'Stay', value: false, cancel: true }] });
@@ -1575,7 +1653,7 @@ async function keyFound() {
 }
 
 const INTROS = {
-  agent: "You're a **resident** of AgentTown: a person. Walk with **WASD** or the **arrow keys**, or click where you want to go, and shop in person: some places take you at your word, some ask you to sign in with a passkey, the tavern's doorman guesses.\n\nWhen you're ready, get verified at **Town Hall** and register an **agent**: it follows you. Send it on errands while you stay put, or press **T** to play it yourself: whoever you play walks and acts. You answer for what it does. Your **record** at the Records Office says what it may spend and what places may learn; when a place asks for more, your **phone** asks you.\n\nPress **Q** for the **action deck**: everything you can do in town. Some actions are refused; that's the point, and each refusal says how to fix it. Press **X** for the **X-ray**. Play it straight, or try to get away with something: the police and the courts are watching.",
+  agent: "You're a **resident** of AgentTown: a person. Walk with **WASD** or the **arrow keys**, or click where you want to go, and shop in person: some places take you at your word, some ask you to sign in with a passkey, the tavern's doorman guesses.\n\nWhen you're ready, start an **agent**: register it at **Town Hall** (get verified there first), or don't, like most agents today. It stays where you leave it. Ask it to run errands while you carry on, or press **T** to play it yourself: whoever you play walks and acts. You answer for what it does. Your **record** at the Records Office says what it may spend and what places may learn; when a place asks for more, your **phone** asks you.\n\nPress **Q** for the **action deck**: what you can do now, where you are first. Some actions are refused; that's the point, and each refusal says how to fix it. Your settings are in the **You** panel. Press **X** for the **X-ray**. Play it straight, or try to get away with something: the police and the courts are watching.",
   shopkeeper: "You run this place. Your panel (top left) is your counter: choose which registries you trust and what you ask for, and watch every customer's ID check as it happens.\n\nClick a customer to see exactly what they proved. If one misbehaves, report it to its registry (its principal hears about it) or file it with the police.",
   homeowner: "This house is yours. Put a passkey on your door first. When an agent knocks, your **phone** (bottom right) shows who stands behind it, never who they are, and you decide with your passkey.\n\nYour door log shows every visit. Lost keys are dangerous: change the locks any time.",
   police: "You investigate. Places send cases to your **case board**: suspicious payments, attempted break-ins, odd trading at the Exchange. You can open a case from any line in the town ledger.\n\nBadges don't say who anyone is. To find out, ask the court: it can order a registry to identify the principal, delete rogue agents, or ban a principal.",

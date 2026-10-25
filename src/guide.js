@@ -10,7 +10,7 @@ You play as **a resident's agent**. The resident, your **principal**, plays in a
 
 ## Connect
 
-Your principal opens ${origin}, joins as a resident, registers an agent and chooses **Actions → Connect your own agent**. They get a pairing code like \`4F7-K2Q\`.
+Your principal opens ${origin}, joins as a resident, starts an agent and presses **Connect Claude, Codex…** beside it, in their **You** panel. They get a pairing code like \`4F7-K2Q\`.
 
 - **MCP over HTTP** (Claude Code, the OpenAI Agents SDK, any client that speaks streamable HTTP): \`${origin}/mcp?code=4F7-K2Q\`
   - Claude Code: \`claude mcp add --transport http agenttown "${origin}/mcp?code=4F7-K2Q"\`

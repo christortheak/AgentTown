@@ -1,10 +1,11 @@
-// The action deck: every action in town, always listed, searchable. At the top,
-// what whoever you play can do where they are: at this place, then anywhere.
-// Below, what needs a walk elsewhere (picking it walks there first), then
-// information. Some actions ask a question or two before they run.
+// The action deck: what whoever you play can do now, searchable. At the top,
+// what they can do where they are; then getting started, what you can ask your
+// agent to do, and what works anywhere. Below, what needs a walk elsewhere
+// (picking it walks there first), then information. Settings aren't here: they
+// live in the You panel. Some actions ask a question or two before they run.
 import { esc } from './ui.js';
 
-const GROUPS = ['You', 'Your agent', 'Your record', 'Sub-agents', 'Shops & services', 'Home', 'Mischief'];
+const GROUPS = ['Get started', 'You', 'Your agent', 'Your record', 'Sub-agents', 'Shops & services', 'Home', 'Mischief'];
 const $ = (id) => document.getElementById(id);
 
 let open = null;
@@ -17,11 +18,12 @@ export const paletteOpen = () => Boolean(open);
  *   pin       { key, text }: the step the day's list suggests next, pinned at the top
  *   here      { id, name } of the place you're standing at, or null
  *   greeting  { face, who, text } from the keeper here, or null
+ *   actor     { name, as }: who you play ('you', or an agent's name), and as what (a few words)
  *   placeName id -> display name
  *   nearby    (options) -> options sorted by distance, for "whom?" questions
  *   focus     { key, params }: open at that action's questions, skipping the list
  */
-export function openPalette({ actions, pin = null, here, greeting, placeName, nearby, focus = null }) {
+export function openPalette({ actions, pin = null, here, greeting, actor = null, placeName, nearby, focus = null }) {
   if (open) open.close(null);
   const root = $('palette');
   root.hidden = false;
@@ -31,6 +33,9 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
     let stage = { kind: 'list' };
     let rows = [];
 
+    const setTitle = (title, sub) => {
+      $('paletteTitle').innerHTML = `${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}`;
+    };
     const close = (result) => {
       root.hidden = true;
       document.removeEventListener('keydown', onKey, true);
@@ -50,21 +55,35 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
     function render() {
       const body = $('paletteBody');
       if (stage.kind === 'list') {
-        $('paletteTitle').textContent = here ? `At ${here.name}` : 'What would you like to do?';
+        setTitle(actor ? `What will ${actor.name} do?` : 'What would you like to do?', actor ? [actor.as, here?.name].filter(Boolean).join(' · ') : here?.name);
         rows = [];
         const sections = [];
-        // The usual groups in order, then any others (a sub-agent you play has a group of its own).
+        // The usual groups in order, then any others.
         const groups = [...GROUPS, ...new Set(actions.map((a) => a.group).filter((x) => x && !GROUPS.includes(x)))];
         const byGroup = (list) => groups.flatMap((g) => list.filter((a) => a.group === g));
-        const shown = actions.filter((a) => matches(a));
-        const hereRows = here ? shown.filter((a) => a.place === here.id && !a.info) : [];
+        // Something offered only where it happens (an account at a shop) shows up there, or when you search for it.
+        const shown = actions.filter((a) => matches(a) && (!a.hereOnly || query || (here && a.place === here.id)));
+        // Here: what happens at this place, or anywhere you choose (a badge trick) and you're standing at one.
+        const isHere = (a) => here && !a.info && !a.ask && (a.place === here.id || a.params?.some((pm) => pm.here && pm.options?.some((o) => o.value === here.id)));
+        const hereRows = shown.filter(isHere);
         if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: byGroup(hereRows) });
-        const anywhere = shown.filter((a) => !a.place && !a.info);
-        if (anywhere.length) sections.push({ title: 'Wherever you are', items: byGroup(anywhere) });
+        const started = shown.filter((a) => a.group === 'Get started');
+        if (started.length) sections.push({ title: 'Get started', items: started });
+        const asks = shown.filter((a) => a.ask);
+        if (asks.length) sections.push({ title: asks[0].group, items: asks });
+        // Anywhere: sub-agents and mischief get sections of their own.
+        const anywhere = shown.filter((a) => !a.place && !a.info && !a.ask && a.group !== 'Get started' && !isHere(a));
+        const OWN = { 'Sub-agents': actor?.name === 'you' ? 'Sub-agents' : 'Your sub-agents', Mischief: 'Mischief · at a place you choose' };
+        const general = anywhere.filter((a) => !OWN[a.group]);
+        if (general.length) sections.push({ title: 'Wherever you are', items: byGroup(general) });
+        for (const [g, title] of Object.entries(OWN)) {
+          const items = anywhere.filter((a) => a.group === g);
+          if (items.length) sections.push({ title, items });
+        }
         const pinned = pin && !query ? actions.find((a) => a.key === pin.key && !a.done) : null;
         if (pinned) sections.push({ title: `Next step · ${pin.text}`, items: [pinned], pinned: true });
         for (const g of groups) {
-          const items = shown.filter((a) => a.group === g && a.place && !a.info && !(here && a.place === here.id));
+          const items = shown.filter((a) => a.group === g && a.place && !a.info && !a.ask && !isHere(a));
           if (items.length) sections.push({ title: `Elsewhere · ${g}`, items });
         }
         const info = shown.filter((a) => a.info);
@@ -85,7 +104,7 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
         $('paletteSearch').hidden = false;
       } else {
         const { action, param, params } = stage;
-        $('paletteTitle').textContent = `${action.label} · ${param.label}`;
+        setTitle(param.label, action.label);
         $('paletteSearch').hidden = true;
         if (param.input) {
           body.innerHTML = `<div class="ask"><input id="paletteInput" maxlength="24" value="${esc(param.value ?? '')}" autocomplete="off" spellcheck="false"><button class="primary" id="paletteGo"><kbd>↵</kbd>Go</button></div>`;
@@ -113,7 +132,9 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
 
     function next(params) {
       const { action } = stage;
-      const missing = (action.params ?? []).find((pm) => !(pm.key in params) && !(pm.key in (action.fixed ?? {})));
+      // A question asked only after some answer (which counter, if you're registering).
+      const applies = (pm) => !pm.when || Object.entries(pm.when).every(([k, v]) => params[k] === v);
+      const missing = (action.params ?? []).find((pm) => applies(pm) && !(pm.key in params) && !(pm.key in (action.fixed ?? {})));
       if (missing) {
         if (missing.here && here && missing.options?.some((o) => o.value === here.id)) return next({ ...params, [missing.key]: here.id });
         stage = { kind: 'param', action, param: missing, params };

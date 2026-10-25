@@ -35,7 +35,7 @@ const PAIR_TRIES = 10; // wrong pairing codes from one address, per window, befo
 const PAIR_WINDOW_MS = 10 * 60 * 1000;
 
 export const ROLES = {
-  agent: { icon: '🧍', label: 'A resident', blurb: 'You walk the town yourself. Get verified, register an agent, and choose who goes: you or it. Shop, trade, spawn sub-agents. Play it straight, or try to get away with something.' },
+  agent: { icon: '🧍', label: 'A resident', blurb: 'You walk the town yourself. Start an agent, registered or not, and play yourself, it, or its sub-agents. Shop, trade, send it on errands. Play it straight, or try to get away with something.' },
   shopkeeper: { icon: '🏪', label: 'A shopkeeper', blurb: 'Run a shop, the bank, the exchange or the toll: decide which registries you trust and what you ask for, and see exactly what each customer proves.' },
   homeowner: { icon: '🏡', label: 'A homeowner', blurb: 'Put a passkey on your door and decide, on your phone, which agents come in.' },
   police: { icon: '👮', label: 'Police', blurb: 'Investigate fraud and rogue agents from the cases places report, and take them to court.' },
@@ -283,7 +283,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       const f = pairFails.get(from) ?? { count: 0, since: Date.now() };
       pairFails.set(from, { ...f, count: f.count + 1 });
       if (pairFails.size > 5000) pairFails.delete(pairFails.keys().next().value);
-      throw new HttpError(404, 'bad_code', 'That pairing code is unknown or has expired. Ask your principal for a new one (Actions → Connect your own agent).');
+      throw new HttpError(404, 'bad_code', 'That pairing code is unknown or has expired. Ask your principal for a new one (the You panel → Connect Claude, Codex…).');
     }
     const s = sessions.get(p.human);
     if (!s?.player && s?.role !== 'shopkeeper') throw new HttpError(410, 'gone', 'Your principal has left town.');
@@ -693,12 +693,12 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   }
 
   const raceAction = () => ({
-    id: 'challenge.join', key: 'challenge.join', group: 'You', icon: '🏁', label: 'Take on an errand race', hint: 'Your agent against everyone else’s, on the notice board', place: 'board',
+    id: 'challenge.join', key: 'challenge.join', group: 'Errand races', icon: '🏁', label: 'Take on an errand race', hint: 'Your agent against everyone else’s, on the notice board', place: 'board',
     params: [{ key: 'challenge', label: 'Which errand?', options: Object.entries(CHALLENGES).map(([id, c]) => ({ value: id, label: c.name, hint: `$${c.budget}` })) }],
   });
 
   function actions(s, npcOptions) {
-    if (s.player) return [...s.player.catalog(), ...(['me', 'agent'].includes(s.player.playing()) ? [raceAction()] : [])];
+    if (s.player) return [...s.player.catalog(), ...(s.player.hasAgent() && ['me', 'agent'].includes(s.player.playing()) ? [raceAction()] : [])];
     return [{ id: 'id.ask', key: 'id.ask', group: 'You', icon: '🔍', label: 'Ask someone to show their badge', hint: 'Your own badge reader', params: [{ key: 'npc', label: 'Whom?', options: npcOptions }] }];
   }
 

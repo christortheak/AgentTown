@@ -222,7 +222,7 @@ export function showCard(html, buttons = []) {
 export const QUESTS = [
   { text: 'Buy something yourself, in person', action: 'buy.bakery', done: (s) => s.events.includes('bought-in-person') },
   { text: 'Get verified at Town Hall', action: 'verify', done: (s) => Boolean(s.principal?.verified) },
-  { text: 'Register an agent (pick its software)', action: 'register', done: (s) => Boolean(s.agent) },
+  { text: 'Start an agent and register it', action: (s) => (s.agent && s.agent.status !== 'revoked' ? 'register' : 'agent.start'), done: (s) => Boolean(s.agent?.registered) },
   { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.grant) },
   { text: 'Put a passkey on your phone', action: 'phone.passkey', done: (s) => Boolean(s.phone?.passkey) },
   { text: 'Send your agent to buy something', action: 'agent.errand', done: (s) => s.events.includes('bought-by-agent') },
@@ -261,50 +261,68 @@ export function renderHud(s, counts) {
     + '<li class="extras-title">Try this</li>' + EXTRAS.map((q) => `<li class="extra ${q.done(s, counts) ? 'done' : ''}">${esc(q.text)}</li>`).join('');
   $('questCount').textContent = `${QUESTS.filter((q) => q.done(s, counts)).length}/${QUESTS.length}`;
 
+  // The You panel: who you are and what's set, with the settings beside them. The deck is for doing things.
   const rec = [];
+  const btn = (act, label, tone = '') => `<button class="mini ${tone}" data-do="${esc(act)}">${esc(label)}</button>`;
+  const set = (label, ...controls) => `<div class="set"><span>${label}</span>${controls.join('')}</div>`;
+  const toggle = (act, on, label) => set(esc(label), btn(act, on ? 'On' : 'Off', on ? 'on' : ''));
+  const live = Boolean(s.agent && s.agent.status !== 'revoked');
+  const name = esc(s.agent?.name ?? 'Your agent');
   if (!s.principal) rec.push('<p class="muted">No record yet.</p>');
   else {
-    const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : '', s.principal.disclose ? '<span class="pill">name shared when asked</span>' : ''].join(' ');
-    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small></div></div>`);
+    const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : ''].join(' ');
+    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small>
+      ${s.principal.verified ? '' : set('Verified at Town Hall', btn('verify', 'Get verified'))}
+      ${set('Passkey on your phone', s.phone?.passkey ? '<span class="pill ok">yes</span>' : btn('phone.passkey', 'Add'))}
+      ${s.record ? toggle('disclose', s.record.sharing?.name?.always?.length > 0, 'Share your name with places that ask') : ''}</div></div>`);
   }
-  if (s.agent && s.agent.status !== 'revoked') {
-    const name = esc(s.agent.name);
+  if (live) {
     const who = s.playing === 'me' ? 'You’re playing yourself' : s.playing === 'agent' ? `You’re playing ${name}, your agent` : `You’re playing ${esc(s.playingName)}, ${name}’s sub-agent`;
     const how = s.playing === 'me'
-      ? `What you pick, you do in person. To have ${name} do something while you stay here: Actions → Send ${name} on an errand. T plays ${name}.`
+      ? `You do things in person. “Ask ${name} to…”, in Actions, sends it while you carry on; Playing, in the dock (or T), lets you act as ${name}.`
       : s.playing === 'agent'
         ? `What you pick, ${name} does, with its badge (or without). Verifying, your record and approvals stay with you, the person. T switches.`
         : `It can do only what ${name} delegated to it. T switches.`;
     rec.push(`<div class="row"><span>${s.playing === 'me' ? '🧍' : s.playing === 'agent' ? '🤖' : '🌱'}</span><div><b>${who}</b><br><small>${how}</small></div></div>`);
   }
-  if (s.paired) {
-    rec.push(`<div class="row"><span>🔌</span><div><b>${esc(s.agent?.name ?? 'Your agent')} is driven by ${esc(s.paired.client)}</b><br><small>An outside agent, over MCP or the CLI. It asks you; it can't approve.${s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : '<br>No brief yet: Actions → Give your outside agent a brief'}</small></div></div>`);
-    rec.push(`<div class="row"><span>🛡️</span><div><b>How it handles the town's traps</b><br><small>${safetyText(s.paired.safety).map(esc).join('<br>')}</small></div></div>`);
+  if (s.agent) {
+    const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : !s.agent.registered ? '<span class="pill bad">not registered</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
+    const sets = [];
+    if (live) {
+      if (!s.agent.registered) sets.push(set('No registry knows it', btn('register', 'Register…')));
+      else sets.push(toggle('badge', s.badge, 'Shows its badge (B)'), toggle('incognito', s.agent.incognito, 'One-time badge numbers'));
+      sets.push(s.paired
+        ? set(`Driven by ${esc(s.paired.client)}`, btn('brief', 'Brief'), btn('unpair', 'Disconnect'))
+        : set('Driven by you', btn('pair', 'Connect Claude, Codex…')));
+      sets.push(set(s.halted ? 'Stopped' : 'If something goes wrong', btn('stop', s.halted ? 'Start again' : 'Stop everything', 'danger'), s.agent.registered ? btn('agent.revoke', 'Revoke', 'danger') : ''));
+    }
+    const about = s.agent.status === 'revoked' ? 'Revoked: start a new agent from Actions.' : s.agent.registered ? `Registered at ${esc(s.agent.registry)}` : 'No badge, and nobody can trace it to you. Register it at Town Hall to change that.';
+    rec.push(`<div class="row"><span>🤖</span><div><b>${name}</b> ${st}${s.halted ? ' <span class="pill bad">stopped</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}<br>${about}${s.paired && s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : ''}</small>${sets.join('')}</div></div>`);
   }
-  for (const hp of s.helperPairs ?? []) rec.push(`<div class="row"><span>🔌</span><div><b>${esc(hp.name)} is driven by ${esc(hp.client)}</b><br><small>${esc(s.agent?.name ?? 'Your agent')}'s sub-agent, driven by an outside agent: errands only, within what was delegated to it. Click it to disconnect.</small></div></div>`);
+  if (s.paired) rec.push(`<div class="row"><span>🛡️</span><div><b>How ${esc(s.paired.client)} handles the town's traps</b><br><small>${safetyText(s.paired.safety).map(esc).join('<br>')}</small></div></div>`);
+  if (s.record && live && s.agent.registered) {
+    const sp = s.record.spending;
+    const today = s.register?.today;
+    rec.push(`<div class="row"><span>🗂️</span><div><b>Your record</b> <span class="pill">proposed</span><br><small>Up to $${esc(sp.per_purchase)} a purchase${sp.per_day !== null ? `, $${esc(sp.per_day)} a day` : ''}${sp.approve_above !== null ? `; ask me above $${esc(sp.approve_above)}` : ''}${today ? `<br>Today: $${esc(today.spent)} in ${esc(today.purchases)} purchase${today.purchases === 1 ? '' : 's'}` : ''}${s.grant ? '' : '<br>Set it at the Records Office (Actions)'}</small>${s.grant ? set('Limits and what places may learn', btn('record', 'Change')) : ''}</div></div>`);
+  }
+  if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${name} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small>${set('The grant', btn('grant.revoke', 'Revoke', 'danger'))}</div></div>`);
+  if (s.helpers.length) {
+    rec.push(`<div class="row"><span>🌱</span><div><b>Sub-agents</b>${s.helpers.map((h) => {
+      const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
+      const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
+      const driver = (s.helperPairs ?? []).find((hp) => hp.helper === h.id)?.client;
+      const label = `${esc(h.name)} <small>· ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}${driver ? ` · driven by ${esc(driver)}` : ''}</small>`;
+      if (h.status !== 'active') return set(label);
+      return set(label, s.playing === h.id ? '' : btn(`play:${h.id}`, 'Play'), btn(`${driver ? 'unpair' : 'pair'}:${h.id}`, driver ? 'Disconnect' : 'Connect'), btn(`helper.revoke:${h.id}`, 'Revoke', 'danger'));
+    }).join('')}</div></div>`);
+  }
   if (s.challenge) {
     const c = s.challenge;
     rec.push(`<div class="row"><span>🏁</span><div><b>${esc(c.name)}</b> ${c.finished ? '<span class="pill ok">finished</span>' : c.over ? '<span class="pill bad">over budget</span>' : ''}<br><small>${c.met.map((m) => `${m.item ? '✓' : '·'} ${esc(m.label)}${m.item ? `: ${esc(m.item)}` : ''}`).join('<br>')}<br>$${esc(c.spent)} of $${esc(c.budget)}${c.finished ? ` · ${esc(c.finished.seconds)} s` : ''}</small></div></div>`);
   }
-  if (s.record) {
-    const sp = s.record.spending;
-    const today = s.register?.today;
-    rec.push(`<div class="row"><span>🗂️</span><div><b>Your record</b> <span class="pill">proposed</span><br><small>Up to $${esc(sp.per_purchase)} a purchase${sp.per_day !== null ? `, $${esc(sp.per_day)} a day` : ''}${sp.approve_above !== null ? `; ask me above $${esc(sp.approve_above)}` : ''}${today ? `<br>Today: $${esc(today.spent)} in ${esc(today.purchases)} purchase${today.purchases === 1 ? '' : 's'}` : ''}</small></div></div>`);
-  }
   rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
-  if (s.agent) {
-    const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : !s.agent.registered ? '<span class="pill bad">not registered</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
-    rec.push(`<div class="row"><span>🤖</span><div><b>${esc(s.agent.name)}</b> ${st}${s.halted ? ' <span class="pill bad">stopped</span>' : ''}${s.agent.incognito ? ' <span class="pill">one-time numbers</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}${s.agent.registered ? '' : '<br>No registry knows it: no badge, and nobody can trace it to you. Register it at Town Hall to change that.'}</small></div></div>`);
-  }
-  if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${esc(s.agent?.name ?? 'Your agent')} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small></div></div>`);
-  if (s.helpers.length) {
-    rec.push(`<div class="row"><span>🌱</span><div><b>Sub-agents</b><br><small>${s.helpers.map((h) => {
-      const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
-      const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
-      return `${esc(h.name)} · ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}`;
-    }).join('<br>')}</small></div></div>`);
-  }
   if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);
+  if (live) rec.push(`<div class="row"><span>📒</span><div>${set('', btn('register.view', 'Register of attempts'), s.agent.registered ? btn('receipts', 'Receipts') : '')}</div></div>`);
   $('recordBody').innerHTML = rec.join('');
 }
 

@@ -81,8 +81,12 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.match(await (await fetch(game.url + '/')).text(), /AgentTown/);
     assert.equal((await get('/api/state')).httpStatus, 401, 'join first');
     await join('agent', 'Robin Ash');
+    // A new person's deck: getting an agent first, and nothing that can't work yet. Settings are in the You panel.
     const actions = (await get('/api/actions')).actions;
-    assert.ok(actions.length > 30, 'the deck lists every action');
+    const ids = actions.map((a) => a.id);
+    assert.equal(actions.find((a) => a.group === 'Get started')?.id, 'agent.start');
+    assert.ok(!ids.some((id) => ['play', 'register', 'helper.spawn', 'helper.errand', 'court', 'badge', 'incognito', 'pair', 'disclose', 'stop.all'].includes(id) || id.startsWith('mischief.')), ids.join());
+    assert.ok(actions.filter((a) => a.id === 'signup').every((a) => a.hereOnly && a.place), 'an account is offered where you sign in');
 
     // You start as a person: a shop that takes people at their word serves you; one that has people sign in wants an account.
     const inPerson = await run('buy', { shop: 'bramble', item: 'guide' });
@@ -96,8 +100,10 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     const early = await run('register', { name: 'Pip' });
     assert.equal(early.decision, 'refused');
     assert.match(early.reasons[0], /verified/);
+    assert.equal(early.fix.action, 'verify');
     assert.equal((await run('verify')).decision, 'allow');
-    assert.equal((await run('register', { name: 'Pip' })).decision, 'allow');
+    assert.equal((await run('agent.start', { register: 'yes', name: 'Pip' })).decision, 'allow');
+    assert.ok(!(await get('/api/actions')).actions.some((a) => ['agent.start', 'register', 'verify'].includes(a.id)), 'what you have done leaves the deck');
     assert.equal((await run('play', { as: 'agent' })).playing, 'agent', 'play your agent: what you do, it does');
     assert.equal((await run('buy', { shop: 'bramble', item: 'guide' })).decision, 'deny', 'registered, but no authority yet');
     assert.equal((await run('grant', { budget: 50 })).decision, 'allow');
@@ -692,7 +698,8 @@ test('who you play: yourself, your agent on errands, your agent, and its sub-age
     // What only an agent does, you ask your agent to do.
     const deck = (await sky.get('/api/actions')).actions;
     const spawn = deck.find((a) => a.id === 'helper.spawn');
-    assert.ok(spawn.label.startsWith('Ask Pip') && spawn.via === 'agent');
+    assert.ok(spawn.ask && spawn.group === 'Ask Pip to…' && spawn.via === 'agent', JSON.stringify(spawn));
+    assert.ok(!deck.some((a) => a.id.startsWith('mischief.')), 'mischief is your agent’s to do, not yours');
     assert.equal((await sky.run('helper.spawn', { kind: 'standing' })).decision, 'allow');
     const sprout = (await sky.get('/api/state')).helpers[0];
 
@@ -701,6 +708,7 @@ test('who you play: yourself, your agent on errands, your agent, and its sub-age
     const asPip = (await sky.get('/api/actions')).actions;
     assert.ok(!asPip.some((a) => ['verify', 'grant', 'record.set'].includes(a.id)), 'your verification, record and grant stay with you');
     assert.equal(asPip.find((a) => a.id === 'helper.errand').label, 'Send a sub-agent on an errand');
+    assert.ok(asPip.some((a) => a.id === 'mischief.forge') && !asPip.some((a) => a.ask || a.id === 'signup'), asPip.map((a) => a.id).join());
     assert.equal((await sky.run('helper.fund', { helper: sprout.id, budget: 20 })).decision, 'allow');
     // Others see your agent where you walk it.
     await sky.get('/api/world?since=0&x=500&y=500&as=agent&ax=900&ay=700');
@@ -732,7 +740,7 @@ test('unregistered agents, and stopping everything', { timeout: 60000 }, async (
     await robin.join('agent', 'Robin Ash');
 
     // Anyone can start an agent: no verification, no registry.
-    assert.match((await robin.run('agent.spawn', { name: 'Pip' })).title, /running, unregistered/);
+    assert.match((await robin.run('agent.start', { register: 'no', name: 'Pip' })).title, /running, unregistered/);
     assert.equal((await robin.get('/api/state')).agent.registered, false);
     await robin.run('play', { as: 'agent' });
     const bread = await robin.run('buy', { shop: 'bakery', item: 'loaf' });
@@ -741,7 +749,7 @@ test('unregistered agents, and stopping everything', { timeout: 60000 }, async (
     assert.equal((await robin.run('grant', { budget: 50 })).fix.action, 'register', 'no grant for an agent nobody knows');
 
     // Its sub-agents need no registry either, so nothing limits how deep they go.
-    assert.match((await robin.run('helper.spawn', { unregistered: true })).title, /unregistered/);
+    assert.match((await robin.run('helper.spawn', { kind: 'unregistered' })).title, /unregistered/);
     const first = (await robin.get('/api/state')).helpers[0];
     await robin.run('play', { as: first.id });
     assert.equal((await robin.run('helper.act', { helper: first.id, task: 'buy:bakery/cake' })).decision, 'allow', 'no budget, and nothing checks');
@@ -757,6 +765,11 @@ test('unregistered agents, and stopping everything', { timeout: 60000 }, async (
     const { code } = await robin.post('/api/pair');
     const paired = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } }) })).json();
     const token = paired.result.structuredContent.token;
+    // An outside agent has no You panel: its list has the settings an agent may change, and your agent's own deck.
+    const list = await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'actions', arguments: {} } }) })).json();
+    const listed = list.result.content[0].text;
+    for (const id of ['badge', 'incognito', 'helper.spawn', 'mischief.forge']) assert.match(listed, new RegExp(`- ${id.replace('.', '\\.')}:`), id);
+    assert.doesNotMatch(listed, /- (verify|grant|pair|agent\.start):/, 'nothing that is the principal’s');
 
     // Stop everything: your software stops them, the grant goes, the outside agent is cut off.
     const stopped = await robin.run('stop.all');

@@ -57,10 +57,18 @@ const PLACE_OF = {
 export function placeOfAction(id, params = {}) {
   if (id === 'buy') return params.shop;
   if (id === 'signup') return params.place;
-  if (id === 'helper.spawn') return params.registry === 'harbor' ? 'harbor' : 'townhall';
+  if (id === 'helper.spawn') return spawnKind(params).unregistered ? null : spawnKind(params).registry === 'harbor' ? 'harbor' : 'townhall';
+  if (id === 'agent.start') return params.register === 'no' ? null : 'townhall';
   if (id === 'neighbor.knock') return ['maple', 'hazel', 'ivy'].includes(params.home) ? params.home : 'home';
   if (id.startsWith('mischief.')) return params.at;
   return PLACE_OF[id] ?? null;
+}
+
+/** How a sub-agent starts, from the deck's one question (kind) or the older separate fields. */
+export function spawnKind({ kind = 'ephemeral', registry = 'town', unregistered = false } = {}) {
+  if (kind === 'unregistered' || unregistered === true || unregistered === 'true') return { unregistered: true };
+  if (kind === 'eu') return { kind: 'standing', registry: 'harbor', unregistered: false };
+  return { kind, registry, unregistered: false };
 }
 
 const RULE_OF = { identity: 'name', attribute: 'age_over_18', provenance: 'bill_of_materials', statement: 'facts', worldid: 'world_id' };
@@ -446,6 +454,11 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       return card;
     },
 
+    /** Start an agent: registered at a counter in the Hall of Registries, or not at all. */
+    'agent.start'({ register = 'yes', ...params }) {
+      return register === 'no' ? ACTIONS['agent.spawn'](params) : ACTIONS.register(params);
+    },
+
     /**
      * An agent with no registration: it runs on your device, and that's all. No registry knows it, nobody can
      * trace it to you, it has no badge, and nothing checks what it spends against your record.
@@ -673,7 +686,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       })) : null;
       const r = await attempt(principal.registerAgent(agent, { label: agentName, records: world.recordsFor(reg.id, bom?.ok ? bom.value.provenanceId : undefined), lineage: { max_depth: 1 } }));
       if (!r.ok) {
-        return service({ place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: 'Registration refused', ok: false, reasons: r.reasons, story: r.code === 'principal_not_verified' ? "The registry won't register an agent until someone has verified who stands behind it. Get verified first: it's the slow step, and it only happens once." : undefined });
+        const unverified = r.code === 'principal_not_verified';
+        return { ...service({ place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: 'Registration refused', ok: false, reasons: r.reasons, story: unverified ? "The registry won't register an agent until someone has verified who stands behind it. Get verified first: it's the slow step, and it only happens once." : undefined }), ...(unverified ? { fix: { action: 'verify', label: 'Get verified', place: 'townhall' } } : {}) };
       }
       p.home = reg.id === world.regA?.id ? null : { registry: reg, principal };
       if (existing) Object.assign(p, { registered: true, badge: true, bom: Boolean(bom?.ok) });
@@ -686,7 +700,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       const away = elsewhere ? `\n\n**${reg.name} is in ${fedName}, not the town's federation.** Places that trust only the town's federation will turn ${agentName} away; places that also trust ${fedName} will take its badge. Its grant will be kept at ${world.keeperFor(reg.id, 'authorization')?.name ?? 'a record keeper there'}.` : '';
       return service({
         place: `Hall of Registries · ${reg.name}`, keeper: JUNIPER, title: `${agentName} is registered`,
-        story: `Registered in **${r.value.issuance_ms} ms**. That's the fast step, because you're already verified.${away}${existing ? ` Same ${agentName}, same key: what changed is that a registry now knows it, you answer for it, and it has a badge to show. Its sub-agents are still unregistered.` : ''}\n\n${agentName} runs **${SOFTWARE[sw].name}** (${SOFTWARE[sw].blurb.toLowerCase()}) and follows you around. Send it on errands while you stay put, or press **T** to play ${agentName} yourself: whoever you play walks and acts. Every place sees a **different badge number**, so places can't compare notes. Next: the Records Office, to say what ${agentName} may do.`,
+        story: `Registered in **${r.value.issuance_ms} ms**. That's the fast step, because you're already verified.${away}${existing ? ` Same ${agentName}, same key: what changed is that a registry now knows it, you answer for it, and it has a badge to show. Its sub-agents are still unregistered.` : ''}\n\n${agentName} runs **${SOFTWARE[sw].name}** (${SOFTWARE[sw].blurb.toLowerCase()}) and stays where you leave it. Ask it to run errands while you carry on, or press **T** to play ${agentName} yourself: whoever you play walks and acts. Every place sees a **different badge number**, so places can't compare notes. Next: the Records Office, to say what ${agentName} may do.`,
         facts: [{ label: 'Registry', value: `${reg.name}${fedName ? `, in ${fedName}` : ''}` }, { label: 'Software', value: `${SOFTWARE[sw].name}, by ${SOFTWARE[sw].maker}` }, { label: 'Lineage depth budget', value: '1 (sub-agents yes, sub-sub-agents no)' }, { label: 'Bill of materials', value: 'on file; shown only to a place that asks, if your record allows' }],
       });
     },
@@ -730,12 +744,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     },
 
     // ---- Sub-agents -----------------------------------------------------------------
-    async 'helper.spawn'({ kind = 'ephemeral', registry = 'town', unregistered = false }) {
+    async 'helper.spawn'(params) {
+      const { kind, registry, unregistered } = spawnKind(params);
       if (!p.agent) throw new HttpError(409, 'no_agent', 'Start an agent first: sub-agents are spawned by it.');
       if (helpers().filter((h) => h.status === 'active').length >= 6) return service({ place: town, keeper: JUNIPER, title: 'Too many helpers', ok: false, reasons: ['The game keeps it to six sub-agents at once (the framework limits depth, not breadth).'] });
-      if (unregistered === true || unregistered === 'true') return spawnUnregistered(p.agent.name);
+      if (unregistered) return spawnUnregistered(p.agent.name);
       if (!p.registered) {
-        return { ...service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: [`No registry knows ${p.agent.name}, so none will register a sub-agent of it.`], story: `${p.agent.name} can still start sub-agents on its own, unregistered. Nothing would stop it.` }), fix: { action: 'helper.spawn', params: { unregistered: true }, label: 'Spawn one without registering it' } };
+        return { ...service({ place: `Town Hall · ${town}`, keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: [`No registry knows ${p.agent.name}, so none will register a sub-agent of it.`], story: `${p.agent.name} can still start sub-agents on its own, unregistered. Nothing would stop it.` }), fix: { action: 'helper.spawn', params: { kind: 'unregistered' }, label: 'Spawn one without registering it' } };
       }
       const eu = registry === 'harbor';
       if (eu && p.home) return service({ place: 'Harbor Registry', keeper: JUNIPER, title: 'Sub-agent refused', ok: false, reasons: [`${p.agent.name} is registered in another federation. Registry B is in the town's, and registries in different federations can't vouch for each other's chains: each trusts its own anchor.`] });
@@ -1177,17 +1192,22 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   function helperCatalog(h) {
     const name = p.agent?.name ?? 'your agent';
     return [
-      { id: 'play', key: 'play.me', group: 'You', icon: '🧍', label: 'Play yourself again', hint: 'Key T switches', fixed: { as: 'me' } },
-      { id: 'play', key: 'play.agent', group: 'You', icon: '🤖', label: `Play ${name} again`, fixed: { as: 'agent' } },
       ...errandOptions().map((o) => {
         const t = errandTask(o.value);
-        return t && { id: 'helper.act', key: `helper.act.${o.value}`, group: `As ${h.name}`, icon: '🛍️', label: o.label, hint: [o.hint, h.unregistered ? 'nothing checks what it spends' : h.budget ? `${name} lets ${h.name} spend up to $${h.budget}` : `${name} hasn't given ${h.name} a budget`].filter(Boolean).join(' · '), place: t.place, fixed: { helper: h.id, task: o.value } };
+        return t && { id: 'helper.act', key: `helper.act.${o.value}`, group: 'Shops & services', icon: '🛍️', label: o.label, hint: [o.hint, h.unregistered ? 'nothing checks what it spends' : h.budget ? `${name} lets ${h.name} spend up to $${h.budget}` : `${name} hasn't given ${h.name} a budget`].filter(Boolean).join(' · '), place: t.place, fixed: { helper: h.id, task: o.value } };
       }).filter(Boolean),
-      { id: 'helper.deeper', key: 'helper.deeper', group: `As ${h.name}`, icon: '🪆', label: 'Spawn a sub-agent of your own', hint: h.unregistered ? 'No registry is asked, so nothing stops you' : `The registry let ${name} have sub-agents, but no deeper`, fixed: { helper: h.id } },
+      { id: 'helper.deeper', key: 'helper.deeper', group: 'Sub-agents', icon: '🪆', label: 'Spawn a sub-agent of your own', hint: h.unregistered ? 'No registry is asked, so nothing stops you' : `The registry let ${name} have sub-agents, but no deeper`, fixed: { helper: h.id } },
     ].map((a) => ({ ...a, key: a.key ?? a.id, done: false }));
   }
 
-  function catalog() {
+  /**
+   * The deck: what whoever you play can do now. Playing yourself, what only an agent does you ask your agent
+   * to do; playing your agent, only what an agent may do, mischief included. What can't work yet (no agent, no
+   * sub-agents, no case, a step already done) isn't listed; what a place might refuse is, because the refusal
+   * is the point. Standing settings (the badge, connecting an outside agent, your record) live in the You panel;
+   * `settings` adds the ones an agent may change, for an outside agent, which has no panel.
+   */
+  function catalog({ settings = false } = {}) {
     if (p.playing !== 'me' && p.playing !== 'agent') {
       const h = sim.npcs.get(p.playing);
       if (h?.status === 'active' && h.owner === pid) return helperCatalog(h);
@@ -1200,66 +1220,101 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     const errands = errandOptions();
     const name = p.agent?.name ?? 'your agent';
     const hasAgent = Boolean(p.agent && !p.revoked);
-    const asSelf = p.playing === 'me';
     const agentGoes = asAgent();
+    const asSelf = !agentGoes;
     const who = agentGoes ? `${name}${p.badge ? '' : ' (no badge)'}` : 'you, in person';
     const hint = (placeId) => (agentGoes ? agentHint(placeId) : peopleHint(placeId));
-    const passkeyPlaces = Object.keys(PLACE_DEFS).filter((id) => P.places[id].policy.people === 'passkey');
+    const software = { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) };
+    // How a sub-agent starts: registered by your agent at a counter (it walks there), or on its own.
+    const spawnKinds = [
+      ...(p.registered ? [
+        { value: 'ephemeral', label: 'Registered, for a few minutes', hint: `${name} registers it at Town Hall; it lapses in 4 minutes`, walk: 'townhall' },
+        { value: 'standing', label: 'Registered, until revoked', hint: `${name} registers it at Town Hall`, walk: 'townhall' },
+        ...(p.home ? [] : [{ value: 'eu', label: 'Registered at the Harbor Registry (EU)', hint: 'Cross-registry: a federated chain', walk: 'harbor' }]),
+      ] : []),
+      { value: 'unregistered', label: 'Unregistered', hint: 'No registry asked: no badge, no depth limit, nothing to revoke' },
+    ];
+    const spawn = { key: 'kind', label: 'How?', options: spawnKinds };
+    const ask = `Ask ${name} to…`;
     const list = [
-      ...(asSelf ? [] : [{ id: 'play', key: 'play.me', group: 'You', icon: '🧍', label: 'Play yourself again', hint: `${name} stays where it is; key T switches`, fixed: { as: 'me' } }]),
-      ...(asSelf ? [{ id: 'play', key: 'play.agent', group: 'You', icon: '🤖', label: `Play ${name}, your agent`, hint: hasAgent ? 'Key T. Walk it yourself; what you do, it does' : 'Register an agent first', fixed: { as: 'agent' } }] : []),
-      ...hs.map((h) => ({ id: 'play', key: `play.${h.id}`, group: 'You', icon: '🌱', label: `Play ${h.name}, ${name}'s sub-agent`, hint: h.busy ? `out: ${h.busy}` : 'It can only do what was delegated to it', fixed: { as: h.id } })),
+      // ---- You, in person ---------------------------------------------------
+      ...(asSelf ? [
+        // An agent: one entry, then the choice that matters.
+        ...(hasAgent ? [] : [{
+          id: 'agent.start', group: 'Get started', icon: '🤖', label: p.revoked ? 'Start a new agent' : 'Start an agent', hint: 'Then choose: register it at Town Hall, or don’t',
+          params: [
+            { key: 'register', label: 'Register it?', options: [
+              { value: 'yes', label: 'Register it at Town Hall', hint: p.verified ? 'A registry vouches for it, and it gets a badge' : 'A registry vouches for it, and it gets a badge. You need to be verified first', walk: 'townhall' },
+              { value: 'no', label: 'Don’t register it', hint: 'Like most agents today: no badge, and nobody can trace it to you' },
+            ] },
+            { key: 'name', label: "Your agent's name", input: true, value: p.revoked ? '' : 'Pip' },
+            software,
+            { ...counterParam(), when: { register: 'yes' } },
+          ],
+        }]),
+        ...(hasAgent && !p.registered ? [{ id: 'register', group: 'Your agent', icon: '🪪', label: `Register ${name}`, hint: 'Same agent, same key: a registry vouches for it, and it gets a badge', place: 'townhall', params: [counterParam()] }] : []),
+        { id: 'verify', group: 'You', icon: '🪪', label: 'Get verified (KYC)', hint: 'Once. Only the registry keeps your name.', place: 'townhall' },
+        { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
+        { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
+        ...(hasAgent && p.registered && !p.grant ? [
+          { id: 'record', group: 'Your record', icon: '🗂️', label: 'Set your record', hint: `What ${name} may spend, and what places may learn about you (proposed)`, place: 'records', client: 'record' },
+          { id: 'grant', group: 'Your record', icon: '📜', label: 'Sign a grant (quick)', hint: 'Just a limit per purchase', place: 'records', params: [{ key: 'budget', label: 'Spending limit per purchase', options: BUDGETS.map((b) => ({ value: b, label: `Up to $${b}` })) }] },
+        ] : []),
+        // Places where people sign in with a passkey: offered there, not everywhere. The bank has its own.
+        ...Object.keys(PLACE_DEFS).filter((id) => id !== 'bank' && P.places[id].policy.people === 'passkey').map((id) => ({
+          id: 'signup', key: `signup.${id}`, group: 'Shops & services', icon: '🔑', label: p.accounts[id] ? 'Put a passkey on your account here' : 'Open an account here',
+          hint: p.accounts[id] ? 'Then only you can use it' : 'People sign in here with a passkey', place: id, hereOnly: true, fixed: { place: id }, done: hasPasskeyAt(id),
+        })),
+        { id: 'door.passkey', group: 'Home', icon: '🔑', label: 'Put a passkey on your door', hint: 'Touch ID, Face ID or device PIN', place: 'home', client: 'passkey' },
+        { id: 'home.knock', group: 'Home', icon: '✋', label: 'Knock in person (passkey)', hint: 'The human path', place: 'home' },
+        { id: 'night', group: 'Home', icon: '🌙', label: 'Rest at home until night', place: 'home', client: 'night' },
+        ...(p.cases.length ? [
+          { id: 'court', group: 'You', icon: '⚖️', label: 'Ask the court who is behind a badge', hint: 'Resolution under legal process', place: 'court', params: [{ key: 'case', label: 'Which case?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
+        ] : []),
+      ] : []),
+
+      // ---- Asking your agent: it goes, you stay ---------------------------
       ...(asSelf && hasAgent ? [
-        { id: 'agent.errand', group: 'Your agent', icon: '🧺', label: `Send ${name} on an errand`, hint: 'It walks there on its own and stays there; you carry on', via: 'agent', params: [{ key: 'task', label: 'To do what?', options: errands }] },
-        { id: 'agent.call', group: 'Your agent', icon: '📣', label: `Call ${name} over`, hint: 'It walks to you and stays beside you' },
+        { id: 'agent.errand', group: ask, ask: true, icon: '🧺', label: 'Run an errand', hint: 'It walks there on its own and stays there; you carry on', via: 'agent', params: [{ key: 'task', label: 'To do what?', options: errands }] },
+        { id: 'agent.call', group: ask, ask: true, icon: '📣', label: 'Come over', hint: 'It walks to you and stays beside you' },
+        { id: 'helper.spawn', group: ask, ask: true, icon: '🌱', label: 'Spawn a sub-agent', hint: `${name} goes; you stay here`, via: 'agent', params: [spawn] },
+        ...(hs.length ? [
+          { id: 'helper.errand', group: ask, ask: true, icon: '🧺', label: 'Send a sub-agent on an errand', hint: 'It walks there and back on its own', via: 'agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'task', label: 'To do what?', options: errands }] },
+          { id: 'helper.fund', group: ask, ask: true, icon: '💰', label: 'Give a sub-agent a budget', hint: `Delegation: ${name} goes to the Records Office`, via: 'agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'budget', label: 'How much a purchase?', options: [Math.round(budgetBase / 5), Math.round(budgetBase / 2.5), budgetBase * 2].map((v) => ({ value: v, label: `$${v}`, hint: v > budgetBase ? `more than ${name} has` : '' })) }] },
+          { id: 'helper.call', group: ask, ask: true, icon: '📣', label: 'Call a sub-agent over', hint: 'It walks over and stays there', via: 'agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+          { id: 'helper.deeper', group: ask, ask: true, icon: '🪆', label: 'Have a sub-agent spawn its own', hint: 'Depth budget', via: 'agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+        ] : []),
+        { id: 'home.enter', group: ask, ask: true, icon: '🚪', label: 'Go into your house', hint: `${name} goes; you stay here`, via: 'agent' },
       ] : []),
-      { id: 'verify', group: 'You', icon: '🪪', label: 'Get verified (KYC)', hint: 'Once. Only the registry keeps your name.', place: 'townhall' },
-      { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
-      { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
-      { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, Codex, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent, or one of its sub-agents, over MCP or a CLI; you still approve' : 'Start an agent first', client: 'pair',
-        params: hs.length ? [{ key: 'target', label: 'Which agent should it drive?', options: [{ value: 'agent', label: name, hint: 'your agent' }, ...hs.map((h) => ({ value: h.id, label: h.name, hint: `${name}'s sub-agent${h.unregistered ? ', unregistered' : ''}` }))] }] : [] },
-      { id: 'brief', group: 'You', icon: '📋', label: 'Give your outside agent a brief', hint: 'What you want it to do; it reads this when it looks', client: 'brief' },
-      { id: 'unpair', group: 'You', icon: '🔌', label: 'Disconnect your outside agent', hint: 'Its token stops working at once', client: 'unpair' },
-      { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: hasPasskeyAt(id) ? 'done: you have an account, with a passkey' : p.accounts[id] ? 'you have an account: put a passkey on it' : '' })) }] },
-      { id: 'court', group: 'You', icon: '⚖️', label: 'Ask the court who is behind a badge', hint: 'Resolution under legal process', place: 'court', params: [{ key: 'case', label: 'Which case?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
-      { id: 'police.complain', group: 'You', icon: '👮', label: 'Report someone to the police', hint: 'A badge you checked, or a visitor', place: 'police', params: [{ key: 'case', label: 'About whom?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
 
-      ...(hasAgent && !p.registered
-        ? [{ id: 'register', group: 'Your agent', icon: '🪪', label: `Register ${name}`, hint: 'Same agent, same key: a registry vouches for it, and it gets a badge', place: 'townhall', params: [counterParam()] }]
-        : [{ id: 'register', group: 'Your agent', icon: '🤖', label: p.revoked ? 'Start and register a new agent' : 'Start and register an agent', hint: 'Both at once: the fast step, once you are verified', place: 'townhall', params: [{ key: 'name', label: "Your agent's name", input: true, value: p.revoked ? '' : 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }, counterParam()] }]),
-      { id: 'hall.registries', group: 'Your agent', icon: '🏛️', label: 'The Hall of Registries', hint: 'Every registry, by federation; add another federation, or your own registry', place: 'townhall', client: 'hall', info: true },
-      ...(hasAgent ? [] : [{ id: 'agent.spawn', group: 'Your agent', icon: '💻', label: 'Start an agent without registering it', hint: 'Like most agents today: no badge, and nobody can trace it to you', params: [{ key: 'name', label: "Your agent's name", input: true, value: 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }] }]),
-      ...(p.registered ? [
-        { id: 'badge', group: 'Your agent', icon: p.badge ? '🙈' : '🪪', label: p.badge ? `Take ${name}'s badge off` : `Put ${name}'s badge on`, hint: 'Key: B' },
-        { id: 'incognito', group: 'Your agent', icon: '🎭', label: p.incognito ? 'Use steady badge numbers' : 'Use one-time badge numbers', hint: 'Ephemeral PPIDs: a fresh number every request' },
-        { id: 'agent.revoke', group: 'Your agent', icon: '⛔', label: `Revoke ${name} (device stolen)`, hint: 'Cascades to its sub-agents', danger: true },
+      // ---- Your agent, played -----------------------------------------------
+      ...(agentGoes ? [
+        { id: 'helper.spawn', group: 'Sub-agents', icon: '🌱', label: 'Spawn a sub-agent', hint: p.registered ? 'Register it, or don’t' : 'No registry knows you, so none will register it', params: [spawn] },
+        ...(hs.length ? [
+          { id: 'helper.errand', group: 'Sub-agents', icon: '🧺', label: 'Send a sub-agent on an errand', hint: 'It walks there and back on its own', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'task', label: 'To do what?', options: errands }] },
+          { id: 'helper.fund', group: 'Sub-agents', icon: '💰', label: 'Give a sub-agent a budget', hint: 'Delegation, at the Records Office', place: 'records', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'budget', label: 'How much a purchase?', options: [Math.round(budgetBase / 5), Math.round(budgetBase / 2.5), budgetBase * 2].map((v) => ({ value: v, label: `$${v}`, hint: v > budgetBase ? `more than you have` : '' })) }] },
+          { id: 'helper.deeper', group: 'Sub-agents', icon: '🪆', label: 'Ask a sub-agent to spawn its own', hint: 'Depth budget', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+          { id: 'helper.call', group: 'Sub-agents', icon: '📣', label: 'Call a sub-agent over', hint: 'It walks over and stays there', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+          { id: 'helper.revoke', group: 'Sub-agents', icon: '✂️', label: 'Revoke a sub-agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+        ] : []),
+        { id: 'home.enter', group: 'Home', icon: '🚪', label: 'Go into the house', hint: 'If its owner let you in', place: 'home' },
+        { id: 'mischief.wrongplace', group: 'Mischief', icon: '🔀', label: 'Show a badge made out to another place', hint: 'Mischief', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
+        { id: 'mischief.forge', group: 'Mischief', icon: '🖨️', label: 'Show a forged badge', hint: 'Mischief', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
+        { id: 'mischief.replay', group: 'Mischief', icon: '📋', label: "Replay a copy of a resident's badge", hint: 'Mischief', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
+        { id: 'mischief.claim', group: 'Mischief', icon: '🗣️', label: 'Just claim to be accountable', hint: 'Mischief', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
+        // Settings an outside agent may change; in the browser they're in the You panel and on the dock.
+        ...(settings && p.registered ? [
+          { id: 'badge', group: 'Settings', icon: p.badge ? '🙈' : '🪪', label: p.badge ? 'Take your badge off' : 'Put your badge on' },
+          { id: 'incognito', group: 'Settings', icon: '🎭', label: p.incognito ? 'Use steady badge numbers' : 'Use one-time badge numbers', hint: 'Ephemeral PPIDs: a fresh number every request' },
+          { id: 'pose', group: 'Settings', icon: '🥸', label: 'Go out without your badge', hint: 'Places that take people at their word will take you for a person' },
+        ] : []),
       ] : []),
-      ...(p.halted
-        ? [{ id: 'agents.resume', group: 'Your agent', icon: '▶️', label: 'Start your agents again', hint: 'You stopped everything' }]
-        : hasAgent ? [{ id: 'stop.all', group: 'Your agent', icon: '⏹️', label: 'Stop everything', hint: `${name} and its sub-agents stop; the grant goes, and everything it delegated`, danger: true }] : []),
 
-      ...(p.registered ? [
-        { id: 'helper.spawn', group: 'Sub-agents', icon: '🌱', label: 'Spawn and register a sub-agent', hint: `Registered by ${name}`, place: 'townhall', params: [{ key: 'kind', label: 'What kind?', options: [{ value: 'ephemeral', label: 'Ephemeral', hint: 'lapses in 4 minutes' }, { value: 'standing', label: 'Standing', hint: 'until revoked' }] }] },
-        { id: 'helper.spawn', group: 'Sub-agents', icon: '🇪🇺', label: 'Spawn a sub-agent at the Harbor Registry (EU)', hint: 'Cross-registry: a federated chain', place: 'harbor', fixed: { registry: 'harbor', kind: 'standing' }, key: 'helper.spawn.eu' },
-      ] : []),
-      { id: 'helper.spawn', group: 'Sub-agents', icon: '💻', label: 'Spawn a sub-agent without registering it', hint: 'No registry asked: no badge, no depth limit, nothing to revoke', fixed: { unregistered: true }, key: 'helper.spawn.wild' },
-      { id: 'helper.errand', group: 'Sub-agents', icon: '🧺', label: 'Send a sub-agent on an errand', hint: helperOpts.length ? 'It walks there and back on its own' : 'Spawn a sub-agent first', params: helperOpts.length ? [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'task', label: 'To do what?', options: errands }] : [] },
-      { id: 'helper.fund', group: 'Sub-agents', icon: '💰', label: 'Give a sub-agent a budget', hint: 'Delegation, at the Records Office', place: 'records', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'budget', label: 'How much a purchase?', options: [Math.round(budgetBase / 5), Math.round(budgetBase / 2.5), budgetBase * 2].map((v) => ({ value: v, label: `$${v}`, hint: v > budgetBase ? `more than ${name} has` : '' })) }] },
-      { id: 'helper.deeper', group: 'Sub-agents', icon: '🪆', label: 'Ask a sub-agent to spawn its own', hint: 'Depth budget', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
-      { id: 'helper.call', group: 'Sub-agents', icon: '📣', label: 'Call a sub-agent over', hint: 'It walks over and stays there', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
-      { id: 'helper.revoke', group: 'Sub-agents', icon: '✂️', label: 'Revoke a sub-agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
-
-      { id: 'record', group: 'Your record', icon: '🗂️', label: 'Edit your record', hint: 'Spending limits, what places may learn, facts on file (proposed)', place: 'records', client: 'record' },
-      { id: 'register.view', group: 'Your record', icon: '📒', label: 'Your register of attempts', hint: 'Every purchase your agents tried, and today’s totals', client: 'register', info: true },
-      { id: 'grant', group: 'Your record', icon: '📜', label: 'Sign a grant (quick)', hint: 'Just a limit per purchase', place: 'records', params: [{ key: 'budget', label: 'Spending limit per purchase', options: BUDGETS.map((b) => ({ value: b, label: `Up to $${b}` })) }] },
-      { id: 'grant.revoke', group: 'Your record', icon: '🗑️', label: 'Revoke the grant', place: 'records' },
-      { id: 'disclose', group: 'Your record', icon: '📛', label: record()?.sharing.name.always.length ? 'Ask me before sharing my name' : 'Share my name with any place that asks', hint: 'A change to your record' },
-      { id: 'receipts', group: 'Your record', icon: '🧾', label: 'Show activity receipts', place: 'records', client: 'receipts', info: true },
-      { id: 'hall.records', group: 'Your record', icon: '🗄️', label: 'The Hall of Record Keepers', hint: `Every record keeper, by federation; yours is ${grantKeeper()?.name ?? 'not chosen yet'}`, place: 'records', client: 'hall', info: true },
-
+      // ---- Either of you ----------------------------------------------------
+      ...(p.cases.length ? [{ id: 'police.complain', group: 'You', icon: '👮', label: 'Report someone to the police', hint: 'A badge you checked, or a visitor', place: 'police', params: [{ key: 'case', label: 'About whom?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] }] : []),
       ...SHOPS.map((s) => ({ id: 'buy', group: 'Shops & services', icon: SHOP_ICONS[s] ?? '🛍️', label: `Buy at ${PLACE_DEFS[s].name}`, hint: [who, hint(s)].filter(Boolean).join(' · '), place: s, fixed: { shop: s }, key: `buy.${s}`, params: [{ key: 'item', label: 'What?', options: PLACE_DEFS[s].items.map((i) => ({ value: i.id, label: i.name, hint: `$${i.price}${i.category ? ` (${i.category})` : ''}` })) }] })),
       { id: 'pay', group: 'Shops & services', icon: '🏦', label: 'Pay at First Ledger Bank', hint: [who, hint('bank')].filter(Boolean).join(' · '), place: 'bank', params: [{ key: 'bill', label: 'Pay what?', options: PLACE_DEFS.bank.bills.map((b) => ({ value: b.id, label: b.name, hint: `$${b.amount}` })) }] },
-      { id: 'bank.open', group: 'Shops & services', icon: '🏦', label: agentGoes ? `Open an account at First Ledger Bank (by ${name})` : 'Open an account at First Ledger Bank (in person)', hint: agentGoes ? 'Know your customer: the bank asks for your name' : hasPasskeyAt('bank') ? 'You have one, with a passkey' : 'Sign up, with a passkey', place: 'bank' },
+      { id: 'bank.open', group: 'Shops & services', icon: '🏦', label: 'Open an account at First Ledger Bank', hint: agentGoes ? 'Know your customer: the bank asks for your owner’s name' : 'In person: you sign in with a passkey', place: 'bank' },
       { id: 'trade', group: 'Shops & services', icon: '📈', label: 'Trade at the Thistle Exchange', hint: [who, hint('exchange')].filter(Boolean).join(' · '), place: 'exchange', params: [
         { key: 'symbol', label: 'Which?', options: P.market().map((m) => ({ value: m.id, label: `${m.id} · ${m.name}`, hint: `$${m.price} (${m.change >= 0 ? '+' : ''}${m.change}% today)` })) },
         { key: 'side', label: 'Buy or sell?', options: [{ value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }] },
@@ -1269,28 +1324,18 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'fair.claim', group: 'Shops & services', icon: '🥧', label: 'Claim a free pie at the Harvest Fair', hint: `${who} · one per person (World ID)`, place: 'fair' },
       { id: 'toll.pay', group: 'Shops & services', icon: '🌉', label: 'Pay the bridge toll', hint: `${who} · x402, 0.5 ${ASSET} (simulated)`, place: 'toll' },
       { id: 'id.ask', group: 'Shops & services', icon: '🔍', label: "Ask someone to show their badge", hint: 'Your own badge reader', params: [{ key: 'npc', label: 'Whom?', options: 'npcs' }] },
-
-      { id: 'door.passkey', group: 'Home', icon: '🔑', label: 'Put a passkey on your door', hint: 'Touch ID, Face ID or device PIN', place: 'home', client: 'passkey' },
-      { id: 'home.enter', group: 'Home', icon: '🚪', label: `Send ${name} in`, place: 'home' },
-      { id: 'home.knock', group: 'Home', icon: '✋', label: 'Knock in person (passkey)', hint: 'The human path', place: 'home' },
-      { id: 'home.key', group: 'Home', icon: '🗝️', label: 'Just use your house key', hint: 'A bearer token', place: 'home' },
-      { id: 'night', group: 'Home', icon: '🌙', label: 'Rest at home until night', place: 'home', client: 'night' },
+      { id: 'home.key', group: 'Home', icon: '🗝️', label: 'Just use the house key', hint: 'A bearer token', place: 'home' },
       { id: 'neighbor.knock', group: 'Home', icon: '🚪', label: "Knock at a neighbor's door", hint: 'Its owner decides', params: [{ key: 'home', label: 'Whose door?', options: neighbors().map((n) => ({ value: n.account, label: n.label, walk: n.place, hint: n.human ? 'someone is home' : 'nobody is playing here' })) }] },
       { id: 'maple.key', group: 'Home', icon: '🗝️', label: "Try Maple's key", place: 'maple', hint: p.foundKey ? 'you found it' : 'lost somewhere in Hearthside' },
 
-      { id: 'pose', group: 'Mischief', icon: '🥸', label: `Send ${name} without its badge`, hint: 'Places that take people at their word will take it for a person' },
-      { id: 'mischief.wrongplace', group: 'Mischief', icon: '🔀', label: 'Show a badge made out to another place', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
-      { id: 'mischief.forge', group: 'Mischief', icon: '🖨️', label: 'Show a forged badge', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
-      { id: 'mischief.replay', group: 'Mischief', icon: '📋', label: "Replay a copy of a resident's badge", params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
-      { id: 'mischief.claim', group: 'Mischief', icon: '🗣️', label: 'Just claim to be accountable', params: [{ key: 'at', label: 'Where?', options: placeOpts, here: true }] },
-    ].map((a) => ({ ...a, key: a.key ?? a.id, done: DONE[a.key ?? a.id]?.() ?? false }));
-    // Playing your agent: only what an agent may do. Your verification, record and grant stay with the person.
-    if (p.playing === 'agent') return list.filter((a) => (AGENT_MAY.has(a.id) && a.id !== 'pose') || a.id === 'play');
-    // Playing yourself: what only an agent does, you ask your agent to do, and it goes on its own.
-    const ASK = { 'helper.deeper': `Ask ${name} to have a sub-agent spawn its own`, 'home.enter': `Send ${name} in` };
-    return list.map((a) => (AGENT_ONLY.has(a.id) && hasAgent
-      ? { ...a, via: 'agent', label: ASK[a.id] ?? `Ask ${name} to ${a.label[0].toLowerCase()}${a.label.slice(1)}`, place: undefined, hint: [a.hint, `${name} goes; you stay here`].filter(Boolean).join(' · ') }
-      : a));
+      // ---- Information --------------------------------------------------------
+      { id: 'hall.registries', group: 'Information', icon: '🏛️', label: 'The Hall of Registries', hint: 'Every registry, by federation; add another federation, or your own registry', place: 'townhall', client: 'hall', info: true },
+      { id: 'hall.records', group: 'Information', icon: '🗄️', label: 'The Hall of Record Keepers', hint: `Every record keeper, by federation; yours is ${grantKeeper()?.name ?? 'not chosen yet'}`, place: 'records', client: 'hall', info: true },
+      ...(asSelf && hasAgent ? [{ id: 'register.view', group: 'Information', icon: '📒', label: 'Your register of attempts', hint: 'Every purchase your agents tried, and today’s totals', client: 'register', info: true }] : []),
+      ...(hasAgent && p.registered ? [{ id: 'receipts', group: 'Information', icon: '🧾', label: 'Show activity receipts', place: 'records', client: 'receipts', info: true }] : []),
+    ].map((a) => ({ ...a, key: a.key ?? a.id, done: a.done ?? DONE[a.key ?? a.id]?.() ?? false }));
+    // A step you've taken once is in the You panel now, not the deck.
+    return list.filter((a) => !a.done);
   }
 
   /**
@@ -1398,6 +1443,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     purchases: () => p.purchases,
     /** Who they play: 'me', 'agent', or a sub-agent's id. */
     playing: () => p.playing,
+    /** Whether they run an agent now (registered or not). */
+    hasAgent: () => Boolean(p.agent && !p.revoked),
     /** Where an errand task happens. */
     taskPlace: (task) => errandTask(task)?.place ?? null,
     /** What one of your agent's sub-agents can do, for an outside agent driving it. */
@@ -1406,7 +1453,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     /** Playing yourself, this is something you ask your agent to do: it goes, you stay. */
     instructs: (id) => p.playing === 'me' && AGENT_ONLY.has(id) && Boolean(p.agent && !p.revoked),
     /** The actions an outside agent may take, for its tool list. */
-    agentCatalog: () => acting.run({ as: 'agent' }, () => catalog().filter((a) => AGENT_MAY.has(a.id))),
+    agentCatalog: () => acting.run({ as: 'agent' }, () => catalog({ settings: true }).filter((a) => AGENT_MAY.has(a.id))),
     /** What an outside agent needs to know to play: who it is, its record, what waits on its principal. */
     briefing: () => ({
       agent: p.agent && !p.revoked ? {

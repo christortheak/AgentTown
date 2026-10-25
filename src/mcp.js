@@ -67,7 +67,7 @@ const SHOP_TOOLS = [
 ];
 
 const TOOLS = [
-  { name: 'pair', description: 'Connect to your principal, the person playing in the browser. They see a pairing code under Actions → "Connect your own agent". Call this first, unless you connected with ?code= in the URL.', inputSchema: { type: 'object', properties: { code: { type: 'string', description: 'The pairing code, like 4F7-K2Q' } }, required: ['code'] } },
+  { name: 'pair', description: 'Connect to your principal, the person playing in the browser. They get a pairing code from "Connect Claude, Codex…" in their You panel. Call this first, unless you connected with ?code= in the URL.', inputSchema: { type: 'object', properties: { code: { type: 'string', description: 'The pairing code, like 4F7-K2Q' } }, required: ['code'] } },
   { name: 'look', description: 'Who and where you are, your principal’s record (what you may spend and share), your grant, your wallet, and anything waiting on your principal. Call this before deciding what to do.', inputSchema: { type: 'object', properties: {} } },
   { name: 'actions', description: 'Everything you may do, with the parameters each takes. Some will be refused; every refusal says why.', inputSchema: { type: 'object', properties: {} } },
   { name: 'act', description: 'Do one action, e.g. {"action":"buy","params":{"shop":"bramble","item":"guide"}}. You walk to the place first. Returns what the place decided, in plain words, and what it learned about you.', inputSchema: { type: 'object', properties: { action: { type: 'string', description: 'An action id from actions' }, params: { type: 'object', description: 'The action’s parameters', additionalProperties: true } }, required: ['action'] } },
@@ -243,7 +243,7 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
   // ---- The tools ------------------------------------------------------------------------------
 
   const needsAgent = (ctx) => {
-    if (!ctx.agent) throw new HttpError(401, 'not_paired', ctx.codeError ?? 'Not paired yet: call pair with the code your principal sees in the browser (Actions → Connect your own agent).');
+    if (!ctx.agent) throw new HttpError(401, 'not_paired', ctx.codeError ?? 'Not paired yet: call pair with the code your principal sees in the browser (the You panel → Connect Claude, Codex…).');
     return ctx.agent;
   };
   const needsShop = (ctx) => {
