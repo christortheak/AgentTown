@@ -80,7 +80,10 @@ export async function startServer({
     return { code, expires, mcp: `${townOrigin}/mcp?code=${code}`, guide: `${townOrigin}/agents.md` };
   });
   app.post('/api/pair/end', ({ headers }) => ({ ended: sessions.unpair(me(headers)) }));
-  app.post('/mcp', ({ body, headers, query }) => mcp.handle({ body, headers, query }));
+  app.post('/api/pair/brief', ({ body, headers }) => sessions.setBrief(me(headers), body?.text));
+  app.get('/api/board', () => ({ board: sessions.board() }));
+  // Wrong pairing codes are counted per address (the socket's, not a header anyone can set).
+  app.post('/mcp', ({ body, headers, query, req }) => mcp.handle({ body, headers, query, ip: req.socket.remoteAddress ?? 'unknown' }));
   app.get('/mcp', () => ({ __raw: true, status: 405, body: { error: 'method_not_allowed', message: 'This server sends no event stream; POST JSON-RPC to /mcp.' } }));
   app.get('/agents.md', () => typed(agentsMd(townOrigin), 'text/markdown; charset=utf-8'));
   app.get('/llms.txt', () => typed(llmsTxt(townOrigin), 'text/plain; charset=utf-8'));

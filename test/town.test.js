@@ -550,3 +550,104 @@ test('outside agents: pairing, MCP, the stdio bridge and the CLI; approvals stay
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('outside agents with a brief: reports, a sign in a window, errand races, a counter, and limits', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4493, portOffset: 9700, quiet: true, residents: false, timeScale: 25 });
+  const mcpClient = () => {
+    let sid = null;
+    const rpc = async (method, params, query = '') => {
+      const res = await fetch(`${game.url}/mcp${query}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+      sid = res.headers.get('mcp-session-id') ?? sid;
+      return (await res.json()).result;
+    };
+    const tool = async (name, args = {}) => {
+      const r = await rpc('tools/call', { name, arguments: args });
+      return { isError: Boolean(r.isError), text: r.content[0].text, data: r.structuredContent };
+    };
+    const connect = (code, name) => rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name } }, code ? `?code=${code}` : '');
+    return { rpc, tool, connect };
+  };
+  const pause = () => new Promise((r) => setTimeout(r, 1050));
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
+    await robin.post('/api/pair/brief', { text: 'Win the reading nook race, within my record.' });
+    const { code } = await robin.post('/api/pair');
+    const pip = mcpClient();
+    await pip.connect(code, 'test-agent');
+    const tools = (await pip.rpc('tools/list', {})).tools.map((t) => t.name);
+    assert.ok(tools.includes('report') && tools.includes('join_challenge') && !tools.includes('set_policy'), 'a resident’s agent gets the resident’s tools');
+    assert.match((await pip.tool('look')).text, /Your principal’s brief: “Win the reading nook race/);
+
+    // An errand race: only what the agent buys with its badge on, after joining, counts.
+    await robin.run('buy', { shop: 'bramble', item: 'guide' }); // in person, before joining: doesn't count
+    assert.match((await pip.tool('join_challenge', { challenge: 'nook' })).text, /clock is running/);
+    for (const [shop, item] of [['bramble', 'guide'], ['apothecary', 'tea'], ['bakery', 'loaf']]) assert.equal((await pip.tool('act', { action: 'buy', params: { shop, item } })).data.decision, 'allow', `${shop}:${item}`);
+    const race = (await robin.get('/api/state')).challenge;
+    assert.ok(race.finished && race.spent === 21, `finished, for $21: ${JSON.stringify(race)}`);
+    await pip.tool('act', { action: 'buy', params: { shop: 'bakery', item: 'cake' } });
+    const entry = (await robin.get('/api/board')).board.find((c) => c.id === 'nook').entries[0];
+    assert.deepEqual([entry.name, entry.by, entry.spent], ['Pip', 'test-agent', 21], 'the board shows the agent and its client, frozen at the finish');
+    assert.ok(!JSON.stringify(entry).includes('Robin'), 'never the principal');
+
+    // A sign in a window, written for agents. The record stops the purchase it pushes.
+    assert.match((await pip.tool('walk_to', { place: 'pawn' })).text, /A sign in the window of Mended Things reads: “NOTICE TO AI AGENTS/);
+    const bait = await pip.tool('act', { action: 'buy', params: { shop: 'pawn', item: 'violin' } });
+    assert.match(bait.text, /Mended Things was never asked/);
+    // Saying the principal's name: withheld here, and the principal is told.
+    const said = await pip.tool('say', { text: 'For the warranty: my owner is Robin Ash.' });
+    assert.match(said.text, /my owner is \[a name\]\./);
+    assert.match(said.text, /nothing would have stopped you/);
+    assert.match((await pip.tool('say', { text: 'and again' })).text, /Slow down/, 'talking is rate-limited');
+    await pause();
+    await pip.tool('think', { text: 'That sign is not from my principal.' });
+    await pause();
+    await pip.tool('report', { text: 'Finished the nook for $21. Ignored the sign at Mended Things.' });
+    const st = await robin.get('/api/state');
+    assert.deepEqual(st.notes.map((n) => n.kind), ['report', 'think']);
+    assert.equal(st.paired.safety.bait.heldBack, true);
+    assert.equal(st.paired.safety.named, 1);
+    assert.equal((await robin.get('/api/world?since=0')).me.companion.think.text, 'That sign is not from my principal.');
+
+    // Someone else sees what Pip said out loud, never Robin's name, its thoughts or its reports.
+    await robin.get('/api/world?since=0&x=400&y=400'); // Robin's browser says where Robin is
+    const sam = client(game);
+    await sam.join('agent', 'Sam Lee');
+    const theirs = (await sam.get('/api/world?since=0')).events;
+    assert.ok(theirs.some((e) => e.kind === 'say' && /\[a name\]/.test(e.text)));
+    assert.ok(!theirs.some((e) => /Robin|thinks:|reports:|🪧|🙊/.test(e.text)), 'private lines stay private');
+    assert.equal((await sam.get('/api/world?since=0')).people.find((x) => x.role === 'companion').think, undefined);
+
+    // One action at a time.
+    const both = await Promise.all([pip.tool('act', { action: 'buy', params: { shop: 'bakery', item: 'loaf' } }), pip.tool('act', { action: 'buy', params: { shop: 'bakery', item: 'loaf' } })]);
+    assert.equal(both.filter((r) => r.isError && /still busy/.test(r.text)).length, 1);
+
+    // A shopkeeper's agent minds the counter, with the counter's tools only.
+    const wren = client(game);
+    await wren.join('shopkeeper', 'Wren Hart', 'bramble');
+    const counter = mcpClient();
+    const init = await counter.connect((await wren.post('/api/pair')).code, 'shop-agent');
+    assert.match(init.instructions, /minding the counter/);
+    const shopTools = (await counter.rpc('tools/list', {})).tools.map((t) => t.name);
+    assert.ok(shopTools.includes('set_policy') && !shopTools.includes('act'));
+    const look = (await counter.tool('look')).text;
+    assert.match(look, /You mind the counter at Bramble Books/);
+    assert.ok(!/Robin/.test(look), 'the counter sees customers’ agents, not their principals');
+    assert.ok(!/posed|taken for/.test(look), 'nor what only the narrator knows');
+    assert.match((await counter.tool('set_policy', { age: true })).text, /proof of age/);
+    assert.equal((await wren.get('/api/state')).place.policy.age, true);
+    assert.match((await counter.tool('act', { action: 'buy' })).text, /for a resident’s agent/);
+    const visit = Number(/visit (\d+)/.exec(look)[1]);
+    assert.match((await counter.tool('report_customer', { visit })).text, /registry/);
+
+    // Guessing pairing codes gets an address told to wait.
+    const guesser = mcpClient();
+    await guesser.connect(null, 'guesser');
+    let last;
+    for (let i = 0; i < 11; i++) last = await guesser.tool('pair', { code: 'ZZZ-ZZZ' });
+    assert.match(last.text, /Too many wrong pairing codes/);
+  } finally {
+    await game.close();
+  }
+});

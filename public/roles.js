@@ -110,6 +110,12 @@ export function renderRolePanel(S) {
     const st = S.stats ?? {};
     html = `
       <header><div><h1>🏪 ${esc(p.name)}</h1><p>${esc(me.name)}, you run this place · ${esc(p.jurisdiction === 'eu' ? 'Harbor (EU rules)' : 'the town (US rules)')}</p></div></header>
+      <div class="assistant">
+        <b>🔌 ${S.paired ? `${esc(S.paired.client)} minds the counter with you` : 'Your own agent at the counter'}</b>
+        <div class="btns">${S.paired ? '<button data-act="brief">Brief it</button><button class="quiet" data-act="unpair">Disconnect</button>' : '<button data-act="pair">Connect your own agent</button>'}</div>
+        ${S.brief ? `<small>Your brief: “${esc(S.brief.text)}”</small>` : ''}
+        ${S.notes?.length ? `<ul class="notes">${S.notes.slice(0, 5).map((n) => `<li>${n.kind === 'think' ? '💭' : '📝'} ${esc(n.text)}</li>`).join('')}</ul>` : ''}
+      </div>
       <label class="adopt">Use the framework? <select data-k="adoption">${S.adoptions.map((a) => `<option value="${esc(a.id)}" ${a.id === p.adoption ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>
       <p class="muted small">${esc(S.adoptions.find((a) => a.id === p.effective)?.blurb ?? '')}${p.effective !== p.adoption ? ' <b>The law requires this here, whatever you choose.</b>' : ''}</p>
       <label class="adopt">People without a badge: <select data-k="people">${S.peoples.map((a) => `<option value="${esc(a.id)}" ${a.id === p.policy.people ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>

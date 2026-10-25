@@ -467,3 +467,12 @@ ul.answers small { display: block; color: var(--muted); }
 .pair-block pre { margin: 0; padding: 8px 64px 8px 10px; border-radius: 10px; background: var(--paper-2); white-space: pre-wrap; word-break: break-all; }
 .pair-block pre code { background: none; padding: 0; font-size: 12px; }
 .pair-block button { position: absolute; right: 6px; bottom: 6px; }
+
+/* An outside agent: what it reports to you, and a shopkeeper's agent at the counter */
+#phoneList li.note { background: #f1edfb; }
+.assistant { margin: 8px 0 10px; padding: 9px 10px; border-radius: 12px; background: #f1edfb; }
+.assistant .btns { margin: 6px 0 4px; }
+.assistant small { display: block; color: var(--ink-2, #6b5a4a); }
+.assistant ul.notes { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.assistant ul.notes li { padding: 2px 0; }
+.notices li.extras-title { margin-top: 8px; list-style: none; }

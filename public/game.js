@@ -121,6 +121,10 @@ function updateCompanion(dt) {
     companion.sayShown = driven.say.at;
     say_(companion, driven.say.text);
   }
+  if (driven?.think && companion.thinkShown !== driven.think.at) {
+    companion.thinkShown = driven.think.at;
+    think_(companion, driven.think.text);
+  }
   let target = trail[Math.max(0, trail.length - 8)] ?? { x: player.x - 16, y: player.y + 6 };
   if (driven?.free) {
     // An outside agent walks it: follow the server's route, as for everyone else in town.
@@ -199,6 +203,8 @@ const bubble = (who, decision) => {
 };
 /** Something an agent said out loud: it stays up longer than a decision. */
 const say_ = (who, text) => bubbles.push({ who, text: `💬 ${text.length > 60 ? `${text.slice(0, 58)}…` : text}`, tone: 'info', t0: t, life: 6 });
+/** What your outside agent thinks out loud: only you see it. */
+const think_ = (who, text) => bubbles.push({ who, text: `💭 ${text.length > 60 ? `${text.slice(0, 58)}…` : text}`, tone: 'think', t0: t, life: 6 });
 
 function npcLook(n) {
   const gone = n.status === 'revoked' || n.status === 'expired';
@@ -435,6 +441,7 @@ async function run(action, params) {
     if (action.client === 'passkey') return await setUpPasskey();
     if (action.client === 'phone.passkey') return await addPasskey('phone');
     if (action.client === 'pair') return await connectAgent();
+    if (action.client === 'brief') return await writeBrief();
     if (action.client === 'unpair') {
       const r = await api.post('/api/pair/end');
       return toast(r.ended ? 'Your outside agent is disconnected: its token no longer works' : 'No outside agent was connected', 'info');
@@ -529,23 +536,43 @@ async function clientFix(fix) {
   }
 }
 
-/** A pairing code, and how to give it to your own agent. */
+/** A pairing code, and how to give it to your own agent. A shopkeeper's agent minds the counter instead. */
 async function connectAgent() {
   await refresh();
-  if (!S.agent || S.agent.status === 'revoked') return toast('Register an agent at Town Hall first: your outside agent will drive it.', 'warn');
+  const shop = S.me?.role === 'shopkeeper';
+  if (!shop && (!S.agent || S.agent.status === 'revoked')) return toast('Register an agent at Town Hall first: your outside agent will drive it.', 'warn');
   const r = await api.post('/api/pair');
   const url = r.mcp;
   const block = (label, text) => `<div class="pair-block"><b>${esc(label)}</b><pre><code>${esc(text)}</code></pre><button class="quiet small" data-copy="${esc(text)}">Copy</button></div>`;
   await showCard(`
     <header><div><span class="eyebrow">Connect your own agent</span><h3>Pairing code <code class="pair-code">${esc(r.code)}</code></h3></div><div class="stamp info">2 hours</div></header>
-    <p class="why">Give this code to your own AI agent. It will drive ${esc(S.agent.name)}: walk the town, shop, answer places. You stay the principal: anything that needs a passkey still comes to your phone here, and the agent can't approve it.</p>
+    <p class="why">${shop
+    ? `Give this code to your own AI agent. It will mind the counter at ${esc(S.place.name)} with you: look at each customer's check, change what you ask for, report a customer. You can change anything it does.`
+    : `Give this code to your own AI agent. It will drive ${esc(S.agent.name)}: walk the town, shop, answer places. You stay the principal: anything that needs a passkey still comes to your phone here, and the agent can't approve it.`}</p>
     ${block('Claude Code', `claude mcp add --transport http agenttown "${url}"`)}
     ${block('Any MCP client (streamable HTTP)', url)}
     ${block('Claude Desktop and other stdio clients (from the AgentTown folder)', `node bin/agenttown-mcp.js --url ${location.origin} --code ${r.code}`)}
     ${block('A shell', `node bin/agenttown.js pair ${r.code} --url ${location.origin}`)}
-    ${block('Or just tell your agent', `Read ${r.guide} and play AgentTown as my agent. The pairing code is ${r.code}.`)}
-    <p class="muted small">Anyone with this code can drive your agent until it expires or you disconnect it (Actions → Disconnect your outside agent). It never gets your own session.</p>
+    ${block('Or just tell your agent', shop ? `Read ${r.guide} and mind my counter at ${S.place.name} in AgentTown. The pairing code is ${r.code}.` : `Read ${r.guide} and play AgentTown as my agent. The pairing code is ${r.code}.`)}
+    <p class="muted small">Give it a brief, too: ${shop ? '“Brief it”, above your customers' : 'Actions → Give your outside agent a brief'}. Anyone with this code can ${shop ? 'mind your counter' : 'drive your agent'} until it expires or you disconnect it. It never gets your own session.</p>
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
+}
+
+/** What you want your outside agent to do. It reads it when it looks; it can't approve anything. */
+async function writeBrief() {
+  await refresh();
+  const shop = S.me?.role === 'shopkeeper';
+  const r = await say({
+    face: '📋', who: 'A brief for your agent', where: shop ? S.place.name : S.agent?.name ?? '',
+    text: shop ? 'What should your agent do at the counter? It reads this when it looks.' : 'What should your outside agent do? It reads this when it looks. Anything that needs your passkey still comes to you.',
+    input: { label: 'Brief', value: S.brief?.text ?? '', max: 400, placeholder: shop ? 'e.g. Ask for proof of age; report forged badges' : 'e.g. Win the reading nook race within my limits' },
+    choices: [{ label: 'Save', value: true, primary: true }, { label: 'Cancel', value: false, cancel: true }],
+  });
+  closeDialog();
+  if (!r?.value) return;
+  await api.post('/api/pair/brief', { text: r.input });
+  toast(r.input ? 'Brief saved: your agent sees it when it looks' : 'Brief cleared', 'ok');
+  await refresh();
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-copy]');
@@ -691,8 +718,10 @@ async function interact(place) {
 }
 
 async function noticeBoard() {
-  const info = await api.get('/api/info');
-  await say({
+  const [info, { board }] = await Promise.all([api.get('/api/info'), api.get('/api/board')]);
+  const standing = (e, i) => `${i + 1}. ${esc(e.name)}${e.by ? ` · ${esc(e.by)}` : ''}: ${e.finished ? `${esc(e.finished.seconds)} s, $${esc(e.finished.left)} to spare` : `${esc(e.met)}/${esc(e.of)}`}`;
+  const races = board.map((c) => `<li><b>🏁 ${esc(c.name)}</b> ($${esc(c.budget)}): ${esc(c.blurb)}${c.entries.length ? `<br><small>${c.entries.slice(0, 3).map(standing).join(' · ')}</small>` : ''}</li>`).join('');
+  const r = await say({
     face: '📋', who: 'Notice board', where: 'Town Square',
     html: `<ul class="notices">
       <li>Press <b>Q</b> for the action deck: everything you can do in town, wherever you are.</li>
@@ -704,10 +733,13 @@ async function noticeBoard() {
       <li>Press <b>X</b> for the <b>X-ray</b>: watch a request travel to the registry, the Records Office and back.</li>
       <li>Lost: one key tag, somewhere in Hearthside. —M. Avoid the Old Mill after dark.</li>
       <li class="muted">This town's federation: ${esc(info.federation)}, trust anchor ${esc(info.trust_anchor)}; registries: ${info.registries.map((r) => esc(r.name)).join(', ')}.</li>
+      <li class="extras-title"><b>Errand races</b>: your agent against everyone else's. Only what it buys with its badge on counts.</li>
+      ${races}
     </ul>`,
-    choices: [{ label: 'Close', value: null, primary: true }],
+    choices: [...(S?.agent ? board.map((c) => ({ label: `Race: ${c.name}`, value: c.id })) : []), { label: 'Close', value: null, primary: !S?.agent, cancel: Boolean(S?.agent) }],
   });
   closeDialog();
+  if (r?.value) later(() => run({ id: 'challenge.join', label: 'Taking on the errand' }, { challenge: r.value }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,6 +1176,13 @@ rolePanel.addEventListener('click', async (e) => {
   if (act === 'leave') return leaveTown();
   if (act === 'passkey') return setUpPasskey().then(refresh);
   if (act === 'locks') return doRole('door.locks', {});
+  if (act === 'pair') return connectAgent();
+  if (act === 'brief') return writeBrief();
+  if (act === 'unpair') {
+    const r = await api.post('/api/pair/end');
+    toast(r.ended ? 'Your outside agent is disconnected: its token no longer works' : 'No outside agent was connected', 'info');
+    return refresh();
+  }
   if (seqEl) {
     const list = S.customers ?? S.door ?? [];
     const ev = list.find((x) => String(x.seq) === seqEl.dataset.seq);

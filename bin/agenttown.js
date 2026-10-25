@@ -6,10 +6,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const HELP = `Play AgentTown as a resident's agent.
+const HELP = `Play AgentTown as a resident's agent, or mind a shopkeeper's counter.
 
   agenttown pair <code> [--url URL]   connect to your principal (Actions → Connect your own agent)
-  agenttown look                      who and where you are, your principal's record, what waits on them
+  agenttown look                      who and where you are, your brief, your principal's record, what waits on them
   agenttown actions                   everything you may do, with parameters
   agenttown do <action> [key=value…]  do it, e.g.  agenttown do buy shop=bramble item=guide
   agenttown ask <ask-id> [once|always]  put a place's question to your principal (they approve by passkey)
@@ -18,7 +18,17 @@ const HELP = `Play AgentTown as a resident's agent.
   agenttown walk <place>              walk somewhere without acting
   agenttown back                      go back to your principal
   agenttown say <text…>               say something out loud (public)
+  agenttown report <text…>            tell your principal something (only they see it)
+  agenttown think <text…>             think out loud (only your principal sees it)
+  agenttown races                     the errand races on the notice board
+  agenttown race <id>                 take one on
   agenttown unpair                    forget the token here
+
+Minding a counter (paired by a shopkeeper):
+  agenttown policy key=value…         e.g.  agenttown policy age=true people=passkey
+  agenttown adoption <mode>           full, pilot, none or block
+  agenttown report-customer <visit>   report a visit (a number from look) to the badge's registry
+  agenttown police <visit>            ask the police to open a case
 
 Environment: AGENTTOWN_URL, AGENTTOWN_TOKEN. Guide: <url>/agents.md`;
 
@@ -42,6 +52,13 @@ const token = process.env.AGENTTOWN_TOKEN ?? config.token;
 
 /** A value from the command line: numbers and true/false as such, everything else as text. */
 const value = (v) => (/^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v === 'true' ? true : v === 'false' ? false : v);
+
+/** key=value arguments, as an object. */
+const pairs = (kv) => Object.fromEntries(kv.map((x) => {
+  const i = x.indexOf('=');
+  if (i < 1) throw new Error(`Expected key=value, got "${x}"`);
+  return [x.slice(0, i), value(x.slice(i + 1))];
+}));
 
 async function call(name, args = {}) {
   const res = await fetch(new URL('/mcp', url), {
@@ -70,12 +87,7 @@ const COMMANDS = {
   actions: () => call('actions'),
   do([action, ...kv]) {
     if (!action) throw new Error('Usage: agenttown do <action> [key=value …]');
-    const params = Object.fromEntries(kv.map((x) => {
-      const i = x.indexOf('=');
-      if (i < 1) throw new Error(`Expected key=value, got "${x}"`);
-      return [x.slice(0, i), value(x.slice(i + 1))];
-    }));
-    return call('act', { action, params });
+    return call('act', { action, params: pairs(kv) });
   },
   ask: ([askId, choice = 'once']) => call('ask_my_principal', { ask_id: askId, choice }),
   decline: ([askId]) => call('decline', { ask_id: askId }),
@@ -83,6 +95,14 @@ const COMMANDS = {
   walk: ([place]) => call('walk_to', { place }),
   back: () => call('come_back'),
   say: (words) => call('say', { text: words.join(' ') }),
+  report: (words) => call('report', { text: words.join(' ') }),
+  think: (words) => call('think', { text: words.join(' ') }),
+  races: () => call('challenges'),
+  race: ([id]) => call('join_challenge', { challenge: id }),
+  policy: (kv) => call('set_policy', pairs(kv)),
+  adoption: ([mode]) => call('set_adoption', { mode }),
+  'report-customer': ([visit]) => call('report_customer', { visit: Number(visit) }),
+  police: ([visit]) => call('file_with_police', { visit: Number(visit) }),
   unpair() {
     save({ url });
     console.log(`Forgot the token in ${CONFIG}.`);

@@ -1886,8 +1886,8 @@ export function drawBubble(ctx, x, y, text, tone, age) {
   ctx.textBaseline = 'middle';
   const w = Math.max(24, ctx.measureText(text).width + 14);
   const by = y - 60 - rise;
-  const colors = { ok: '#3f9b5c', bad: '#c8524a', warn: '#c98a1b', info: '#5a4636' };
-  ctx.fillStyle = '#fffaf0';
+  const colors = { ok: '#3f9b5c', bad: '#c8524a', warn: '#c98a1b', info: '#5a4636', think: '#7a68a8' };
+  ctx.fillStyle = tone === 'think' ? '#f4f0ff' : '#fffaf0';
   ctx.strokeStyle = colors[tone] ?? colors.info;
   ctx.lineWidth = 2;
   roundRect(ctx, x - w / 2, by - 10, w, 20, 10); ctx.fill(); ctx.stroke();

@@ -88,7 +88,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     p = {
       principal: null, verified: false, agent: null, revoked: false, grant: null, badge: false, incognito: false, software: 'pocket', acting: 'me',
       worldIdentity: null, helpers: [], helperCount: 0, foundKey: false, inventory: [], known: {}, receipts: 0, cases: [], events: new Set(),
-      pos: { x: 0, y: 0 }, wallet: `${pid}-${Date.now()}`, knocks: [], once: null, asks: [], askCount: 0, spent: 0, accounts: {},
+      pos: { x: 0, y: 0 }, wallet: `${pid}-${Date.now()}`, knocks: [], once: null, asks: [], askCount: 0, spent: 0, accounts: {}, purchases: [],
     };
     x402.wallet(p.wallet, OPENING_BALANCE);
     P.resetHomes(keys, [account], 'A resident');
@@ -717,6 +717,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       const card = spend(await go('buy', { shop, item }, shop, 'commerce.purchase', P.purchase(shop, def), { spend: def.price, approval, humanApproval }), def.price);
       if (card.decision === 'allow') {
         p.inventory.push({ name: def.name, from: card.place });
+        p.purchases.push({ at: Date.now(), shop, item, name: def.name, price: def.price, byAgent: card.truth === 'agent', badge: card.truth === 'agent' && Boolean(p.badge) });
         p.events.add(`bought:${shop}`);
         p.events.add(card.lane === 'people' && card.truth === 'person' ? 'bought-in-person' : card.lane === 'people' ? 'posed' : 'bought-by-agent');
       }
@@ -728,6 +729,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       if (short) return short;
       const card = spend(await go('pay', { bill: def.id }, 'bank', 'payments.authorize', { payee: def.name, amount: money(def.amount) }, { spend: def.amount, approval, humanApproval }), def.amount);
       if (card.decision === 'allow' && card.classification === 'HUMAN_APPROVED') p.events.add('bank-in-person');
+      if (card.decision === 'allow') p.purchases.push({ at: Date.now(), shop: 'bank', item: def.id, name: `paid ${def.name}`, price: def.amount, byAgent: card.truth === 'agent', badge: card.truth === 'agent' && Boolean(p.badge) });
       return card;
     },
     compute: ({ job, humanApproval }) => {
@@ -968,6 +970,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
       { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
       { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent over MCP or a CLI; you still approve' : 'Register an agent first', client: 'pair' },
+      { id: 'brief', group: 'You', icon: '📋', label: 'Give your outside agent a brief', hint: 'What you want it to do; it reads this when it looks', client: 'brief' },
       { id: 'unpair', group: 'You', icon: '🔌', label: 'Disconnect your outside agent', hint: 'Its token stops working at once', client: 'unpair' },
       { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: p.accounts[id] ? 'you have an account' : '' })) }] },
       { id: 'court', group: 'You', icon: '⚖️', label: 'Ask the court who is behind a badge', hint: 'Resolution under legal process', place: 'court', params: [{ key: 'case', label: 'Which case?', options: p.cases.map((c) => ({ value: c.id, label: c.about })) }] },
@@ -1114,6 +1117,8 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
   return {
     catalog, run, enroll, state, reset, account,
+    /** What this player has bought, for the head-to-head errands. */
+    purchases: () => p.purchases,
     /** The actions an outside agent may take, for its tool list. */
     agentCatalog: () => acting.run({ as: 'agent' }, () => catalog().filter((a) => AGENT_MAY.has(a.id))),
     /** What an outside agent needs to know to play: who it is, its record, what waits on its principal. */
