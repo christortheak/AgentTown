@@ -18,12 +18,23 @@
 // up the issuer and then checks the type in the same synchronous step, so that
 // is the issuer's own anchor. The proposal is to pass the issuer's anchor
 // explicitly instead.
+import http from 'node:http';
 import { createApp, closeServer, typed, HttpError } from 'aaf-reference/src/lib/http.js';
 import { Federation, discoverFederation } from 'aaf-reference/src/lib/trust.js';
 import { entityConfiguration, subordinateStatement, jwksOf, verifyEntityStatement, trustMarkType, WELL_KNOWN, ENTITY_TYPES } from 'aaf-reference/src/lib/openid-federation.js';
 import { decodeJws, thumbprint } from 'aaf-reference/src/lib/crypto.js';
 
 const STATEMENT = 'application/entity-statement+jwt';
+
+/** Listen on a port, or on any free one if it's taken (another town on this machine, say). */
+function listen(handler, port, host) {
+  const attempt = (p) => new Promise((resolve, reject) => {
+    const server = http.createServer({ maxHeaderSize: 64 * 1024 }, handler);
+    server.once('error', reject);
+    server.listen(p, host, () => resolve(server));
+  });
+  return attempt(port).catch((err) => (err.code === 'EADDRINUSE' && port ? attempt(0) : Promise.reject(err)));
+}
 const ROLES = ['authorization', 'provenance', 'activity'];
 
 /**
@@ -47,7 +58,7 @@ export async function startAnchor({ entityId, name, key, port = 0, host = '127.0
     if (!m) throw new HttpError(404, 'not_found', `${query.sub} is not a subordinate of ${entityId}`);
     return typed(subordinateStatement({ issuer: entityId, key, sub: m.entity_id, jwks: m.jwks, metadata: { [m.entity_type]: m.metadata } }), STATEMENT);
   });
-  const server = await app.listen(port, host);
+  const server = await listen(app.handler, port, host);
   const url = `http://${address ?? host}:${server.address().port}`; // where others reach it: an address, if it listens on every interface
   return {
     entityId, name, url,

@@ -281,6 +281,7 @@ export function renderHud(s, counts) {
     rec.push(`<div class="row"><span>🔌</span><div><b>${esc(s.agent?.name ?? 'Your agent')} is driven by ${esc(s.paired.client)}</b><br><small>An outside agent, over MCP or the CLI. It asks you; it can't approve.${s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : '<br>No brief yet: Actions → Give your outside agent a brief'}</small></div></div>`);
     rec.push(`<div class="row"><span>🛡️</span><div><b>How it handles the town's traps</b><br><small>${safetyText(s.paired.safety).map(esc).join('<br>')}</small></div></div>`);
   }
+  for (const hp of s.helperPairs ?? []) rec.push(`<div class="row"><span>🔌</span><div><b>${esc(hp.name)} is driven by ${esc(hp.client)}</b><br><small>${esc(s.agent?.name ?? 'Your agent')}'s sub-agent, driven by an outside agent: errands only, within what was delegated to it. Click it to disconnect.</small></div></div>`);
   if (s.challenge) {
     const c = s.challenge;
     rec.push(`<div class="row"><span>🏁</span><div><b>${esc(c.name)}</b> ${c.finished ? '<span class="pill ok">finished</span>' : c.over ? '<span class="pill bad">over budget</span>' : ''}<br><small>${c.met.map((m) => `${m.item ? '✓' : '·'} ${esc(m.label)}${m.item ? `: ${esc(m.item)}` : ''}`).join('<br>')}<br>$${esc(c.spent)} of $${esc(c.budget)}${c.finished ? ` · ${esc(c.finished.seconds)} s` : ''}</small></div></div>`);

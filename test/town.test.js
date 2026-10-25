@@ -62,14 +62,16 @@ const client = (game) => {
 async function until(get, testFn, { timeout = 20000, label = 'event' } = {}) {
   const deadline = Date.now() + timeout;
   let since = 0;
+  const recent = [];
   while (Date.now() < deadline) {
     const w = await get(`/api/world?since=${since}`);
     const hit = w.events.find(testFn);
     if (hit) return hit;
+    recent.push(...w.events.map((e) => `${e.kind}: ${e.text}`));
     since = w.events.length ? Math.min(w.seq, w.events.at(-1).seq) : since;
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`timed out waiting for ${label}`);
+  throw new Error(`timed out waiting for ${label}; the last things that happened:\n${recent.slice(-12).join('\n')}`);
 }
 
 test('a day in AgentTown', { timeout: 120000 }, async () => {
@@ -244,7 +246,7 @@ test('an external federation, reached by address', { timeout: 60000 }, async () 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenttown-ext-'));
   const fed = await startFederationInProcess({ dataDir, portOffset: 8000, quiet: true });
   const game = await startServer({
-    port: 4498, quiet: true, residents: false,
+    port: 4498, portOffset: 8200, quiet: true, residents: false,
     config: { federation: { trustAnchor: fed.trustAnchor, authorityKeys: fed.paths.keysDir }, places: { cafe: { accepts: null } } },
   });
   const { run, get, join } = client(game);
@@ -900,6 +902,64 @@ test('an event: a team’s services join with the script, the check at the door,
   } finally {
     kit?.kill('SIGINT');
     await new Promise((r) => setTimeout(r, 300));
+    await game.close();
+  }
+});
+
+test('agents stay put, and an outside agent can drive a sub-agent', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4481, portOffset: 11000, quiet: true, residents: false, timeScale: 25 });
+  try {
+    const map = buildTown();
+    const near = (a, b, d = 3) => Math.hypot(a.x - b.x, a.y - b.y) < d;
+    const sky = client(game);
+    await sky.join('agent', 'Sky Reed');
+    const where = async () => (await sky.get('/api/world?since=0&x=500&y=500')).me.companion;
+    await sky.get('/api/world?since=0&x=500&y=500'); // where you are, as your browser would say
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await sky.run(a, p)).decision, 'allow', a);
+    assert.ok(near((await where()).pos, { x: 474, y: 506 }), 'Pip starts beside you');
+
+    // An errand: Pip goes, does it, and stays there.
+    assert.equal((await sky.run('agent.errand', { task: 'buy:bramble/guide' })).decision, 'allow');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(near((await where()).pos, placeFront(map, 'bramble')), 'Pip stays at Bramble Books');
+    // Called over, it walks to you and stays beside you.
+    await sky.run('agent.call');
+    assert.ok(near((await where()).pos, { x: 474, y: 506 }));
+    // Played and left somewhere, it stays where you left it.
+    await sky.run('play', { as: 'agent' });
+    await sky.run('play', { as: 'me', left: { x: 900, y: 700 } });
+    assert.deepEqual((await where()).pos, { x: 900, y: 700 });
+
+    // A sub-agent appears beside Pip (at Town Hall, where Pip registered it) and stays there.
+    assert.equal((await sky.run('helper.spawn', { kind: 'standing' })).decision, 'allow');
+    const sprout = (await sky.get('/api/state')).helpers[0];
+    const npc = () => game.town.sim.npcs.get(sprout.id);
+    assert.ok(!npc().follow && near(npc().pos, placeFront(map, 'townhall'), 80), 'beside Pip at Town Hall, not on your heels');
+    assert.equal((await sky.run('helper.fund', { helper: sprout.id, budget: 20 })).decision, 'allow');
+
+    // Your own AI agent drives the sub-agent: errands only, within what Pip delegated, and nothing to ask you.
+    const { code, target } = await sky.post('/api/pair', { target: sprout.id });
+    assert.equal(target, sprout.id);
+    let sid = null;
+    const rpc = async (method, params, query = '') => {
+      const res = await fetch(`${game.url}/mcp${query}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(sid ? { 'mcp-session-id': sid } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+      sid = res.headers.get('mcp-session-id') ?? sid;
+      return (await res.json()).result;
+    };
+    const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex' } }, `?code=${code}`);
+    assert.match(init.instructions, /You are a sub-agent/);
+    const tools = (await rpc('tools/list', {})).tools.map((t) => t.name);
+    assert.ok(tools.includes('act') && !tools.includes('ask_my_principal') && !tools.includes('join_challenge'));
+    assert.match((await rpc('tools/call', { name: 'look', arguments: {} })).content[0].text, /You are Sprout, a sub-agent of Pip/);
+    const bought = await rpc('tools/call', { name: 'act', arguments: { action: 'helper.act', params: { task: 'buy:bakery/loaf' } } });
+    assert.equal(bought.structuredContent.decision, 'allow');
+    assert.ok(near(npc().pos, placeFront(map, 'bakery'), 40), 'it walked there, and stays');
+    const ask = await rpc('tools/call', { name: 'ask_my_principal', arguments: { ask_id: 'x' } });
+    assert.ok(ask.isError && /for a resident’s agent/.test(ask.content[0].text));
+    assert.equal((await sky.get('/api/state')).helperPairs[0].client, 'codex');
+    assert.equal((await sky.run('play', { as: sprout.id })).httpStatus, 409, 'driven by codex, so not yours to play just now');
+    assert.equal((await sky.post('/api/pair/end', { target: sprout.id })).ended, true);
+  } finally {
     await game.close();
   }
 });

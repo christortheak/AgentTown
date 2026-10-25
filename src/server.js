@@ -77,11 +77,12 @@ export async function startServer({
   });
 
   // An outside agent: the resident makes a pairing code; the agent plays over MCP.
-  app.post('/api/pair', ({ headers }) => {
-    const { code, expires } = sessions.pairCode(me(headers));
-    return { code, expires, mcp: `${townOrigin}/mcp?code=${code}`, guide: `${townOrigin}/agents.md` };
+  // A code for your agent (target "agent", the default) or one of its sub-agents (its id).
+  app.post('/api/pair', ({ body, headers }) => {
+    const { code, expires, target } = sessions.pairCode(me(headers), body?.target);
+    return { code, expires, target, mcp: `${townOrigin}/mcp?code=${code}`, guide: `${townOrigin}/agents.md` };
   });
-  app.post('/api/pair/end', ({ headers }) => ({ ended: sessions.unpair(me(headers)) }));
+  app.post('/api/pair/end', ({ body, headers }) => ({ ended: sessions.unpair(me(headers), body?.target ?? null) }));
   app.post('/api/pair/brief', ({ body, headers }) => sessions.setBrief(me(headers), body?.text));
   app.get('/api/board', () => ({ board: sessions.board() }));
   // The halls: every federation the town knows. In a local town anyone may add one or admit a service (each place

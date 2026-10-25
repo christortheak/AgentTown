@@ -189,13 +189,19 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   // Every federation the town knows (proposed: several anchors); each place keeps to the ones it trusts.
   const live = federations ? federations.view() : world.trust;
   const outage = { until: 0 };
-  let down = null;
-  /** What places can reach: during an outage, everything but Registry A (one view per outage, so lookups stay consistent). */
-  const base = () => {
-    if (Date.now() >= outage.until || !world.regA) return live;
-    if (down?.until !== outage.until) down = { until: outage.until, view: live.withUrlOverrides({ [world.regA.id]: 'http://127.0.0.1:9' }) };
-    return down.view;
-  };
+  /**
+   * During an outage, places can't reach Registry A's status lists, so they defer. Its trust marks stay reachable:
+   * aaf-reference's verifier caches a failed trust-mark lookup as "not accredited" for a minute, which would turn
+   * deferrals into refusals after the outage ends.
+   */
+  const down = world.regA ? new Proxy(live, {
+    get(t, key) {
+      if (key === 'locate') return (uri) => (uri.startsWith(world.regA.id) ? `http://127.0.0.1:9${uri.slice(world.regA.id.length)}` : t.locate(uri));
+      const v = t[key];
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  }) : live;
+  const base = () => (Date.now() < outage.until ? down : live);
   /** Which federation lists an entity; a place trusts the federations in its policy (null: every one the town knows). */
   const fedOf = (id) => federations?.of(id) ?? null;
   const trusts = (place, id) => !place.policy.anchors || place.policy.anchors.includes(fedOf(id)?.key ?? 'town');

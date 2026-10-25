@@ -489,34 +489,29 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   // ---- The player's sub-agents ---------------------------------------------------
 
-  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner, unregistered = false }) {
+  /** A player's sub-agent. It starts where it was spawned (beside the agent that spawned it) and stays there until it's sent somewhere. */
+  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner, unregistered = false, pos = { x: 0, y: 0 } }) {
     // Unregistered, it has no badge and its light is dim: nobody vouches for it.
     const look = unregistered ? { ...LOOKS.helper, bulb: '#cfc6b8', glow: false, badge: 'none' } : LOOKS.helper;
-    const npc = spawn({ id, name, kind: 'helper', look, agent, worldIdentity, wallet, follow: true, owner, ephemeralUntil, registry, speed: 120, pos: { x: 0, y: 0 } });
+    const npc = spawn({ id, name, kind: 'helper', look, agent, worldIdentity, wallet, follow: false, owner, ephemeralUntil, registry, speed: 120, pos: { ...pos } });
     x402.wallet(wallet, 5);
     return npc;
   }
 
-  /** Send a sub-agent on an errand; resolves with the place's decision. */
-  async function errand(npc, task, playerPos) {
+  /** Send a sub-agent on an errand from where it stands; it stays there afterwards. Resolves with the place's decision. */
+  async function errand(npc, task) {
     npc.follow = false;
-    npc.pos = { ...playerPos };
     npc.busy = task.label;
     try {
       await walk(npc, task.place);
       if (npc.recalled) {
-        // Stopped on the way: it turns back without asking the place for anything.
+        // Stopped on the way: it stops there without asking the place for anything.
         npc.recalled = false;
-        await walk(npc, playerPos);
-        return { type: 'service', decision: 'info', title: `${npc.name} turned back`, reasons: [] };
+        return { type: 'service', decision: 'info', title: `${npc.name} stopped`, reasons: [] };
       }
-      const card = await act(npc, task.placeId ?? task.place, task.action, task.params);
-      await sleep(900);
-      await walk(npc, playerPos);
-      return card;
+      return await act(npc, task.placeId ?? task.place, task.action, task.params);
     } finally {
       npc.busy = null;
-      npc.follow = true;
     }
   }
 
@@ -527,13 +522,18 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     return [...npcs.values()].filter((n) => !n.hidden).map((n) => ({
       id: n.id, name: n.name, kind: n.kind, look: n.look, pos: n.pos, move: n.move, follow: n.follow, owner: n.owner ?? null,
       status: n.ephemeralUntil && n.ephemeralUntil < now && n.status === 'active' ? 'expired' : n.status,
-      bubble: n.bubble && now - n.bubble.at < 2600 ? n.bubble : null, busy: n.busy ?? null,
+      bubble: n.bubble && now - n.bubble.at < 2600 ? n.bubble : null, busy: n.busy ?? null, say: n.say && now - n.say.at < 6000 ? n.say : null,
       ephemeralUntil: n.ephemeralUntil ?? null,
     }));
   }
 
   return {
     map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor, visitorFrom,
+    /** Walk someone to a place (by id) or a point, on the shared routes; they stay there. */
+    walkTo: (npc, target) => {
+      npc.follow = false;
+      return walk(npc, target);
+    },
     async start() {
       for (const def of RESIDENTS) {
         try {

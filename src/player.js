@@ -35,7 +35,7 @@ export const SHOP_ICONS = { bramble: '📚', kettle: '🫖', bakery: '🥐', apo
  */
 export const AGENT_MAY = new Set([
   'buy', 'pay', 'trade', 'compute', 'fair.claim', 'toll.pay', 'bank.open', 'id.ask',
-  'helper.spawn', 'helper.fund', 'helper.errand', 'helper.deeper', 'helper.revoke',
+  'helper.spawn', 'helper.fund', 'helper.errand', 'helper.deeper', 'helper.revoke', 'helper.call',
   'home.enter', 'home.key', 'home.discard', 'neighbor.knock', 'maple.knock', 'maple.key',
   'badge', 'incognito', 'pose', 'consent', 'consent.finish', 'police.complain', 'receipts',
   'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim',
@@ -45,7 +45,7 @@ export const AGENT_MAY = new Set([
  * What only an agent does: sub-agents and mischief. Playing yourself, you can
  * only ask your agent to do these, and it walks there on its own.
  */
-export const AGENT_ONLY = new Set(['helper.spawn', 'helper.errand', 'helper.fund', 'helper.deeper', 'home.enter', 'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim']);
+export const AGENT_ONLY = new Set(['helper.spawn', 'helper.errand', 'helper.fund', 'helper.deeper', 'helper.call', 'home.enter', 'mischief.wrongplace', 'mischief.forge', 'mischief.replay', 'mischief.claim']);
 
 /** Where an action happens, so whoever does it can walk there first. */
 const PLACE_OF = {
@@ -86,7 +86,7 @@ const service = ({ place, keeper, title, ok = true, reasons = [], story, facts =
  *   account   their home's account at Hearth & Key
  *   justice   police and courts; neighbors() lists other homes to knock at
  */
-export function createPlayer({ id: pid, account, world, places: P, sim, worldid, x402, emit, keys, justice, neighbors = () => [], lookup = (id) => (sim.npcs.get(id) ? sim.byFor(sim.npcs.get(id)) : null) }) {
+export function createPlayer({ id: pid, account, world, places: P, sim, worldid, x402, emit, keys, justice, neighbors = () => [], lookup = (id) => (sim.npcs.get(id) ? sim.byFor(sim.npcs.get(id)) : null), agentPos = () => null }) {
   const K = P.keeper;
   let p;
   let nightjar = null;
@@ -476,7 +476,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       Object.assign(p, { playing: 'me', acting: 'me' });
       const active = helpers().filter((h) => h.status === 'active');
       for (const h of active) h.recalled = Boolean(h.busy);
-      facts.push({ label: 'Your software', value: `${p.agent ? name : 'no agent'}${active.length ? ` and ${active.length} sub-agent${active.length === 1 ? '' : 's'}` : ''} stopped; anything out on an errand turns back` });
+      facts.push({ label: 'Your software', value: `${p.agent ? name : 'no agent'}${active.length ? ` and ${active.length} sub-agent${active.length === 1 ? '' : 's'}` : ''} stopped; anything on its way to an errand stops there, without asking anyone for anything` });
       if (p.grant) {
         const r = await attempt(owner().revokeGrant(grantKeeper(), p.grant.id));
         if (r.ok) {
@@ -750,7 +750,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       await addAgentToRecord(child);
       const npc = sim.addHelper({
         id: `helper-${name}-${Date.now()}`, name, agent: child, worldIdentity: always('world_id', 'fair') ? p.worldIdentity : null, wallet: `${p.wallet}-${name}`,
-        ephemeralUntil: expiresIn ? Date.now() + expiresIn * 1000 : null, registry: reg.name, owner: pid,
+        ephemeralUntil: expiresIn ? Date.now() + expiresIn * 1000 : null, registry: reg.name, owner: pid, pos: besideAgent(),
         // A sub-agent answers what a place asks only where your record already says yes: it can't ask you from across town.
         answer: (ask, { action, params }) => {
           const a = answerAsk(ask, answerCtx(ask.placeId));
@@ -796,16 +796,26 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       const t = errandTask(task);
       if (!t) throw new HttpError(400, 'unknown_task', 'No such errand.');
       if (t.needsKey && !p.foundKey) return service({ place: h.name, keeper: { face: '🌱', who: h.name }, title: 'No key', ok: false, reasons: ["You don't have Maple's key."] });
-      sim.errand(h, t, p.pos).then((card) => {
+      sim.errand(h, t).then((card) => {
         if (card.receipt) p.receipts++;
       }).catch((err) => emit({ kind: 'info', tone: 'warn', owner: pid, text: `${h.name}'s errand failed: ${err.message}` }));
       return service({ place: h.name, keeper: { face: '🌱', who: h.name }, title: 'On its way', ok: null, story: `${h.name} is off to ${t.label}. Its result will show in the town ledger (bottom left) and over its head.` });
     },
 
+    /** Call a sub-agent over: it walks to whoever is asking (you, or your agent if you play it), and stays there. */
+    async 'helper.call'({ helper: id }) {
+      const h = helper(id);
+      if (h.status !== 'active') throw new HttpError(409, 'not_active', `${h.name} is ${h.status}.`);
+      if (h.busy) return service({ place: h.name, keeper: { face: '🌱', who: h.name }, title: 'Busy', ok: false, reasons: [`${h.name} is out: ${h.busy}.`] });
+      const at = p.playing === 'agent' ? agentPos() ?? p.pos : p.pos;
+      await sim.walkTo(h, { x: at.x + 24, y: at.y + 10 });
+      return { type: 'toggle', note: `${h.name} is beside ${p.playing === 'agent' ? p.agent.name : 'you'}, and stays there.` };
+    },
+
     async 'helper.deeper'({ helper: id }) {
       const h = helper(id);
       // Unregistered, there is no registry to say no: a sub-agent can start its own, and so on down.
-      if (h.unregistered) return spawnUnregistered(h.name, h.depth + 1);
+      if (h.unregistered) return spawnUnregistered(h.name, h.depth + 1, h.pos);
       const r = await attempt(h.agent.registerSubagent(world.agent(`${h.name}-jr`), { label: `${h.name}-jr`, records: world.recordsFor(homeRegistry().id) }));
       return service({
         place: `Town Hall · ${town}`, keeper: JUNIPER, title: r.ok ? 'Registered (unexpected)' : 'Refused', ok: r.ok, reasons: r.ok ? [] : r.reasons,
@@ -1126,9 +1136,9 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
    * A sub-agent nobody registered: started by your agent (or by another one like it), on its own. No badge,
    * no budget anyone checks, no depth limit, nothing to revoke.
    */
-  function spawnUnregistered(parent, depth = 1) {
+  function spawnUnregistered(parent, depth = 1, from = null) {
     const name = HELPER_NAMES[p.helperCount++ % HELPER_NAMES.length];
-    const npc = sim.addHelper({ id: `helper-${name}-${Date.now()}`, name, agent: null, unregistered: true, wallet: `${p.wallet}-${name}`, owner: pid, registry: null });
+    const npc = sim.addHelper({ id: `helper-${name}-${Date.now()}`, name, agent: null, unregistered: true, wallet: `${p.wallet}-${name}`, owner: pid, registry: null, pos: besideAgent(from) });
     Object.assign(npc, { unregistered: true, depth });
     p.helpers.push(npc.id);
     emit({ kind: 'people', tone: 'warn', owner: pid, private: true, text: `${parent} started ${name}, a sub-agent no registry knows about${depth > 1 ? ` (${depth} levels below ${p.agent.name})` : ''}` });
@@ -1147,6 +1157,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       hint: f.kind === 'town' ? (r.id === world.regA?.id ? 'the town’s federation · most places trust it' : 'the town’s federation') : `${f.name} · places must choose to trust it`,
     })));
     return { key: 'registry', label: 'At which counter?', options: options.length ? options : world.registries.map((r) => ({ value: r.id, label: r.name })) };
+  }
+
+  /** Where a new sub-agent appears: beside whoever spawned it (your agent, or another sub-agent), a little apart from the others. */
+  function besideAgent(from = null) {
+    const at = from ?? agentPos() ?? p.pos ?? { x: 0, y: 0 };
+    const n = helpers().filter((h) => h.status === 'active').length;
+    return { x: at.x + 24 + (n % 3) * 18, y: at.y + 10 + Math.floor(n / 3) * 16 };
   }
 
   /** The name of whoever you play. */
@@ -1192,11 +1209,15 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       ...(asSelf ? [] : [{ id: 'play', key: 'play.me', group: 'You', icon: '🧍', label: 'Play yourself again', hint: `${name} stays where it is; key T switches`, fixed: { as: 'me' } }]),
       ...(asSelf ? [{ id: 'play', key: 'play.agent', group: 'You', icon: '🤖', label: `Play ${name}, your agent`, hint: hasAgent ? 'Key T. Walk it yourself; what you do, it does' : 'Register an agent first', fixed: { as: 'agent' } }] : []),
       ...hs.map((h) => ({ id: 'play', key: `play.${h.id}`, group: 'You', icon: '🌱', label: `Play ${h.name}, ${name}'s sub-agent`, hint: h.busy ? `out: ${h.busy}` : 'It can only do what was delegated to it', fixed: { as: h.id } })),
-      ...(asSelf && hasAgent ? [{ id: 'agent.errand', group: 'Your agent', icon: '🧺', label: `Send ${name} on an errand`, hint: 'It walks there and back on its own; you stay here', via: 'agent', params: [{ key: 'task', label: 'To do what?', options: errands }] }] : []),
+      ...(asSelf && hasAgent ? [
+        { id: 'agent.errand', group: 'Your agent', icon: '🧺', label: `Send ${name} on an errand`, hint: 'It walks there on its own and stays there; you carry on', via: 'agent', params: [{ key: 'task', label: 'To do what?', options: errands }] },
+        { id: 'agent.call', group: 'Your agent', icon: '📣', label: `Call ${name} over`, hint: 'It walks to you and stays beside you' },
+      ] : []),
       { id: 'verify', group: 'You', icon: '🪪', label: 'Get verified (KYC)', hint: 'Once. Only the registry keeps your name.', place: 'townhall' },
       { id: 'worldid.enroll', group: 'You', icon: '🔮', label: 'Get a World ID at the Orb', hint: 'Simulated: proof you are a unique human, no name', place: 'orb' },
       { id: 'phone.passkey', group: 'You', icon: '📱', label: 'Put a passkey on your phone', hint: 'For approving what your agent shares and spends', client: 'phone.passkey' },
-      { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent over MCP or a CLI; you still approve' : 'Register an agent first', client: 'pair' },
+      { id: 'pair', group: 'You', icon: '🔌', label: 'Connect your own agent (Claude, Codex, ChatGPT…)', hint: p.agent && !p.revoked ? 'It drives your agent, or one of its sub-agents, over MCP or a CLI; you still approve' : 'Start an agent first', client: 'pair',
+        params: hs.length ? [{ key: 'target', label: 'Which agent should it drive?', options: [{ value: 'agent', label: name, hint: 'your agent' }, ...hs.map((h) => ({ value: h.id, label: h.name, hint: `${name}'s sub-agent${h.unregistered ? ', unregistered' : ''}` }))] }] : [] },
       { id: 'brief', group: 'You', icon: '📋', label: 'Give your outside agent a brief', hint: 'What you want it to do; it reads this when it looks', client: 'brief' },
       { id: 'unpair', group: 'You', icon: '🔌', label: 'Disconnect your outside agent', hint: 'Its token stops working at once', client: 'unpair' },
       { id: 'signup', group: 'You', icon: '🔑', label: 'Sign up at a place, to sign in with a passkey', hint: 'Places that have people sign in', params: [{ key: 'place', label: 'Where?', options: passkeyPlaces.map((id) => ({ value: id, label: PLACE_DEFS[id].name, walk: id, hint: hasPasskeyAt(id) ? 'done: you have an account, with a passkey' : p.accounts[id] ? 'you have an account: put a passkey on it' : '' })) }] },
@@ -1206,7 +1227,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       ...(hasAgent && !p.registered
         ? [{ id: 'register', group: 'Your agent', icon: '🪪', label: `Register ${name}`, hint: 'Same agent, same key: a registry vouches for it, and it gets a badge', place: 'townhall', params: [counterParam()] }]
         : [{ id: 'register', group: 'Your agent', icon: '🤖', label: p.revoked ? 'Start and register a new agent' : 'Start and register an agent', hint: 'Both at once: the fast step, once you are verified', place: 'townhall', params: [{ key: 'name', label: "Your agent's name", input: true, value: p.revoked ? '' : 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }, counterParam()] }]),
-      { id: 'hall.registries', group: 'Your agent', icon: '🏛️', label: 'The Hall of Registries', hint: 'Every registry, by federation; add another federation, or your own registry', place: 'townhall', client: 'hall' },
+      { id: 'hall.registries', group: 'Your agent', icon: '🏛️', label: 'The Hall of Registries', hint: 'Every registry, by federation; add another federation, or your own registry', place: 'townhall', client: 'hall', info: true },
       ...(hasAgent ? [] : [{ id: 'agent.spawn', group: 'Your agent', icon: '💻', label: 'Start an agent without registering it', hint: 'Like most agents today: no badge, and nobody can trace it to you', params: [{ key: 'name', label: "Your agent's name", input: true, value: 'Pip' }, { key: 'software', label: 'Which agent software?', options: Object.entries(SOFTWARE).map(([id, sw]) => ({ value: id, label: sw.name, hint: sw.blurb })) }] }]),
       ...(p.registered ? [
         { id: 'badge', group: 'Your agent', icon: p.badge ? '🙈' : '🪪', label: p.badge ? `Take ${name}'s badge off` : `Put ${name}'s badge on`, hint: 'Key: B' },
@@ -1225,15 +1246,16 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
       { id: 'helper.errand', group: 'Sub-agents', icon: '🧺', label: 'Send a sub-agent on an errand', hint: helperOpts.length ? 'It walks there and back on its own' : 'Spawn a sub-agent first', params: helperOpts.length ? [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'task', label: 'To do what?', options: errands }] : [] },
       { id: 'helper.fund', group: 'Sub-agents', icon: '💰', label: 'Give a sub-agent a budget', hint: 'Delegation, at the Records Office', place: 'records', params: [{ key: 'helper', label: 'Who?', options: helperOpts }, { key: 'budget', label: 'How much a purchase?', options: [Math.round(budgetBase / 5), Math.round(budgetBase / 2.5), budgetBase * 2].map((v) => ({ value: v, label: `$${v}`, hint: v > budgetBase ? `more than ${name} has` : '' })) }] },
       { id: 'helper.deeper', group: 'Sub-agents', icon: '🪆', label: 'Ask a sub-agent to spawn its own', hint: 'Depth budget', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
+      { id: 'helper.call', group: 'Sub-agents', icon: '📣', label: 'Call a sub-agent over', hint: 'It walks over and stays there', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
       { id: 'helper.revoke', group: 'Sub-agents', icon: '✂️', label: 'Revoke a sub-agent', params: [{ key: 'helper', label: 'Who?', options: helperOpts }] },
 
       { id: 'record', group: 'Your record', icon: '🗂️', label: 'Edit your record', hint: 'Spending limits, what places may learn, facts on file (proposed)', place: 'records', client: 'record' },
-      { id: 'register.view', group: 'Your record', icon: '📒', label: 'Your register of attempts', hint: 'Every purchase your agents tried, and today’s totals', client: 'register' },
+      { id: 'register.view', group: 'Your record', icon: '📒', label: 'Your register of attempts', hint: 'Every purchase your agents tried, and today’s totals', client: 'register', info: true },
       { id: 'grant', group: 'Your record', icon: '📜', label: 'Sign a grant (quick)', hint: 'Just a limit per purchase', place: 'records', params: [{ key: 'budget', label: 'Spending limit per purchase', options: BUDGETS.map((b) => ({ value: b, label: `Up to $${b}` })) }] },
       { id: 'grant.revoke', group: 'Your record', icon: '🗑️', label: 'Revoke the grant', place: 'records' },
       { id: 'disclose', group: 'Your record', icon: '📛', label: record()?.sharing.name.always.length ? 'Ask me before sharing my name' : 'Share my name with any place that asks', hint: 'A change to your record' },
-      { id: 'receipts', group: 'Your record', icon: '🧾', label: 'Show activity receipts', place: 'records', client: 'receipts' },
-      { id: 'hall.records', group: 'Your record', icon: '🗄️', label: 'The Hall of Record Keepers', hint: `Every record keeper, by federation; yours is ${grantKeeper()?.name ?? 'not chosen yet'}`, place: 'records', client: 'hall' },
+      { id: 'receipts', group: 'Your record', icon: '🧾', label: 'Show activity receipts', place: 'records', client: 'receipts', info: true },
+      { id: 'hall.records', group: 'Your record', icon: '🗄️', label: 'The Hall of Record Keepers', hint: `Every record keeper, by federation; yours is ${grantKeeper()?.name ?? 'not chosen yet'}`, place: 'records', client: 'hall', info: true },
 
       ...SHOPS.map((s) => ({ id: 'buy', group: 'Shops & services', icon: SHOP_ICONS[s] ?? '🛍️', label: `Buy at ${PLACE_DEFS[s].name}`, hint: [who, hint(s)].filter(Boolean).join(' · '), place: s, fixed: { shop: s }, key: `buy.${s}`, params: [{ key: 'item', label: 'What?', options: PLACE_DEFS[s].items.map((i) => ({ value: i.id, label: i.name, hint: `$${i.price}${i.category ? ` (${i.category})` : ''}` })) }] })),
       { id: 'pay', group: 'Shops & services', icon: '🏦', label: 'Pay at First Ledger Bank', hint: [who, hint('bank')].filter(Boolean).join(' · '), place: 'bank', params: [{ key: 'bill', label: 'Pay what?', options: PLACE_DEFS.bank.bills.map((b) => ({ value: b.id, label: b.name, hint: `$${b.amount}` })) }] },
@@ -1376,6 +1398,10 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     purchases: () => p.purchases,
     /** Who they play: 'me', 'agent', or a sub-agent's id. */
     playing: () => p.playing,
+    /** Where an errand task happens. */
+    taskPlace: (task) => errandTask(task)?.place ?? null,
+    /** What one of your agent's sub-agents can do, for an outside agent driving it. */
+    helperActions: (id) => helperCatalog(helper(id)).filter((a) => a.id !== 'play'),
     errandAction,
     /** Playing yourself, this is something you ask your agent to do: it goes, you stay. */
     instructs: (id) => p.playing === 'me' && AGENT_ONLY.has(id) && Boolean(p.agent && !p.revoked),

@@ -54,6 +54,8 @@ Your own AI agent (Claude, ChatGPT, anything that speaks MCP or can run a comman
 | A shell | `node bin/agenttown.js pair ABC-123 --url http://localhost:4400`, then `look`, `actions`, `do buy shop=bramble item=guide` |
 | Anything that reads | "Read http://localhost:4400/agents.md and play AgentTown as my agent. The code is ABC-123." |
 
+You can also connect one to a particular **sub-agent** (Actions → Connect your own agent, or click the sub-agent): it runs errands within what your agent delegated to it, and can't ask you anything. Each outside agent gets its own code, so your Claude session can drive your agent while a Codex session drives one of its sub-agents.
+
 Your agent gets tools to look, list what it may do, act (it walks there first, and everyone sees it go), say something, walk, and put a question to you. It gets **no way to approve anything**:
 - What your record says to ask about goes to your phone, and you approve with your passkey.
 - The approval endpoints only take a person's own session; an agent's token isn't one.
@@ -90,7 +92,7 @@ The ledger marks agents taken for people (🥸): only the narrator knows; the pl
 You can start an agent without registering it (**Actions → Start an agent without registering it**), as most agents run today. It has no badge, nobody outside can trace it to you, and nothing checks its spending against your record. Places that take people at their word take it for a person; places that check badges turn it away, and it can't sign in with your passkey. Its sub-agents need no registry either, so nothing limits how deep they go. Register it at Town Hall later and it is the same agent, with the same key, now with a badge. **Start and register an agent** does both at once.
 
 **Stop everything** (in the dock) is your kill switch:
-- your own software stops your agent and its sub-agents, and anything out on an errand turns back;
+- your own software stops your agent and its sub-agents where they are, and anything on its way to an errand stops there;
 - your agent's grant is revoked at the Records Office, and every budget it delegated goes with it, so places refuse anything that needs permission;
 - an outside agent you paired is disconnected.
 
@@ -118,10 +120,10 @@ Your agent never shows more than the place's rule needs: "over 18", not a birth 
 
 | Key | |
 |---|---|
-| **Q** | The **action deck**: every action in town, grouped and searchable, with what you can do right here at the top. Picking an action somewhere else walks you there first. Nothing is hidden. Some actions are refused, and the refusal comes from the service that refused. |
+| **Q** | The **action deck**: every action in town, searchable. At the top, what whoever you play can do where they are: at this place, then anywhere. Then the next step, then what needs a walk elsewhere (picking it walks there first), then information. Nothing is hidden. Some actions are refused, and the refusal comes from the service that refused. |
 | **E** | Talk to the place you're standing at (opens the deck there). |
 | **B** | Take your badge off or put it back on. |
-| **T** | Who you play: yourself, your agent, or one of its sub-agents. Whoever you play walks and does what you pick; the others stay where you left them, or follow. Playing yourself, you do things in person, and what only an agent does (sub-agents, mischief) you ask your agent to do: it walks there on its own. **Actions → Send Pip on an errand** sends it while you stay. Playing your agent, you can do only what an agent may: verifying, your record and approvals stay with the person. Playing a sub-agent, only what your agent delegated to it. |
+| **T** | Who you play: yourself, your agent, or one of its sub-agents. Whoever you play walks and does what you pick; the others stay where they are, or carry on with their errands. Click your agent or a sub-agent to play it, send it on an errand, call it over, or connect your own AI agent to it. Playing yourself, you do things in person, and what only an agent does (sub-agents, mischief) you ask your agent to do: it walks there on its own. **Actions → Send Pip on an errand** sends it while you stay. Playing your agent, you can do only what an agent may: verifying, your record and approvals stay with the person. Playing a sub-agent, only what your agent delegated to it. |
 | **X** | The **X-ray**: watch each request travel. Your agent asks its registry for a badge made out to this place only, swaps its grant for a permission slip at the Records Office, sends a signed request; the place checks the badge's status with the registry and the grant with the Records Office, writes to the activity log and answers. The camera pulls back to fit it all in, and the steps are listed in words. Every result card has an X-ray button too. |
 | Click | Walk; click a building to go and talk to it; click anyone to ask for their badge; click the minimap to run there. |
 | 🎬 | The **director**: cues for demos and videos, the law, adoption, each place's policy, and a presenter view. |

@@ -86,6 +86,7 @@ export const SPOTS = {
   bridge: { x: 38 * TILE, y: 38.6 * TILE },
   burglarStart: tilePx(58, 25),
   wildsEdge: tilePx(13, 28),
+  board: { x: (BOARD.x + 0.5) * TILE, y: (BOARD.y + 1.6) * TILE }, // the notice board in Town Square
 };
 export const SPAWN = SPOTS.spawn;
 export const BURGLAR_START = SPOTS.burglarStart;

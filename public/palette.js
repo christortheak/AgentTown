@@ -1,6 +1,7 @@
-// The action deck: every action in town, always listed, searchable, with what
-// you can do right here at the top. Picking an action somewhere else walks you
-// there first. Some actions ask a question or two before they run.
+// The action deck: every action in town, always listed, searchable. At the top,
+// what whoever you play can do where they are: at this place, then anywhere.
+// Below, what needs a walk elsewhere (picking it walks there first), then
+// information. Some actions ask a question or two before they run.
 import { esc } from './ui.js';
 
 const GROUPS = ['You', 'Your agent', 'Your record', 'Sub-agents', 'Shops & services', 'Home', 'Mischief'];
@@ -18,8 +19,9 @@ export const paletteOpen = () => Boolean(open);
  *   greeting  { face, who, text } from the keeper here, or null
  *   placeName id -> display name
  *   nearby    (options) -> options sorted by distance, for "whom?" questions
+ *   focus     { key, params }: open at that action's questions, skipping the list
  */
-export function openPalette({ actions, pin = null, here, greeting, placeName, nearby }) {
+export function openPalette({ actions, pin = null, here, greeting, placeName, nearby, focus = null }) {
   if (open) open.close(null);
   const root = $('palette');
   root.hidden = false;
@@ -51,20 +53,27 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
         $('paletteTitle').textContent = here ? `At ${here.name}` : 'What would you like to do?';
         rows = [];
         const sections = [];
+        // The usual groups in order, then any others (a sub-agent you play has a group of its own).
+        const groups = [...GROUPS, ...new Set(actions.map((a) => a.group).filter((x) => x && !GROUPS.includes(x)))];
+        const byGroup = (list) => groups.flatMap((g) => list.filter((a) => a.group === g));
+        const shown = actions.filter((a) => matches(a));
+        const hereRows = here ? shown.filter((a) => a.place === here.id && !a.info) : [];
+        if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: byGroup(hereRows) });
+        const anywhere = shown.filter((a) => !a.place && !a.info);
+        if (anywhere.length) sections.push({ title: 'Wherever you are', items: byGroup(anywhere) });
         const pinned = pin && !query ? actions.find((a) => a.key === pin.key && !a.done) : null;
         if (pinned) sections.push({ title: `Next step · ${pin.text}`, items: [pinned], pinned: true });
-        const hereRows = here ? actions.filter((a) => a.place === here.id && matches(a)) : [];
-        if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: hereRows });
-        // The usual groups in order, then any others (a sub-agent you play has a group of its own).
-        for (const g of [...GROUPS, ...new Set(actions.map((a) => a.group).filter((x) => x && !GROUPS.includes(x)))]) {
-          const items = actions.filter((a) => a.group === g && matches(a) && !(here && a.place === here.id));
-          if (items.length) sections.push({ title: g, items });
+        for (const g of groups) {
+          const items = shown.filter((a) => a.group === g && a.place && !a.info && !(here && a.place === here.id));
+          if (items.length) sections.push({ title: `Elsewhere · ${g}`, items });
         }
+        const info = shown.filter((a) => a.info);
+        if (info.length) sections.push({ title: 'Information', items: info });
         let html = greeting && !query ? `<div class="greet"><span class="face">${esc(greeting.face)}</span><p><b>${esc(greeting.who)}</b> ${esc(greeting.text)}</p></div>` : '';
         for (const s of sections) {
           html += `<h5 class="${s.pinned ? 'pinned' : ''}">${esc(s.title)}</h5><ul class="${s.pinned ? 'pinned' : ''}">`;
           for (const a of s.items) {
-            const away = a.place && (!here || a.place !== here.id);
+            const away = a.place && !a.info && (!here || a.place !== here.id);
             const row = { ...a, chip: away ? `→ ${placeName(a.place)}` : a.place ? 'here' : null, chipTone: away ? '' : 'here', action: a };
             html += rowHtml(row, rows.length);
             rows.push(row);
@@ -167,6 +176,12 @@ export function openPalette({ actions, pin = null, here, greeting, placeName, ne
     };
     render();
     setTimeout(() => search.focus(), 20);
+    // Straight to one action's questions (from clicking an agent, say).
+    const start = focus && actions.find((a) => a.key === focus.key);
+    if (start) {
+      stage = { kind: 'list', action: start };
+      next(focus.params ?? {});
+    }
   });
 }
 
