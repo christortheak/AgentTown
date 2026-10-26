@@ -226,7 +226,7 @@ export const QUESTS = [
   { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.agents?.some((a) => a.grant)) },
   { text: 'Put a passkey on your phone', action: 'phone.passkey', done: (s) => Boolean(s.phone?.passkey) },
   { text: 'Send your agent to buy something', action: 'agent.errand', done: (s) => s.events.includes('bought-by-agent') },
-  { text: 'A place asks for more: answer on your phone', action: 'buy.apothecary', done: (s) => s.events.includes('consent') },
+  { text: 'Send your agent for the sleeping draught (18+): answer on your phone', action: 'agent.errand', done: (s) => s.events.includes('consent') },
   { text: 'Have your agent spawn a sub-agent and send it on an errand', action: 'helper.spawn', done: (s, c) => c.errands > 0 },
   { text: 'Let your agent into your house', action: 'door.passkey', done: (s) => s.events.includes('home') },
   { text: 'Rest at home until night', action: 'night', done: (s) => s.events.includes('night') },

@@ -1212,8 +1212,10 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
   const agentHint = (placeId) => ({ none: "doesn't check badges", block: 'blocks agents', pilot: 'pilot: badges optional' })[P.adoptionOf(P.places[placeId])];
 
   /** Errands anyone can be sent on: what to buy or pay, where. */
-  const errandOptions = () => [
-    ...SHOPS.flatMap((s) => PLACE_DEFS[s].items.filter((i) => !i.restricted).slice(0, 2).map((i) => ({ value: `buy:${s}/${i.id}`, label: `Buy ${i.name.toLowerCase()} at ${PLACE_DEFS[s].name}`, hint: `$${i.price}` }))),
+  //   adult  also 18+ goods: the place asks for proof, and the question comes to your phone. Not for a sub-agent,
+  //          which can't ask you anything.
+  const errandOptions = ({ adult = false } = {}) => [
+    ...SHOPS.flatMap((s) => [...PLACE_DEFS[s].items.filter((i) => !i.restricted).slice(0, 2), ...(adult ? PLACE_DEFS[s].items.filter((i) => i.restricted) : [])].map((i) => ({ value: `buy:${s}/${i.id}`, label: `Buy ${i.name.toLowerCase()} at ${PLACE_DEFS[s].name}`, hint: `$${i.price}${i.restricted ? ' · the place asks for proof of age, and you answer on your phone' : ''}` }))),
     { value: 'pay', label: 'Pay the water bill', hint: '$30' },
     { value: 'fair', label: 'Claim a free pie at the Harvest Fair' },
     { value: 'toll', label: 'Pay the bridge toll', hint: `x402, 0.5 ${ASSET}` },
@@ -1307,6 +1309,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     const placeOpts = TARGETS.map((id) => ({ value: id, label: PLACE_DEFS[id].name }));
     const budgetBase = p.grant?.budget ?? 50;
     const errands = errandOptions();
+    const agentErrands = errandOptions({ adult: true });
     const name = p.agent?.name ?? 'your agent';
     const hasAgent = Boolean(p.agent && !p.revoked);
     const agentGoes = asAgent();
@@ -1378,7 +1381,7 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
 
       // ---- Asking your agent: it goes, you stay ---------------------------
       ...(asSelf && mine.length ? [
-        { id: 'agent.errand', group: ask, ask: true, icon: '🧺', label: 'Run an errand', hint: 'It walks there on its own and stays there; you carry on', via: 'agent', params: [...whichAgent, { key: 'task', label: 'To do what?', options: errands }] },
+        { id: 'agent.errand', group: ask, ask: true, icon: '🧺', label: 'Run an errand', hint: 'It walks there on its own and stays there; you carry on', via: 'agent', params: [...whichAgent, { key: 'task', label: 'To do what?', options: agentErrands }] },
         { id: 'agent.call', group: ask, ask: true, icon: '📣', label: 'Come over', hint: 'It walks to you and stays beside you', params: whichAgent },
         { id: 'helper.spawn', group: ask, ask: true, icon: '🌱', label: 'Spawn a sub-agent', hint: `${several ? 'It' : name} goes; you stay here`, via: 'agent', params: [...whichAgent, spawn] },
         ...(allHelpers.length ? [

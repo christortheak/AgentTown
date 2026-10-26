@@ -25,6 +25,10 @@ export async function startServer({
   directorKey = process.env.AGENTTOWN_DIRECTOR_KEY ?? null, quiet = false, residents = true, timeScale = 1, config, address = process.env.AGENTTOWN_ADDRESS ?? null,
 } = {}) {
   const townOrigin = origin ?? `http://localhost:${port}`;
+  // Where to tell someone the town is: where they reached it (at an event, another machine uses this one's address,
+  // not localhost), unless ORIGIN says where it is served.
+  const reachedAt = (headers) => origin ?? (/^[\w.\-:[\]]+$/.test(headers?.host ?? '') ? `http://${headers.host}` : townOrigin);
+  const lanOrigin = address && !origin ? `http://${address}:${port}` : townOrigin;
   const town = await createTown({ origin: townOrigin, portOffset, residents, timeScale, address, ...(config ? { config } : {}) });
   const { sessions } = town;
   const app = createApp('agenttown');
@@ -80,7 +84,7 @@ export async function startServer({
   // A code for your agent (target "agent", the default) or one of its sub-agents (its id).
   app.post('/api/pair', ({ body, headers }) => {
     const { code, expires, target } = sessions.pairCode(me(headers), body?.target);
-    return { code, expires, target, mcp: `${townOrigin}/mcp?code=${code}`, guide: `${townOrigin}/agents.md` };
+    return { code, expires, target, mcp: `${reachedAt(headers)}/mcp?code=${code}`, guide: `${reachedAt(headers)}/agents.md` };
   });
   app.post('/api/pair/end', ({ body, headers }) => ({ ended: sessions.unpair(me(headers), body?.target ?? null) }));
   app.post('/api/pair/brief', ({ body, headers }) => sessions.setBrief(me(headers), body?.text));
@@ -107,8 +111,8 @@ export async function startServer({
   // Wrong pairing codes are counted per address (the socket's, not a header anyone can set).
   app.post('/mcp', ({ body, headers, query, req }) => mcp.handle({ body, headers, query, ip: req.socket.remoteAddress ?? 'unknown' }));
   app.get('/mcp', () => ({ __raw: true, status: 405, body: { error: 'method_not_allowed', message: 'This server sends no event stream; POST JSON-RPC to /mcp.' } }));
-  app.get('/agents.md', () => typed(agentsMd(townOrigin), 'text/markdown; charset=utf-8'));
-  app.get('/llms.txt', () => typed(llmsTxt(townOrigin), 'text/plain; charset=utf-8'));
+  app.get('/agents.md', ({ headers }) => typed(agentsMd(reachedAt(headers)), 'text/markdown; charset=utf-8'));
+  app.get('/llms.txt', ({ headers }) => typed(llmsTxt(reachedAt(headers)), 'text/plain; charset=utf-8'));
 
   const page = (file) => fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
   app.get('/', () => html(page('index.html')));
@@ -124,9 +128,10 @@ export async function startServer({
   if (!quiet) {
     const info = town.info();
     console.log(`AgentTown is open at ${townOrigin}`);
+    if (lanOrigin !== townOrigin) console.log(`Players on other machines open ${lanOrigin}`);
     console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
     const p = town.bootstrap('participants');
-    console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${townOrigin}/trust-anchor.json`);
+    console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${lanOrigin}/trust-anchor.json`);
     if (!address) console.log('The federations listen on this machine only. To let teams on other machines reach them, set AGENTTOWN_ADDRESS to this machine\'s address on the network.');
     console.log(`Director: ${directorKey ? 'locked (AGENTTOWN_DIRECTOR_KEY)' : 'open to everyone'}. Use "localhost", not 127.0.0.1: passkeys are bound to the domain.`);
   }

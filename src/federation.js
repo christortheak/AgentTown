@@ -57,7 +57,8 @@ async function startLocalFederation({ dataDir, portOffset, address = null }) {
     const common = { id: svc.id, port: svc.port + portOffset, host: listen, trustList: initial, keys: loadKeys(svc.id, paths.keysDir), dataDir: path.join(dataDir, fileNameFor(svc.id)), quiet: true };
     handles.push(svc.kind === 'registry' ? await startRegistry(common) : await startRecordKeeper({ ...common, allowTamperSimulation: Boolean(svc.allowTamperSimulation) }));
   }
-  await accreditAll({ trustList: initial, paths, config });
+  // Operator calls go to each service on this machine, at its offset port (the framework asks for it now).
+  await accreditAll({ trustList: initial, paths, config, portOffset });
   const trustList = await discoverFederation(trustAnchor);
   for (const h of handles) h.setTrust?.(trustList);
   return { trustList, trustAnchor, paths, close: () => Promise.all(handles.map((h) => h.close())) };

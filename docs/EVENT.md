@@ -13,17 +13,11 @@ Either way, **no place trusts you until it chooses to.** Shopkeepers tick federa
 
 ## For the host
 
-Start the town with this machine's address on the network, so other machines can reach its federations:
+Run the town as in [Run AgentTown at a LAN event](HOST.md), with `AGENTTOWN_ADDRESS` set so the town's federations listen on the network and publish that address. Then:
 
-```bash
-AGENTTOWN_ADDRESS=192.168.1.20 npm start
-```
-
-The game, the town's federation, AgentTown Participants and any sample federation then listen on every interface and publish that address. The startup log prints AgentTown Participants' trust anchor and its key thumbprint: read the thumbprint out, or put it on a slide, so teams can check it.
-
-- Set `AGENTTOWN_DIRECTOR_KEY` too, and only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can.
-- Passkeys work only on `localhost` or over HTTPS. Players on other machines can play, but can't approve with a passkey unless you serve the game over HTTPS and set `ORIGIN`.
-- The director's **Start a sample outside federation** runs Riverside Co-op, a federation to add while teams get ready.
+- **Share the trust anchor's key thumbprint.** The startup log prints AgentTown Participants' trust anchor and its thumbprint: read it out, or put it on a slide, so teams can check it.
+- **Decide who admits services.** With `AGENTTOWN_DIRECTOR_KEY` set, only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can.
+- **Have something to add while teams get ready.** The director's **Start a sample outside federation** runs Riverside Co-op.
 
 ## Joining AgentTown Participants
 

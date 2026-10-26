@@ -501,13 +501,15 @@ test('outside agents: pairing, MCP, the stdio bridge and the CLI; approvals stay
   const tool = (name, args = {}, opts) => rpc('tools/call', { name, arguments: args }, opts);
   try {
     // The guides name this town.
-    assert.match(await (await fetch(`${game.url}/agents.md`)).text(), new RegExp(`${game.origin}/mcp\\?code=`));
+    // The guide, and a pairing code, give the address you reached the town by: at an event, another machine's.
+    assert.match(await (await fetch(`${game.url}/agents.md`)).text(), new RegExp(`${game.url}/mcp\\?code=`));
     assert.match(await (await fetch(`${game.url}/llms.txt`)).text(), /agents\.md/);
 
     await robin.join('agent', 'Robin Ash');
     for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
     const { code, mcp } = await robin.post('/api/pair');
     assert.match(code, /^[A-Z0-9]{3}-[A-Z0-9]{3}$/);
+    assert.ok(mcp.startsWith(`${game.url}/mcp?code=`), mcp);
 
     // MCP over HTTP, paired by the code in the URL.
     const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test-agent', version: '1' } }, { query: `?code=${code}` });

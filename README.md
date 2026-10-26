@@ -4,13 +4,21 @@ A cozy town where you play an accountable agent. It is a launch demo for the *Ac
 
 Many people can play at once, each in a role: a **resident** (you walk the town yourself, and can register an agent and send it), a **shopkeeper**, a **homeowner**, the **police**, **the judge** or the **town council**. Simulated residents' agents, a person who shops in person, a newcomer, sub-agents, an honest agent nobody registered and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, told in plain words first (what happened, why, and what would fix it), with every check it ran, what it learned, and a verified receipt for its activity-log entry underneath.
 
+**Start here:**
+- [Try AgentTown on your own computer](docs/TRY-IT.md): set it up and play a day, step by step.
+- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town, everyone plays from their own.
+- [Bring your implementation to AgentTown](docs/EVENT.md): for teams with their own registry, record keeper or federation.
+
 What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
 
 ## Run it
 
-Needs Node.js 22 or later, with `aaf-reference` checked out next to this folder.
+Needs Node.js 22 or later, with the framework's reference implementation checked out next to this folder as `aaf-reference` ([the step-by-step guide](docs/TRY-IT.md) has the details):
 
 ```bash
+git clone https://github.com/christortheak/accountable-agents-framework.git aaf-reference
+git clone https://github.com/christortheak/AgentTown.git
+cd AgentTown
 npm install
 npm start
 ```
