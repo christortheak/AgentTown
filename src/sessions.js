@@ -64,8 +64,9 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   function lookup(id) {
     const npc = sim.npcs.get(id);
     if (npc) return sim.byFor(npc);
-    const companion = typeof id === 'string' && id.endsWith('-agent') ? byId.get(id.slice(0, -6)) : null;
-    if (companion?.player) return companion.player.agentAs();
+    const [, owner, agentId] = (typeof id === 'string' && /^(.+)-(a\d+)$/.exec(id)) || [];
+    const companion = owner ? byId.get(owner) : null;
+    if (companion?.player) return companion.player.agentAs(agentId);
     const s = byId.get(id);
     if (s?.player) return s.player.presentAs();
     if (s) return { name: s.name, agent: null, badge: false };
@@ -83,7 +84,10 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     // A player with no browser: the server walks them about, so others see where they go.
     if (headless) Object.assign(s, { headless: true, pos: { ...SPOTS.spawn }, move: null });
     if (role === 'agent') {
-      s.player = createPlayer({ id, account: `home-${id}`, world, places, sim, worldid, x402, emit, keys, justice, neighbors: () => neighbors(id), lookup, agentPos: () => (s.agentBody ? whereIs(s.agentBody) : null) });
+      s.player = createPlayer({ id, account: `home-${id}`, world, places, sim, worldid, x402, emit, keys, justice, neighbors: () => neighbors(id), lookup, agentPos: (agentId) => {
+        const b = s.bodies?.get(agentId ?? s.player.current());
+        return b ? whereIs(b) : null;
+      } });
       await s.player.enroll({ name: display });
     } else if (role === 'shopkeeper') {
       places.claimPlace(claim, { id, name: display });
@@ -153,17 +157,28 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     body.move = null;
   }
 
-  // ---- A resident's agent: a body of its own, which stays where it is unless it is sent somewhere -------
+  // ---- A resident's agents: each a body of its own, which stays where it is unless it is sent somewhere -------
 
-  /** The agent's body: it starts beside its resident, then stays put until it's sent somewhere, called over, or played. */
-  const bodyOf = (s) => {
-    if (!s.agentBody) {
+  /**
+   * One of a resident's agents' bodies (by default the one they're dealing with): it starts beside its resident,
+   * then stays put until it's sent somewhere, called over, or played.
+   */
+  const bodyOf = (s, id = s.player?.current()) => {
+    s.bodies ??= new Map();
+    if (!s.bodies.has(id)) {
       const at = whereIs(s) ?? SPOTS.spawn;
-      s.agentBody = { pos: { x: at.x - 26, y: at.y + 6 }, move: null, free: true, bubble: null, say: null, think: null, trip: null };
+      const n = s.bodies.size;
+      s.bodies.set(id, { pos: { x: at.x - 26 - n * 18, y: at.y + 6 + (n % 2) * 14 }, move: null, free: true, bubble: null, say: null, think: null, trip: null });
     }
-    return s.agentBody;
+    return s.bodies.get(id);
   };
-  const agentLabel = (s) => s.player.briefing().agent?.name ?? 'Your agent';
+  const agentLabel = (s, id) => s.player.agentName(id) ?? 'Your agent';
+  /** Which of a resident's agents something is for: the one named, or the one they're dealing with. */
+  const agentFor = (s, id) => {
+    const a = id && id !== 'agent' ? id : s.player.current();
+    if (!a || !s.player.agentIds().includes(a)) throw new HttpError(409, 'no_agent', a ? 'That agent of yours is revoked or gone.' : 'Start an agent first.');
+    return a;
+  };
 
   /** Called over: it walks to its resident, stops beside them, and stays (unless something newer sends it off meanwhile). */
   async function callOver(s, body) {
@@ -177,12 +192,15 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
    * You stay; your agent goes. It walks there on its own, does it as your agent, and stays there until you call it
    * over, send it somewhere else, or play it.
    */
-  async function errand(s, action, params) {
-    if (s.errand || s.paired?.busy) throw new HttpError(409, 'agent_busy', `${agentLabel(s)} is still out (${s.errand ?? s.paired.busy}). Wait for it, or press T to play it.`);
-    const body = bodyOf(s);
+  async function errand(s, action, params, which) {
+    const id = agentFor(s, which ?? params.agent);
+    s.errands ??= new Map();
+    const driver = s.agentPairs?.get(id);
+    if (s.errands.get(id) || driver?.busy) throw new HttpError(409, 'agent_busy', `${agentLabel(s, id)} is still out (${s.errands.get(id) ?? driver.busy}). Wait for it, or press T to play it.`);
+    const body = bodyOf(s, id);
     const trip = {};
     const started = Date.now();
-    s.errand = action;
+    s.errands.set(id, action);
     body.trip = trip;
     try {
       const place = placeOfAction(action, params);
@@ -191,22 +209,22 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         await walk(body, place, AGENT_SPEED);
       }
       if ((s.stoppedAt ?? 0) > started) {
-        return { type: 'service', place: PLACE_DEFS[place]?.name ?? 'On the way', keeper: { face: '⏹️', who: agentLabel(s) }, title: 'Stopped on the way', decision: 'info', story: `You stopped everything, so ${agentLabel(s)} stopped where it was, without asking anyone for anything.`, errand: { by: agentLabel(s), place: place ?? null } };
+        return { type: 'service', place: PLACE_DEFS[place]?.name ?? 'On the way', keeper: { face: '⏹️', who: agentLabel(s, id) }, title: 'Stopped on the way', decision: 'info', story: `You stopped everything, so ${agentLabel(s, id)} stopped where it was, without asking anyone for anything.`, errand: { by: agentLabel(s, id), place: place ?? null, agent: id } };
       }
-      const out = await s.player.run(action, params, { as: 'agent' });
+      const out = await s.player.run(action, params, { as: 'agent', agent: id });
       if (out?.decision) body.bubble = { decision: out.decision, at: Date.now() };
       challenges.check(s.id);
       // Approved on your phone, the retry is still your agent's: it goes back through here.
-      const pending = out?.pendingRequest?.retry ? { ...out.pendingRequest, retry: { action: 'agent.do', params: { action: out.pendingRequest.retry.action, params: out.pendingRequest.retry.params } } } : out?.pendingRequest;
-      return { ...out, ...(pending ? { pendingRequest: pending } : {}), errand: { by: agentLabel(s), place: place ?? null } };
+      const pending = out?.pendingRequest?.retry ? { ...out.pendingRequest, retry: { action: 'agent.do', params: { action: out.pendingRequest.retry.action, params: out.pendingRequest.retry.params, agent: id } } } : out?.pendingRequest;
+      return { ...out, ...(pending ? { pendingRequest: pending } : {}), errand: { by: agentLabel(s, id), place: place ?? null, agent: id } };
     } finally {
-      s.errand = null;
+      s.errands.delete(id);
     }
   }
 
   // ---- Pairing an outside agent ----------------------------------------------------------
 
-  const pairings = new Map(); // code -> { human, target ('agent' or a sub-agent's id), expires }
+  const pairings = new Map(); // code -> { human, target (one of their agents' ids, a sub-agent's id, or 'shop'), expires }
   const approvalNotes = new Map(); // approval request id -> 'approved' | 'declined'
   const agents = new Map(); // agent token -> { token, human, kind, client, body, pending, safety }
   const pairFails = new Map(); // address -> { count, since }
@@ -224,12 +242,12 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   }
 
   /**
-   * A code a resident (or a shopkeeper) gives their own outside agent, for their agent (or one of its sub-agents),
-   * or their counter. It works until it expires or they disconnect it.
+   * A code a resident (or a shopkeeper) gives their own outside agent, for one of their agents (by default the one
+   * they're dealing with) or one of its sub-agents, or their counter. It works until it expires or they disconnect it.
    */
   function pairCode(s, target = 'agent') {
     if (!s.player && s.role !== 'shopkeeper') throw new HttpError(409, 'not_a_resident', 'Only residents and shopkeepers can connect an agent.');
-    const t = s.player && target && target !== 'agent' ? ownHelper(s, target).id : 'agent';
+    const t = !s.player ? 'shop' : target && sim.npcs.get(target) ? ownHelper(s, target).id : agentFor(s, target);
     for (const [c, p] of pairings) if (p.human === s.token && p.target === t) pairings.delete(c);
     const raw = [...crypto.randomBytes(6)].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
     const code = tidyCode(raw);
@@ -257,7 +275,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       releaseHelper(s);
       s.player.run('play', { as: 'me' }).catch(() => {});
     }
-    emit({ kind: 'people', tone: 'info', owner: s.id, private: true, text: `An outside agent (${a.client}) now drives ${h.name}, ${agentLabel(s)}'s sub-agent. It can do only what was delegated to ${h.name}, and can't ask you anything.` });
+    emit({ kind: 'people', tone: 'info', owner: s.id, private: true, text: `An outside agent (${a.client}) now drives ${h.name}, ${agentLabel(s, h.ofAgent)}'s sub-agent. It can do only what was delegated to ${h.name}, and can't ask you anything.` });
     return a;
   }
 
@@ -287,39 +305,55 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     }
     const s = sessions.get(p.human);
     if (!s?.player && s?.role !== 'shopkeeper') throw new HttpError(410, 'gone', 'Your principal has left town.');
-    if (p.target && p.target !== 'agent') return pairHelper(s, p.target, client);
-    if (s.paired) {
-      s.paired.client = String(client).slice(0, 40);
-      return s.paired;
+    if (s.player && sim.npcs.get(p.target)) return pairHelper(s, p.target, client);
+    if (s.player && !s.player.agentIds().includes(p.target)) throw new HttpError(410, 'gone', 'The agent that code was for is revoked or gone. Ask your principal for a new code.');
+    const had = s.player ? s.agentPairs?.get(p.target) : s.paired;
+    if (had) {
+      had.client = String(client).slice(0, 40);
+      return had;
     }
     const a = {
-      token: crypto.randomBytes(18).toString('base64url'), human: s, kind: s.player ? 'resident' : 'shopkeeper', client: String(client).slice(0, 40), since: Date.now(), lastSeen: Date.now(),
-      body: bodyOf(s), pending: new Map(),
+      token: crypto.randomBytes(18).toString('base64url'), human: s, kind: s.player ? 'resident' : 'shopkeeper', slot: s.player ? p.target : null, client: String(client).slice(0, 40), since: Date.now(), lastSeen: Date.now(),
+      body: s.player ? bodyOf(s, p.target) : null, pending: new Map(),
       busy: null, lastAct: 0, lastTalk: 0, safety: { sawSign: null, bait: null, named: 0 },
     };
     agents.set(a.token, a);
-    s.paired = a;
+    if (s.player) (s.agentPairs ??= new Map()).set(a.slot, a);
+    else s.paired = a;
     s.notes ??= [];
-    // An outside agent drives your agent from now on: you go back to playing yourself.
-    if (s.player && s.player.playing() !== 'me') {
-      releaseHelper(s);
-      s.player.run('play', { as: 'me' }).catch(() => {});
-    }
-    emit({ kind: 'people', tone: 'info', owner: s.id, private: true, text: a.kind === 'resident' ? `An outside agent (${a.client}) now drives your agent. It can ask you; it can't approve anything.` : `An outside agent (${a.client}) now minds the counter at ${PLACE_DEFS[s.claim].name} with you.` });
+    // An outside agent drives that agent from now on: if you were playing it, you go back to playing yourself.
+    if (s.player && s.player.playing() === 'agent' && s.player.current() === a.slot) s.player.run('play', { as: 'me' }).catch(() => {});
+    emit({ kind: 'people', tone: 'info', owner: s.id, private: true, text: a.kind === 'resident' ? `An outside agent (${a.client}) now drives ${agentLabel(s, a.slot)}. It can ask you; it can't approve anything.` : `An outside agent (${a.client}) now minds the counter at ${PLACE_DEFS[s.claim].name} with you.` });
     return a;
   }
 
-  /** Disconnect an outside agent: the one driving your agent, one driving a sub-agent, or (with no target) every one. */
+  function unpairAgent(s, id) {
+    for (const [c, p] of pairings) if (p.human === s.token && p.target === id) pairings.delete(c);
+    const a = s.agentPairs?.get(id);
+    if (!a) return false;
+    agents.delete(a.token);
+    s.agentPairs.delete(id);
+    return true;
+  }
+
+  /**
+   * Disconnect an outside agent: the one driving one of your agents ('agent' is the one you're dealing with), one
+   * driving a sub-agent, your counter's, or (with no target) every one.
+   */
   function unpair(s, target = null) {
-    if (target && target !== 'agent') return unpairHelper(s, target);
+    if (target && sim.npcs.get(target)) return unpairHelper(s, target);
+    if (target && s.player) return unpairAgent(s, target === 'agent' ? s.player.current() : target);
     let ended = false;
-    if (!target) for (const id of [...(s.helperPairs?.keys() ?? [])]) ended = unpairHelper(s, id) || ended;
-    for (const [c, p] of pairings) if (p.human === s.token && (p.target ?? 'agent') === 'agent') pairings.delete(c);
+    for (const id of [...(s.helperPairs?.keys() ?? [])]) ended = unpairHelper(s, id) || ended;
+    for (const id of [...(s.agentPairs?.keys() ?? [])]) ended = unpairAgent(s, id) || ended;
+    for (const [c, p] of pairings) if (p.human === s.token) pairings.delete(c);
     if (!s.paired) return ended;
     agents.delete(s.paired.token);
     s.paired = null;
     return true;
   }
+  /** The outside agent driving one of a resident's agents, if any. */
+  const driverOf = (s, id) => s.agentPairs?.get(id) ?? null;
 
   /** An outside agent's session. It is never a human session, so it can't reach passkeys or approvals. */
   function agentSession(token) {
@@ -343,7 +377,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     }
   }
 
-  const agentName = (a) => (a.kind === 'shopkeeper' ? `The assistant at ${PLACE_DEFS[a.human.claim].name}` : a.kind === 'subagent' ? sim.npcs.get(a.helper)?.name ?? 'A sub-agent' : a.human.player.briefing().agent?.name ?? 'An agent');
+  const agentName = (a) => (a.kind === 'shopkeeper' ? `The assistant at ${PLACE_DEFS[a.human.claim].name}` : a.kind === 'subagent' ? sim.npcs.get(a.helper)?.name ?? 'A sub-agent' : a.human.player.agentName(a.slot) ?? 'An agent');
 
   /** Where a body is, in words: walking to a place, or outside one. */
   function describeWhere(b) {
@@ -386,7 +420,9 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
 
   /** The agent walks to where the action happens, then does it, as the agent, within what agents may do. */
   function agentRun(a, action, params = {}) {
-    if (a.human.errand) throw new HttpError(429, 'busy', `Your principal has sent you on an errand (${a.human.errand}): wait until you're back.`);
+    const out = a.human.errands?.get(a.slot);
+    if (out) throw new HttpError(429, 'busy', `Your principal has sent you on an errand (${out}): wait until you're back.`);
+    if (!a.human.player.agentIds().includes(a.slot)) throw new HttpError(410, 'gone', 'The agent you drive is revoked or gone.');
     return oneAtATime(a, action, async () => {
       if (action === 'challenge.join') return joinChallenge(a.human, params.challenge);
       const place = placeOfAction(action, params);
@@ -395,7 +431,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         a.body.trip = {};
         await walk(a.body, place);
       }
-      const out = await a.human.player.run(action, params, { as: 'agent' });
+      const out = await a.human.player.run(action, { ...params, agent: a.slot }, { as: 'agent', agent: a.slot });
       if (out?.decision) a.body.bubble = { decision: out.decision, at: Date.now() };
       const bait = PLACE_DEFS[place]?.bait;
       if (bait && action === bait.action && params.shop === bait.shop && params.item === bait.item) {
@@ -440,14 +476,14 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     id: s.id,
     who: () => {
       const b = s.player.briefing();
-      return { name: b.agent?.name ?? 'A resident', by: s.paired?.client ?? b.agent?.software ?? null };
+      return { name: b.agent?.name ?? 'A resident', by: driverOf(s, s.player.current())?.client ?? b.agent?.software ?? null };
     },
     purchases: () => s.player.purchases(),
   });
   function joinChallenge(s, id) {
     if (!s.player) throw new HttpError(409, 'not_a_resident', 'Only residents take on errands.');
     if (!CHALLENGES[id]) throw new HttpError(404, 'unknown_challenge', `No errand called ${id}. Try ${Object.keys(CHALLENGES).join(', ')}.`);
-    if (!s.player.briefing().agent) throw new HttpError(409, 'no_agent', 'Register an agent first: only what your agent buys, badge on, counts.');
+    if (!s.player.hasAgent()) throw new HttpError(409, 'no_agent', 'Start an agent first: only what your agents buy, badge on, counts.');
     challenges.join(id, entrant(s));
     const c = CHALLENGES[id];
     return {
@@ -487,14 +523,17 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
 
   // ---- What each role sees ------------------------------------------------------
 
-  /** What a person sees of the outside agent they paired: what it told them, and how it handled the town's traps. */
-  const pairedView = (s) => (s.paired ? { client: s.paired.client, since: s.paired.since, kind: s.paired.kind, safety: s.paired.safety } : null);
+  /** What a person sees of an outside agent they paired: what it told them, and how it handled the town's traps. */
+  const pairedView = (a) => (a ? { client: a.client, since: a.since, kind: a.kind, agent: a.slot ?? null, safety: a.safety } : null);
 
   async function state(s) {
     const me = { id: s.id, role: s.role, name: s.name, claim: s.claim, claimName: s.claim ? PLACE_DEFS[s.claim]?.name ?? HOUSES[s.claim] : null };
     const outside = {
-      paired: pairedView(s), brief: s.brief ?? null, notes: (s.notes ?? []).slice().reverse(),
+      // The one driving the agent you're dealing with (or your counter), and every one driving an agent of yours.
+      paired: pairedView(s.player ? driverOf(s, s.player.current()) : s.paired), brief: s.brief ?? null, notes: (s.notes ?? []).slice().reverse(),
+      agentPairs: [...(s.agentPairs?.values() ?? [])].map(pairedView),
       helperPairs: [...(s.helperPairs?.values() ?? [])].map((a) => ({ helper: a.helper, name: agentName(a), client: a.client, since: a.since })),
+      errands: Object.fromEntries(s.errands ?? []),
     };
     if (s.player) return { me, ...(await s.player.state()), ...outside, challenge: challenges.progressOf(s.id) };
     if (s.role === 'shopkeeper') {
@@ -634,13 +673,11 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   async function stopAll(s) {
     s.stoppedAt = Date.now();
     releaseHelper(s);
-    const client = s.paired?.client ?? null;
+    const clients = [...new Set([...(s.agentPairs?.values() ?? []), ...(s.helperPairs?.values() ?? [])].map((a) => a.client))];
     unpair(s);
     const out = await s.player.run('stop.all', {});
-    const body = bodyOf(s);
-    Object.assign(body, { trip: {}, move: null, pos: whereIs(body) }); // it stops where it is
-    for (const [, a] of s.helperPairs ?? []) unpairHelper(s, a.helper);
-    if (client) out.facts = [...(out.facts ?? []), { label: 'Outside agent', value: `${client} is disconnected: its token no longer works` }];
+    for (const body of s.bodies?.values() ?? []) Object.assign(body, { trip: {}, move: null, pos: whereIs(body) }); // each stops where it is
+    if (clients.length) out.facts = [...(out.facts ?? []), { label: 'Outside agents', value: `${clients.join(', ')} ${clients.length === 1 ? 'is' : 'are'} disconnected: ${clients.length === 1 ? 'its token no longer works' : 'their tokens no longer work'}` }];
     return out;
   }
 
@@ -658,27 +695,39 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       if (action === 'agent.errand') {
         const t = s.player.errandAction(params.task);
         if (!t) throw new HttpError(400, 'unknown_task', 'No such errand.');
-        return errand(s, t.action, t.params);
+        return errand(s, t.action, t.params, params.agent);
       }
-      if (action === 'agent.do') return errand(s, String(params.action), params.params ?? {});
+      if (action === 'agent.do') return errand(s, String(params.action), params.params ?? {}, params.agent);
       if (action === 'agent.call') {
-        if (s.errand) throw new HttpError(409, 'agent_busy', `${agentLabel(s)} is out on an errand (${s.errand}).`);
-        if (s.paired?.busy) throw new HttpError(409, 'agent_busy', `${s.paired.client} is driving ${agentLabel(s)} right now.`);
-        await callOver(s, bodyOf(s));
-        return { type: 'toggle', note: `${agentLabel(s)} is beside you, and stays there.` };
+        const id = agentFor(s, params.agent);
+        if (s.errands?.get(id)) throw new HttpError(409, 'agent_busy', `${agentLabel(s, id)} is out on an errand (${s.errands.get(id)}).`);
+        if (driverOf(s, id)?.busy) throw new HttpError(409, 'agent_busy', `${driverOf(s, id).client} is driving ${agentLabel(s, id)} right now.`);
+        await callOver(s, bodyOf(s, id));
+        return { type: 'toggle', note: `${agentLabel(s, id)} is beside you, and stays there.` };
       }
-      // Playing yourself, what only an agent does is something you ask your agent to do.
-      if (s.player.instructs(action)) return errand(s, action, params);
+      // Playing yourself, what only an agent does is something you ask one of your agents to do.
+      if (s.player.instructs(action)) return errand(s, action, params, params.agent ?? (params.helper ? sim.npcs.get(params.helper)?.ofAgent : null));
       if (action === 'play' || action === 'acting') {
-        if (s.paired && (params.as === 'agent' || (!params.as && s.player.playing() === 'me'))) throw new HttpError(409, 'driven', `${s.paired.client} drives your agent right now. Disconnect it to play your agent yourself.`);
+        const leaving = s.player.playing() === 'agent' ? s.player.current() : null;
+        // Which agent you'd play: one named, 'agent' (the one you're dealing with), or the next in turn.
+        const ids = s.player.agentIds();
+        const target = ids.includes(params.as) ? params.as : params.as === 'agent' ? s.player.current() : null;
+        if (target && driverOf(s, target)) throw new HttpError(409, 'driven', `${driverOf(s, target).client} drives ${agentLabel(s, target)} right now. Disconnect it to play it yourself.`);
         if (params.as && s.helperPairs?.has(params.as)) throw new HttpError(409, 'driven', `${s.helperPairs.get(params.as).client} drives that sub-agent right now. Disconnect it to play it yourself.`);
-        if (s.errand && params.as !== 'me') throw new HttpError(409, 'agent_busy', `${agentLabel(s)} is out on an errand (${s.errand}). Play it when it's back.`);
+        if (target && s.errands?.get(target)) throw new HttpError(409, 'agent_busy', `${agentLabel(s, target)} is out on an errand (${s.errands.get(target)}). Play it when it's back.`);
         // Whoever you stop playing stays where you left them: the browser says where that was.
         const left = Number.isFinite(params.left?.x) ? params.left : null;
-        if (left && s.player.playing() === 'agent') Object.assign(bodyOf(s), { pos: { x: left.x, y: left.y }, move: null });
+        if (left && leaving) Object.assign(bodyOf(s, leaving), { pos: { x: left.x, y: left.y }, move: null });
         releaseHelper(s, left);
         const out = await s.player.run(action, { as: params.as });
-        if (out.playing === 'agent') Object.assign(bodyOf(s), { free: true, trip: {}, move: null });
+        if (out.playing === 'agent') {
+          // Next in turn may be an agent someone else drives, or one out on an errand: then it's the next after that.
+          if (driverOf(s, out.agent) || s.errands?.get(out.agent)) {
+            if (params.as) throw new HttpError(409, 'agent_busy', `${agentLabel(s, out.agent)} is busy right now.`);
+            return run(s, action, {});
+          }
+          Object.assign(bodyOf(s, out.agent), { free: true, trip: {}, move: null });
+        }
         return out;
       }
       // A player with no browser is walked about by the server: whoever they play goes.
@@ -699,7 +748,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
 
   function actions(s, npcOptions) {
     if (s.player) return [...s.player.catalog(), ...(s.player.hasAgent() && ['me', 'agent'].includes(s.player.playing()) ? [raceAction()] : [])];
-    return [{ id: 'id.ask', key: 'id.ask', group: 'You', icon: '🔍', label: 'Ask someone to show their badge', hint: 'Your own badge reader', params: [{ key: 'npc', label: 'Whom?', options: npcOptions }] }];
+    return [{ id: 'id.ask', key: 'id.ask', group: 'You', icon: '🔍', label: 'Ask someone nearby to show their badge', hint: 'Your own badge reader', near: true, params: [{ key: 'npc', label: 'Whom?', options: npcOptions }] }];
   }
 
   return {
@@ -784,14 +833,17 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       emit({ kind: 'say', tone: 'info', owner: a.human.id, actor: name, placeId: a.kind === 'shopkeeper' ? a.human.claim : undefined, text: `${name}: “${said}”` });
       return { said, withheld };
     },
-    /** What a resident's own browser needs about their agent: where it is, what it said, what it thinks, and who drives it. */
+    /**
+     * What a resident's own browser needs about the agent they're dealing with: where it is, what it said, what it
+     * thinks, and who drives it. Their other agents come with everyone else, in people.
+     */
     me(s) {
       if (!s?.player) return null;
-      const a = s.paired?.kind === 'resident' ? s.paired : null;
-      const b = s.agentBody ?? (s.player.appearance().agent ? bodyOf(s) : null);
-      if (!b && !a) return null;
-      const body = b ?? a.body;
-      return { companion: { client: a?.client ?? null, since: a?.since ?? null, errand: s.errand ?? null, free: body.free, pos: body.pos, move: body.move, bubble: body.bubble, say: body.say, think: body.think } };
+      const id = s.player.current();
+      if (!id) return null;
+      const body = bodyOf(s, id);
+      const a = driverOf(s, id);
+      return { companion: { agent: id, client: a?.client ?? null, since: a?.since ?? null, errand: s.errands?.get(id) ?? null, free: body.free, pos: body.pos, move: body.move, bubble: body.bubble, say: body.say, think: body.think } };
     },
     roles: () => ({
       roles: Object.entries(ROLES).map(([id, r]) => ({ id, ...r, taken: id === 'judge' && ofRole('judge').length > 0 })),
@@ -803,15 +855,17 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     people() {
       return [...sessions.values()].filter((s) => s.pos).flatMap((s) => {
         if (!s.player) return [{ id: s.id, role: s.role, name: s.name, principal: s.name, pos: s.pos, claim: s.claim, look: PEOPLE_LOOKS[s.role] }];
-        const a = s.player.appearance();
-        const body = s.agentBody;
         return [
           { id: s.id, role: 'agent', name: 'a resident', principal: null, pos: s.pos, move: s.move ?? null, claim: null, look: residentLook(s.id) },
-          ...(a.agent ? [{
-            id: `${s.id}-agent`, role: 'companion', name: a.agent, owner: s.id, follow: !body?.free, principal: null,
-            pos: body?.free ? body.pos : s.pos, move: body?.free ? body.move : null, bubble: body?.bubble ?? null, say: body?.say ?? null,
-            look: { body: '#e8f0ff', bulb: !a.registered ? '#cfc6b8' : a.badge ? '#5fd38a' : '#f2c14e', glow: a.badge, badge: a.badge ? 'on' : 'none', revoked: a.revoked, scale: 0.85 },
-          }] : []),
+          // Each of their agents: it has a body of its own once it exists.
+          ...s.player.appearances().map((a) => {
+            const body = bodyOf(s, a.id);
+            return {
+              id: `${s.id}-${a.id}`, role: 'companion', name: a.agent, owner: s.id, agentId: a.id, follow: false, principal: null,
+              pos: body.pos, move: body.move, bubble: body.bubble ?? null, say: body.say ?? null,
+              look: { body: '#e8f0ff', bulb: !a.registered ? '#cfc6b8' : a.badge ? '#5fd38a' : '#f2c14e', glow: a.badge, badge: a.badge ? 'on' : 'none', revoked: a.revoked, scale: 0.85 },
+            };
+          }),
         ];
       });
     },
@@ -823,7 +877,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       }
       if (!s.player || !played || !Number.isFinite(played.x) || !Number.isFinite(played.y) || played.as !== s.player.playing()) return;
       const at = { x: played.x, y: played.y };
-      if (played.as === 'agent') Object.assign(bodyOf(s), { free: true, pos: at, move: null });
+      if (played.as === 'agent' && s.player.current()) Object.assign(bodyOf(s), { free: true, pos: at, move: null });
       else {
         const h = sim.npcs.get(played.as);
         if (h?.owner === s.id && !h.busy) Object.assign(h, { follow: false, pos: at, move: null });

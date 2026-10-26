@@ -109,7 +109,11 @@ function agentLook() {
   if (S?.agent && !S.agent.registered) return { body: '#e8f0ff', bulb: '#cfc6b8', glow: false, badge: 'none', scale: 0.85 };
   return { body: '#e8f0ff', bulb: S?.badge ? '#5fd38a' : '#f2c14e', glow: S?.badge, badge: S?.badge ? 'on' : 'none', scale: 0.85 };
 }
-const companion = { x: 0, y: 0, facing: { x: 0, y: 1 }, walking: false, phase: 1, seed: 3, look: {}, label: '', active: false, held: null };
+/** The agent you're dealing with (the one you last played or picked). Your other agents are drawn like anyone else. */
+const companion = { x: 0, y: 0, facing: { x: 0, y: 1 }, walking: false, phase: 1, seed: 3, look: {}, label: '', active: false, held: null, agentId: null };
+/** Your agents nobody has revoked, and one by id. */
+const liveAgents = () => (S?.agents ?? []).filter((a) => a.status !== 'revoked');
+const agentById = (id) => S?.agents?.find((a) => a.id === id) ?? null;
 let companionRoute = null;
 
 /**
@@ -118,22 +122,25 @@ let companionRoute = null;
  * yourself; your agent, when you play one of its sub-agents, stays where you left it.
  */
 let playing = 'me';
+let playingAgent = null; // which agent, when playing is 'agent'
 const standIn = { x: 0, y: 0, facing: { x: 0, y: 1 }, walking: false, phase: 0, seed: 1, look: PERSON_LOOK, label: 'You', active: false };
 const helperIds = () => new Set((S?.helpers ?? []).map((h) => h.id));
-function becomePlaying(next) {
-  if (next === playing) return;
+function becomePlaying(next, agentId = S?.current ?? null) {
+  if (next === playing && (next !== 'agent' || agentId === playingAgent)) return;
   if (playing === 'me') Object.assign(standIn, { x: player.x, y: player.y, facing: { ...player.facing }, active: true });
-  else if (playing === 'agent') Object.assign(companion, { x: player.x, y: player.y, facing: { ...player.facing }, held: { x: player.x, y: player.y, until: Date.now() + 3000 } });
-  else {
+  // The agent you leave stays where you left it: as the one you deal with, or drawn like anyone else.
+  else if (playing === 'agent' && agentId === playingAgent) Object.assign(companion, { x: player.x, y: player.y, facing: { ...player.facing }, held: { x: player.x, y: player.y, until: Date.now() + 3000 } });
+  else if (playing !== 'agent') {
     const sp = sprites.get(playing);
     if (sp) Object.assign(sp, { x: player.x, y: player.y });
   }
-  const from = next === 'me' ? standIn : next === 'agent' ? companion : sprites.get(next);
+  const from = next === 'me' ? standIn : next === 'agent' ? (companion.agentId === agentId ? companion : sprites.get(`${S?.me?.id}-${agentId}`) ?? companion) : sprites.get(next);
   if (next === 'me') standIn.active = false;
   if (from) Object.assign(player, { x: from.x, y: from.y, facing: { ...(from.facing ?? { x: 0, y: 1 }) } });
   Object.assign(player, { path: null, then: null, cancel: null, walking: false });
   trail.length = 0;
   playing = next;
+  playingAgent = next === 'agent' ? agentId : null;
 }
 const playedName = () => (playing === 'me' ? 'You' : playing === 'agent' ? S?.agent?.name ?? 'Your agent' : S?.helpers?.find((h) => h.id === playing)?.name ?? 'A sub-agent');
 function lookOfPlayed() {
@@ -146,6 +153,12 @@ function updateCompanion(dt) {
   companion.active = Boolean(S?.agent && S.agent.status !== 'revoked') && playing !== 'agent';
   if (!companion.active) return;
   const driven = W.me?.companion;
+  // Another of your agents became the one you deal with: this is now that one, where it stands.
+  if (driven?.agent && companion.agentId !== driven.agent) {
+    companion.agentId = driven.agent;
+    companion.held = null;
+    if (driven.pos) Object.assign(companion, { x: driven.pos.x, y: driven.pos.y });
+  }
   if (driven?.bubble && companion.bubbleShown !== driven.bubble.at) {
     companion.bubbleShown = driven.bubble.at;
     bubble(companion, driven.bubble.decision);
@@ -185,7 +198,8 @@ function updateCompanion(dt) {
   } else companion.walking = false;
   companion.look = agentLook();
   const c = W.me?.companion;
-  companion.label = `${S.agent.name}${c?.client ? ` · ${c.client}` : ''}${S.badge ? '' : ' (no badge)'}${c?.errand ? ' · on an errand' : ''}`;
+  const mine = agentById(companion.agentId) ?? S.agent;
+  companion.label = `${mine.name}${c?.client ? ` · ${c.client}` : ''}${mine.registered && !mine.badge ? ' (no badge)' : ''}${c?.errand ? ' · on an errand' : ''}`;
 }
 
 const solidAt = (x, y) => {
@@ -253,7 +267,7 @@ const ROLE_TAGS = { agent: '', companion: '', shopkeeper: 'shopkeeper', homeowne
 const personAsNpc = (p) => ({
   id: p.id, name: ROLE_TAGS[p.role] ? `${p.name} · ${ROLE_TAGS[p.role]}` : p.name, kind: p.role === 'companion' ? 'companion' : 'person', role: p.role,
   look: p.look, pos: p.pos, move: p.move ?? null, follow: Boolean(p.follow), status: p.look?.revoked ? 'revoked' : 'active', owner: p.owner ?? null,
-  bubble: p.bubble ?? null, say: p.say ?? null,
+  bubble: p.bubble ?? null, say: p.say ?? null, agentId: p.agentId ?? null,
 });
 
 function updateSprites(dt) {
@@ -443,9 +457,11 @@ canvas.addEventListener('pointerdown', (e) => {
   if (busyNow()) return;
   const wx = e.clientX / view.scale + view.x;
   const wy = e.clientY / view.scale + view.y;
-  if (companion.active && Math.hypot(companion.x - wx, companion.y - 12 - wy) < 16) return agentMenu('agent');
+  if (companion.active && Math.hypot(companion.x - wx, companion.y - 12 - wy) < 16) return agentMenu(companion.agentId ?? 'agent');
   for (const s of sprites.values()) {
     if (s.id === playing || !(Math.hypot(s.x - wx, s.y - 14 - wy) < 16) || s.npc.status === 'gone') continue;
+    // One of your own: your other agents, and sub-agents.
+    if (s.npc.owner === S?.me?.id && s.npc.kind === 'companion') return agentMenu(s.npc.agentId);
     return s.npc.kind === 'helper' && s.npc.owner === S?.me?.id ? agentMenu(s.id) : talkTo(s);
   }
   const hit = PLACES.find((p) => wx >= p.rect.x && wx <= p.rect.x + p.rect.w && wy >= p.rect.y && wy <= p.rect.y + p.rect.h);
@@ -463,7 +479,7 @@ async function deck(here = nearestPlace(60)) {
   if (!A.length || Date.now() - actionsAt > 6000) await loadActions();
   const next = isAgent() && S ? nextQuest(S, counts) : null;
   const choice = await openPalette({
-    actions: A,
+    actions: nearOnly(A),
     // The day's next step is yours, the person's: it isn't pinned while you play someone else.
     pin: next && playing === 'me' ? { key: typeof next.action === 'function' ? next.action(S) : next.action, text: next.text } : null,
     here: here ? { id: here.id, name: here.name } : null,
@@ -478,6 +494,16 @@ const dist = (id) => {
   const s = sprites.get(id);
   return s ? Math.hypot(s.x - player.x, s.y - player.y) : 1e9;
 };
+/** What's for whoever is near you (asking for a badge) keeps only the people within a few steps, or goes. */
+const NEAR = 4 * TILE;
+function nearOnly(actions) {
+  return actions.flatMap((a) => {
+    if (!a.near) return [a];
+    // Not whoever you play, and not your own sub-agents: you know who stands behind them.
+    const params = a.params?.map((pm) => (Array.isArray(pm.options) ? { ...pm, options: pm.options.filter((o) => o.value !== playing && sprites.get(o.value)?.npc?.owner !== S?.me?.id && dist(o.value) < NEAR) } : pm));
+    return params?.some((pm) => Array.isArray(pm.options) && !pm.options.length) ? [] : [{ ...a, params }];
+  });
+}
 
 /** Who the deck is for: you, in person, or whoever you play. */
 function actorNow() {
@@ -485,24 +511,25 @@ function actorNow() {
   if (playing === 'me') return { name: 'you', as: S.agent && S.agent.status !== 'revoked' ? 'You, in person' : 'You, in person, with no agent yet' };
   if (playing === 'agent') return { name: S.agent?.name ?? 'your agent', as: `Your agent${S.agent?.registered ? (S.badge ? ', badge on' : ', badge off') : ', unregistered'}` };
   const h = S.helpers?.find((x) => x.id === playing);
-  return { name: h?.name ?? 'your sub-agent', as: `${S.agent?.name ?? 'Your agent'}'s sub-agent${h?.unregistered ? ', unregistered' : ''}` };
+  return { name: h?.name ?? 'your sub-agent', as: `${(agentById(h?.agent) ?? S.agent)?.name ?? 'Your agent'}'s sub-agent${h?.unregistered ? ', unregistered' : ''}` };
 }
 
-/** Your agent, or one of its sub-agents, clicked: play it, send it somewhere, call it over, or hand it to your own AI agent. */
+/** One of your agents, or a sub-agent, clicked: play it, send it somewhere, call it over, or hand it to your own AI agent. */
 async function agentMenu(target) {
-  const isAgent = target === 'agent';
-  const h = isAgent ? null : S?.helpers?.find((x) => x.id === target);
-  const name = isAgent ? S?.agent?.name : h?.name;
-  if (!name) return;
-  const c = W.me?.companion;
-  const driver = isAgent ? c?.client : S.helperPairs?.find((p) => p.helper === target)?.client;
-  const busy = isAgent ? c?.errand : h?.busy;
+  const a = agentById(target === 'agent' ? S?.current : target);
+  const h = a ? null : S?.helpers?.find((x) => x.id === target);
+  const name = a?.name ?? h?.name;
+  if (!name || (a && a.status === 'revoked')) return;
+  const parent = h ? agentById(h.agent) ?? S.agent : null;
+  const id = a ? a.id : target;
+  const driver = a ? S.agentPairs?.find((p) => p.agent === a.id)?.client : S.helperPairs?.find((p) => p.helper === target)?.client;
+  const busy = a ? S.errands?.[a.id] : h?.busy;
   const r = await say({
-    face: isAgent ? '🤖' : '🌱', who: name, where: isAgent ? 'Your agent' : `${S.agent.name}'s sub-agent${h.unregistered ? ', unregistered' : ''}`,
-    text: `${busy ? `Out on an errand: ${busy}. ` : ''}${driver ? `${driver} is driving it. ` : ''}${isAgent ? 'Your agent stays where it is until you send it somewhere, call it over, or play it.' : `It stays where it is until it's sent somewhere. You instruct ${S.agent.name}, and ${S.agent.name} instructs its sub-agents, unless you play one yourself.`}`,
+    face: a ? '🤖' : '🌱', who: name, where: a ? `Your agent${a.registered ? '' : ', unregistered'}` : `${parent.name}'s sub-agent${h.unregistered ? ', unregistered' : ''}`,
+    text: `${busy ? `Out on an errand: ${busy}. ` : ''}${driver ? `${driver} is driving it. ` : ''}${a ? 'It stays where it is until you send it somewhere, call it over, or play it.' : `It stays where it is until it's sent somewhere. You instruct ${parent.name}, and ${parent.name} instructs its sub-agents, unless you play one yourself.`}`,
     choices: [
       ...(driver ? [] : [{ label: `Play ${name}`, value: 'play', primary: true }]),
-      { label: isAgent ? 'Send it on an errand' : `Have ${S.agent.name} send it on an errand`, value: 'errand' },
+      { label: a ? 'Send it on an errand' : `Have ${parent.name} send it on an errand`, value: 'errand' },
       { label: 'Call it over', value: 'call' },
       { label: driver ? `Disconnect ${driver}` : 'Connect your own AI agent to it', value: driver ? 'unpair' : 'pair' },
       { label: 'Close', value: null, cancel: true },
@@ -510,11 +537,11 @@ async function agentMenu(target) {
   });
   closeDialog();
   if (!r?.value) return;
-  if (r.value === 'play') return run({ id: 'play', label: 'Who you play' }, { as: target });
-  if (r.value === 'call') return run(isAgent ? { id: 'agent.call', label: `Calling ${name} over` } : { id: 'helper.call', label: `Calling ${name} over` }, isAgent ? {} : { helper: target });
-  if (r.value === 'pair') return connectAgent(target);
+  if (r.value === 'play') return run({ id: 'play', label: 'Who you play' }, { as: id });
+  if (r.value === 'call') return run(a ? { id: 'agent.call', label: `Calling ${name} over` } : { id: 'helper.call', label: `Calling ${name} over` }, a ? { agent: a.id } : { helper: target });
+  if (r.value === 'pair') return connectAgent(id);
   if (r.value === 'unpair') {
-    const out = await api.post('/api/pair/end', { target });
+    const out = await api.post('/api/pair/end', { target: id });
     toast(out.ended ? `${driver} is disconnected` : 'Nothing was connected', 'info');
     return refresh();
   }
@@ -522,7 +549,7 @@ async function agentMenu(target) {
   await loadActions();
   const choice = await openPalette({
     actions: A, here: null, greeting: null, placeName, nearby: (o) => o,
-    focus: isAgent ? { key: 'agent.errand' } : { key: 'helper.errand', params: { helper: target } },
+    focus: a ? { key: 'agent.errand', params: { agent: a.id } } : { key: 'helper.errand', params: { helper: target } },
   });
   if (choice) await run(choice.action, choice.params);
 }
@@ -535,14 +562,15 @@ function tally(action, params) {
   saveCounts();
 }
 
-/** What your agent is out doing for you, if anything. */
-let errandOut = null;
-/** You stay; your agent goes. It walks there on its own, and its result comes back when it's done. */
+/** What each of your agents is out doing for you, by agent. */
+const errandsOut = new Map();
+/** You stay; one of your agents goes. It walks there on its own, and its result comes back when it's done. */
 async function sendAgent(action, params) {
-  const name = S?.agent?.name ?? 'Your agent';
-  if (errandOut) return toast(`${name} is still out (${errandOut}). Wait for it, or press T to play it.`, 'warn');
+  const id = params.agent ?? S?.helpers?.find((h) => h.id === params.helper)?.agent ?? S?.current;
+  const name = agentById(id)?.name ?? 'Your agent';
+  if (errandsOut.has(id)) return toast(`${name} is still out (${errandsOut.get(id)}). Wait for it, or play it.`, 'warn');
   tally(action, params);
-  errandOut = action.label;
+  errandsOut.set(id, action.label);
   toast(`${name} is on its way. You can carry on.`, 'info');
   try {
     const out = await api.post('/api/do', { action: action.id, params });
@@ -556,7 +584,7 @@ async function sendAgent(action, params) {
   } catch (err) {
     toast(err.message, 'bad');
   } finally {
-    errandOut = null;
+    errandsOut.delete(id);
     await refresh();
   }
 }
@@ -592,7 +620,7 @@ async function run(action, params) {
     }
     if (action.client === 'night') return await nightfall();
     if (action.client === 'receipts') return await showReceipts();
-    if (action.id === 'grant' && !S?.grant && !(await signOnPhone(params))) return;
+    if (action.id === 'grant' && !(agentById(params.agent) ?? S?.agent)?.grant && !(await signOnPhone(params))) return;
     tally(action, params);
     const keeper = action.place ? greetingFor(action.place) : null;
     busy(`${action.label}`, keeper?.face ?? '⏳');
@@ -690,9 +718,11 @@ async function clientFix(fix) {
 async function connectAgent(target = 'agent') {
   await refresh();
   const shop = S.me?.role === 'shopkeeper';
-  if (!shop && (!S.agent || S.agent.status === 'revoked')) return toast('Start an agent first: your outside agent will drive it.', 'warn');
+  if (!shop && !liveAgents().length) return toast('Start an agent first: your outside agent will drive it.', 'warn');
   const r = await api.post('/api/pair', shop ? {} : { target });
-  const sub = !shop && r.target !== 'agent' ? S.helpers.find((h) => h.id === r.target) : null;
+  const sub = !shop ? S.helpers.find((h) => h.id === r.target) ?? null : null;
+  // The agent it drives, or the one whose sub-agent it drives.
+  const of = shop ? null : agentById(sub ? sub.agent : r.target) ?? S.agent;
   const url = r.mcp;
   const block = (label, text) => `<div class="pair-block"><b>${esc(label)}</b><pre><code>${esc(text)}</code></pre><button class="quiet small" data-copy="${esc(text)}">Copy</button></div>`;
   await showCard(`
@@ -700,13 +730,13 @@ async function connectAgent(target = 'agent') {
     <p class="why">${shop
     ? `Give this code to your own AI agent. It will mind the counter at ${esc(S.place.name)} with you: look at each customer's check, change what you ask for, report a customer. You can change anything it does.`
     : sub
-      ? `Give this code to your own AI agent. It will drive ${esc(sub.name)}, ${esc(S.agent.name)}'s sub-agent: run errands where they happen, within what ${esc(S.agent.name)} delegated to it. It can't ask you anything; a sub-agent answers a place's questions only where your record already says yes.`
-      : `Give this code to your own AI agent. It will drive ${esc(S.agent.name)}: walk the town, shop, answer places. You stay the principal: anything that needs a passkey still comes to your phone here, and the agent can't approve it.`}</p>
+      ? `Give this code to your own AI agent. It will drive ${esc(sub.name)}, ${esc(of.name)}'s sub-agent: run errands where they happen, within what ${esc(of.name)} delegated to it. It can't ask you anything; a sub-agent answers a place's questions only where your record already says yes.`
+      : `Give this code to your own AI agent. It will drive ${esc(of.name)}: walk the town, shop, answer places. You stay the principal: anything that needs a passkey still comes to your phone here, and the agent can't approve it.`}</p>
     ${block('Claude Code', `claude mcp add --transport http agenttown "${url}"`)}
     ${block('Any MCP client (streamable HTTP)', url)}
     ${block('Claude Desktop and other stdio clients (from the AgentTown folder)', `node bin/agenttown-mcp.js --url ${location.origin} --code ${r.code}`)}
     ${block('A shell', `node bin/agenttown.js pair ${r.code} --url ${location.origin}`)}
-    ${block('Or just tell your agent', shop ? `Read ${r.guide} and mind my counter at ${S.place.name} in AgentTown. The pairing code is ${r.code}.` : sub ? `Read ${r.guide} and play AgentTown as ${sub.name}, my agent's sub-agent. The pairing code is ${r.code}.` : `Read ${r.guide} and play AgentTown as my agent. The pairing code is ${r.code}.`)}
+    ${block('Or just tell your agent', shop ? `Read ${r.guide} and mind my counter at ${S.place.name} in AgentTown. The pairing code is ${r.code}.` : sub ? `Read ${r.guide} and play AgentTown as ${sub.name}, my agent's sub-agent. The pairing code is ${r.code}.` : `Read ${r.guide} and play AgentTown as ${of.name}, my agent. The pairing code is ${r.code}.`)}
     <p class="muted small">Give it a brief, too: ${shop ? '“Brief it”, above your customers' : 'Brief, beside your agent in the You panel'}. Anyone with this code can ${shop ? 'mind your counter' : 'drive your agent'} until it expires or you disconnect it. It never gets your own session.</p>
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
 }
@@ -725,8 +755,7 @@ async function showHall(which = 'registries') {
     return `<section class="fed"><h4>${esc(f.name)}</h4><small class="muted">${esc(FED_KIND[f.kind] ?? '')} · trust anchor <code>${esc(f.url)}</code>${f.acceptsTownVerifier ? '' : ' · doesn’t accept the town’s ID verifier'}</small>
       <ul>${(which === 'records' ? rks + regs : regs + rks) || '<li class="muted">No registries or record keepers yet.</li>'}</ul></section>`;
   }).join('');
-  const a = S?.agent;
-  const mine = a?.registered ? `<p class="why">${esc(a.name)} is registered at <b>${esc(a.registry)}</b>${a.federation ? `, in ${esc(a.federation)}` : ''}; its grant is kept at <b>${esc(a.keeper ?? '…')}</b>.</p>` : '';
+  const mine = liveAgents().filter((a) => a.registered).map((a) => `<p class="why">${esc(a.name)} is registered at <b>${esc(a.registry)}</b>${a.federation ? `, in ${esc(a.federation)}` : ''}; its grant is kept at <b>${esc(a.keeper ?? '…')}</b>.</p>`).join('');
   const choice = await showCard(`
     <header><div><span class="eyebrow">${which === 'records' ? 'Records Office' : 'Town Hall'}</span><h3>${which === 'records' ? 'The Hall of Record Keepers' : 'The Hall of Registries'}</h3></div><div class="stamp info">proposed</div></header>
     <p class="why">Anyone can run a registry or a record keeper. Whether a place takes its word is up to the place: each one chooses which federations it trusts, and a federation is whoever its trust anchor vouches for. ${which === 'records' ? 'Your grant is kept by a record keeper in your registry’s own federation.' : 'Register your agent at any counter here: Actions → Start an agent (or Register).'}</p>
@@ -873,8 +902,8 @@ async function answer(askId, choice) {
 }
 
 /** The principal signs the grant on their phone: what the agent may do, in plain words. */
-async function signOnPhone({ budget = 50 }) {
-  const name = S?.agent?.name ?? 'Your agent';
+async function signOnPhone({ budget = 50, agent }) {
+  const name = (agentById(agent) ?? S?.agent)?.name ?? 'Your agent';
   const r = await say({
     face: '📱', who: 'Your phone', where: 'Sign a grant',
     text: `**${name} may:**\n• buy books, home goods, food and health goods, up to $${budget} each\n• pay bills up to $${budget}\n• trade up to $${budget} an order\n• rent compute, up to 8 GPU-hours\n• come and go at home\n\nNothing else. Places will see only the part that covers what ${name} asks them for. Sign it?`,
@@ -1179,10 +1208,14 @@ document.getElementById('badgeBtn').addEventListener('click', () => !busyNow() &
 document.getElementById('stopBtn').addEventListener('click', () => !busyNow() && stopEverything());
 async function stopEverything() {
   if (S?.halted) return run({ id: 'agents.resume', label: 'Starting your agents again' }, {});
-  const name = S?.agent?.name ?? 'your agent';
+  const agents = liveAgents();
+  const names = agents.map((a) => a.name);
+  const list = names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  const granted = agents.filter((a) => a.grant).length;
+  const drivers = [...new Set([...(S?.agentPairs ?? []), ...(S?.helperPairs ?? [])].map((x) => x.client))];
   const r = await say({
     face: '⏹️', who: 'Stop everything', where: 'Your device',
-    text: `${name}${S?.helpers?.length ? ' and its sub-agents' : ''} stop where they are, and anything on its way to an errand stops there${S?.grant ? `. ${name}'s grant is revoked, and every budget it delegated with it` : ''}${S?.paired ? `. ${S.paired.client} is disconnected` : ''}. Stop everything?`,
+    text: `${list || 'Your agents'}${S?.helpers?.some((h) => h.status === 'active') ? ' and their sub-agents' : ''} stop where they are, and anything on its way to an errand stops there${granted ? `. ${granted === 1 ? 'The grant is' : 'Their grants are'} revoked, and every budget delegated from ${granted === 1 ? 'it' : 'them'}` : ''}${drivers.length ? `. ${drivers.join(', ')} ${drivers.length === 1 ? 'is' : 'are'} disconnected` : ''}. Stop everything?`,
     choices: [{ label: 'Stop everything', value: true, primary: true }, { label: 'Not now', value: false, cancel: true }],
   });
   closeDialog();
@@ -1191,23 +1224,26 @@ async function stopEverything() {
 document.getElementById('xrayBtn').addEventListener('click', () => toggleXray());
 document.getElementById('actBtn').addEventListener('click', () => !busyNow() && pickWhoToPlay());
 
-/** Who you play, picked from the dock: you, your agent, or one of its sub-agents. T goes to the next one. */
+/** Who you play, picked from the dock: you, one of your agents, or one of their sub-agents. T goes to the next one. */
 async function pickWhoToPlay() {
-  if (!S?.agent || S.agent.status === 'revoked') return;
-  const name = S.agent.name;
-  const now = (who) => (playing === who ? ' (now)' : '');
+  const agents = liveAgents();
+  if (!agents.length) return;
+  const at = playing === 'agent' ? playingAgent : playing;
+  const now = (who) => (at === who ? ' (now)' : '');
   const r = await say({
     face: '🎭', who: 'Who do you play?', where: 'T switches to the next one',
-    text: `Whoever you play walks and does what you pick; the others stay where they are. Play ${name}, or one of its sub-agents, to act out what an agent might do. Verifying, your record and approvals stay with you, the person.`,
+    text: `Whoever you play walks and does what you pick; the others stay where they are. Play an agent, or one of its sub-agents, to act out what an agent might do. Verifying, your record and approvals stay with you, the person.`,
     choices: [
-      { label: `You, in person${now('me')}`, value: 'me', primary: playing !== 'me' },
-      { label: `${name}, your agent${now('agent')}`, value: 'agent', primary: playing === 'me' },
-      ...S.helpers.filter((h) => h.status === 'active').map((h) => ({ label: `${h.name}, ${name}'s sub-agent${h.busy ? ' (out on an errand)' : ''}${now(h.id)}`, value: h.id })),
+      { label: `You, in person${now('me')}`, value: 'me', primary: at !== 'me' },
+      ...agents.flatMap((a, i) => [
+        { label: `${a.name}, your agent${a.registered ? '' : ' (unregistered)'}${S.errands?.[a.id] ? ' (out on an errand)' : ''}${now(a.id)}`, value: a.id, primary: at === 'me' && i === 0 },
+        ...S.helpers.filter((h) => h.agent === a.id && h.status === 'active').map((h) => ({ label: `${h.name}, ${a.name}'s sub-agent${h.busy ? ' (out on an errand)' : ''}${now(h.id)}`, value: h.id })),
+      ]),
       { label: 'Close', value: null, cancel: true },
     ],
   });
   closeDialog();
-  if (r?.value && r.value !== playing) run({ id: 'play', label: 'Who you play' }, { as: r.value });
+  if (r?.value && r.value !== at) run({ id: 'play', label: 'Who you play' }, { as: r.value });
 }
 
 /** The deck, opened at one action's questions. */
@@ -1224,20 +1260,24 @@ async function sure(face, who, text, yes) {
   return Boolean(r?.value);
 }
 
-// The You panel: settings, each a button. They work whoever you play, without walking anywhere; being verified
-// and registering are done in person at Town Hall.
+// The You panel: settings, each a button, most of them for one of your agents. They work whoever you play,
+// without walking anywhere; being verified and registering are done in person at Town Hall.
 document.getElementById('recordBody').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-do]');
   if (!b || busyNow()) return;
   const [what, id] = b.dataset.do.split(':');
-  const name = S?.agent?.name ?? 'your agent';
+  const name = agentById(id)?.name ?? S?.agent?.name ?? 'your agent';
+  const agent = agentById(id) ? { agent: id } : {};
   if ((what === 'verify' || what === 'register') && playing !== 'me') return toast(`That's yours to do in person at Town Hall: play yourself first (T).`, 'warn');
   if (what === 'verify') return run({ id: 'verify', label: 'Get verified (KYC)', place: 'townhall' }, {});
-  if (what === 'register') return deckAt('register');
+  if (what === 'register') {
+    await loadActions();
+    return deckAt(A.find((a) => a.id === 'register' && a.fixed?.agent === id)?.key ?? 'register');
+  }
   if (what === 'phone.passkey') return run({ id: 'phone.passkey', label: 'Put a passkey on your phone', client: 'phone.passkey' }, {});
   if (what === 'disclose') return run({ id: 'disclose', label: 'Sharing your name' }, {});
-  if (what === 'badge') return run({ id: 'badge', label: 'badge' }, {});
-  if (what === 'incognito') return run({ id: 'incognito', label: 'Badge numbers' }, {});
+  if (what === 'badge') return run({ id: 'badge', label: 'badge' }, agent);
+  if (what === 'incognito') return run({ id: 'incognito', label: 'Badge numbers' }, agent);
   if (what === 'pair') return connectAgent(id ?? 'agent');
   if (what === 'unpair') {
     const out = await api.post('/api/pair/end', id ? { target: id } : {});
@@ -1246,11 +1286,11 @@ document.getElementById('recordBody').addEventListener('click', async (e) => {
   }
   if (what === 'brief') return writeBrief();
   if (what === 'stop') return stopEverything();
-  if (what === 'agent.revoke' && (await sure('⛔', `Revoke ${name}`, `${name}'s registry revokes it, and its sub-agents with it. Places that check will turn it away from now on. You'd start a new agent after.`, `Revoke ${name}`))) return run({ id: 'agent.revoke', label: `Revoking ${name}` }, {});
+  if (what === 'agent.revoke' && (await sure('⛔', `Revoke ${name}`, `${name}'s registry revokes it, and its sub-agents with it. Places that check will turn it away from now on.`, `Revoke ${name}`))) return run({ id: 'agent.revoke', label: `Revoking ${name}` }, agent);
   if (what === 'record') return editRecord();
-  if (what === 'grant.revoke' && (await sure('📜', 'Revoke the grant', `${name} stays registered, but has no authority: places will refuse anything that needs it, and every budget it delegated goes too.`, 'Revoke the grant'))) return run({ id: 'grant.revoke', label: 'Revoking the grant' }, {});
+  if (what === 'grant.revoke' && (await sure('📜', `Revoke ${name}'s grant`, `${name} stays registered, but has no authority: places will refuse anything that needs it, and every budget it delegated goes too.`, 'Revoke the grant'))) return run({ id: 'grant.revoke', label: 'Revoking the grant' }, agent);
   if (what === 'play') return run({ id: 'play', label: 'Who you play' }, { as: id });
-  if (what === 'helper.revoke') return run({ id: 'helper.revoke', label: 'Revoking a sub-agent' }, { helper: id });
+  if (what === 'helper.revoke') return run({ id: 'helper.revoke', label: 'Revoking a sub-agent' }, { helper: id, agent: S?.helpers?.find((h) => h.id === id)?.agent });
   if (what === 'register.view') {
     await refresh();
     return showRegister(S);
@@ -1401,18 +1441,19 @@ async function refresh() {
   renderHud(S, counts);
   if (renderPhone(S)) toast('Your phone buzzed', 'warn');
   if (!paletteOpen()) loadActions().catch(() => {});
-  if (S.playing && S.playing !== playing) becomePlaying(S.playing);
+  if (S.playing && (S.playing !== playing || (S.playing === 'agent' && S.current !== playingAgent))) becomePlaying(S.playing, S.current);
   if (playing !== 'me' && playing !== 'agent' && !helperIds().has(playing)) becomePlaying('me');
   player.look = lookOfPlayed();
   player.label = playing === 'me' ? 'You' : `${playedName()} (you)`;
   document.getElementById('badgeBtn').classList.toggle('on', S.badge);
+  document.getElementById('badgeBtn').title = S.agent ? `${S.agent.name}'s badge: on or off` : '';
   document.getElementById('badgeBtn').hidden = !S.agent || !S.agent.registered;
   const stop = document.getElementById('stopBtn');
-  stop.hidden = !S.agent || S.agent.status === 'revoked';
+  stop.hidden = !liveAgents().length;
   stop.classList.toggle('halted', Boolean(S.halted));
   stop.innerHTML = S.halted ? '<span>▶</span> Start again' : '<span>⏹</span> Stop everything';
   const act = document.getElementById('actBtn');
-  act.hidden = !S.agent || S.agent.status === 'revoked';
+  act.hidden = !liveAgents().length;
   act.innerHTML = `<span>${playing === 'me' ? '🧍' : playing === 'agent' ? '🤖' : '🌱'}</span> Playing: ${esc(playing === 'me' ? 'you' : playedName())} ▾ <kbd>T</kbd>`;
   act.title = 'Who you play: pick one. Whoever you play walks and does what you pick; T goes to the next.';
   act.classList.toggle('on', playing !== 'me');
@@ -1613,6 +1654,8 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
 });
 
 for (const id of ['phone', 'record', 'quest', 'ledger']) {
+  document.getElementById(id).classList.add('foldable');
+  document.getElementById(`${id}Head`).title = 'Show or hide';
   document.getElementById(`${id}Head`).addEventListener('click', () => document.getElementById(id).classList.toggle('open'));
 }
 if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone', 'record']) document.getElementById(id).classList.add('open');

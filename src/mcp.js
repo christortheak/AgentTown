@@ -125,7 +125,7 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
   });
 
   function lookText(a) {
-    const b = a.human.player.briefing();
+    const b = a.human.player.briefing(a.slot);
     const w = sessions.agentWhere(a);
     const r = b.record;
     const s = r?.spending;
@@ -208,7 +208,7 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
 
   function actionsText(a) {
     const npcs = () => town.npcOptions().map((o) => ({ value: o.value, hint: o.label }));
-    return (a.kind === 'subagent' ? a.human.player.helperActions(a.helper) : a.human.player.agentCatalog()).map((act) => {
+    return (a.kind === 'subagent' ? a.human.player.helperActions(a.helper) : a.human.player.agentCatalog(a.slot)).map((act) => {
       const params = (act.params ?? []).map((pm) => {
         const options = pm.options === 'npcs' ? npcs() : pm.options;
         if (pm.input) return `${pm.key}: text`;
@@ -262,7 +262,7 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
     async pair({ code }, ctx) {
       const a = sessions.pairAgent(code, ctx.client, ctx.ip);
       if (ctx.ms) ctx.ms.agent = a.token;
-      const who = a.kind === 'shopkeeper' ? 'You now mind the counter for its shopkeeper.' : a.kind === 'subagent' ? `You now drive ${sessions.agentName(a)}, a sub-agent.` : 'You now drive your principal’s agent.';
+      const who = a.kind === 'shopkeeper' ? 'You now mind the counter for its shopkeeper.' : a.kind === 'subagent' ? `You now drive ${sessions.agentName(a)}, a sub-agent.` : `You now drive ${sessions.agentName(a)}, one of your principal’s agents.`;
       const view = a.kind === 'shopkeeper' ? `${SHOP_INSTRUCTIONS}\n\n${await shopLookText(a)}` : a.kind === 'subagent' ? `${SUB_INSTRUCTIONS}\n\n${subLookText(a)}` : lookText(a);
       return { text: `Paired. ${who} Your token for later calls (Authorization: Bearer): ${a.token}\n\n${view}`, structured: { token: a.token, kind: a.kind } };
     },

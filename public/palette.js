@@ -33,6 +33,8 @@ export function openPalette({ actions, pin = null, here, greeting, actor = null,
     let stage = { kind: 'list' };
     let rows = [];
 
+    /** Whether earlier answers allow a question, or an answer: each key one value, or one of a list. */
+    const fits = (when, params) => !when || Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v.includes(params[k]) : params[k] === v));
     const setTitle = (title, sub) => {
       $('paletteTitle').innerHTML = `${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}`;
     };
@@ -63,10 +65,11 @@ export function openPalette({ actions, pin = null, here, greeting, actor = null,
         const byGroup = (list) => groups.flatMap((g) => list.filter((a) => a.group === g));
         // Something offered only where it happens (an account at a shop) shows up there, or when you search for it.
         const shown = actions.filter((a) => matches(a) && (!a.hereOnly || query || (here && a.place === here.id)));
-        // Here: what happens at this place, or anywhere you choose (a badge trick) and you're standing at one.
-        const isHere = (a) => here && !a.info && !a.ask && (a.place === here.id || a.params?.some((pm) => pm.here && pm.options?.some((o) => o.value === here.id)));
+        // Here: what happens at this place, or anywhere you choose (a badge trick) and you're standing at one, and
+        // what's for whoever is near you.
+        const isHere = (a) => !a.info && !a.ask && (a.near || (here && (a.place === here.id || a.params?.some((pm) => pm.here && pm.options?.some((o) => o.value === here.id)))));
         const hereRows = shown.filter(isHere);
-        if (hereRows.length) sections.push({ title: `Here · ${here.name}`, items: byGroup(hereRows) });
+        if (hereRows.length) sections.push({ title: here ? `Here · ${here.name}` : 'Here', items: byGroup(hereRows) });
         const started = shown.filter((a) => a.group === 'Get started');
         if (started.length) sections.push({ title: 'Get started', items: started });
         const asks = shown.filter((a) => a.ask);
@@ -99,7 +102,7 @@ export function openPalette({ actions, pin = null, here, greeting, actor = null,
           }
           html += '</ul>';
         }
-        if (!rows.length) html += '<p class="empty">Nothing matches. Everything in town is in here somewhere; try another word.</p>';
+        if (!rows.length) html += `<p class="empty">${query ? 'Nothing matches. Try another word.' : 'Nothing to do right here. Walk up to someone, or to a door or a counter.'}</p>`;
         body.innerHTML = html;
         $('paletteSearch').hidden = false;
       } else {
@@ -121,7 +124,8 @@ export function openPalette({ actions, pin = null, here, greeting, actor = null,
           };
           return;
         }
-        let options = param.options ?? [];
+        // An answer offered only after some earlier one (registering a sub-agent, if the agent you picked can).
+        let options = (param.options ?? []).filter((o) => fits(o.when, params));
         if (param.key === 'npc') options = nearby(options);
         rows = options.map((o) => ({ icon: '›', label: o.label, hint: o.hint, value: o.value }));
         if (!rows.length) rows = [{ icon: '…', label: 'No one to choose yet', hint: 'Try anyway: the service will say why not', value: undefined, disabled: true }];
@@ -133,8 +137,7 @@ export function openPalette({ actions, pin = null, here, greeting, actor = null,
     function next(params) {
       const { action } = stage;
       // A question asked only after some answer (which counter, if you're registering).
-      const applies = (pm) => !pm.when || Object.entries(pm.when).every(([k, v]) => params[k] === v);
-      const missing = (action.params ?? []).find((pm) => applies(pm) && !(pm.key in params) && !(pm.key in (action.fixed ?? {})));
+      const missing = (action.params ?? []).find((pm) => fits(pm.when, params) && !(pm.key in params) && !(pm.key in (action.fixed ?? {})));
       if (missing) {
         if (missing.here && here && missing.options?.some((o) => o.value === here.id)) return next({ ...params, [missing.key]: here.id });
         stage = { kind: 'param', action, param: missing, params };

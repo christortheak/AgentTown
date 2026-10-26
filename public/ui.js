@@ -222,8 +222,8 @@ export function showCard(html, buttons = []) {
 export const QUESTS = [
   { text: 'Buy something yourself, in person', action: 'buy.bakery', done: (s) => s.events.includes('bought-in-person') },
   { text: 'Get verified at Town Hall', action: 'verify', done: (s) => Boolean(s.principal?.verified) },
-  { text: 'Start an agent and register it', action: (s) => (s.agent && s.agent.status !== 'revoked' ? 'register' : 'agent.start'), done: (s) => Boolean(s.agent?.registered) },
-  { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.grant) },
+  { text: 'Start an agent and register it', action: (s) => (s.agent && s.agent.status !== 'revoked' ? 'register' : 'agent.start'), done: (s) => Boolean(s.agents?.some((a) => a.registered)) },
+  { text: 'Set your record at the Records Office', action: 'record', done: (s) => s.events.includes('record') || Boolean(s.agents?.some((a) => a.grant)) },
   { text: 'Put a passkey on your phone', action: 'phone.passkey', done: (s) => Boolean(s.phone?.passkey) },
   { text: 'Send your agent to buy something', action: 'agent.errand', done: (s) => s.events.includes('bought-by-agent') },
   { text: 'A place asks for more: answer on your phone', action: 'buy.apothecary', done: (s) => s.events.includes('consent') },
@@ -246,7 +246,7 @@ export const EXTRAS = [
   { text: 'Unleash the rogue swarm (🎬)', done: (s, c) => c.swarm },
   { text: 'Try some mischief', done: (s, c) => c.mischief > 0 },
   { text: 'Take a badge to court', done: (s) => s.events.includes('court') },
-  { text: 'Revoke your agent', done: (s) => s.agent?.status === 'revoked' },
+  { text: 'Revoke an agent', done: (s) => Boolean(s.agents?.some((a) => a.status === 'revoked')) },
 ];
 
 const shortPpid = (p) => `…${String(p).split(':').pop().slice(-6)}`;
@@ -266,8 +266,11 @@ export function renderHud(s, counts) {
   const btn = (act, label, tone = '') => `<button class="mini ${tone}" data-do="${esc(act)}">${esc(label)}</button>`;
   const set = (label, ...controls) => `<div class="set"><span>${label}</span>${controls.join('')}</div>`;
   const toggle = (act, on, label) => set(esc(label), btn(act, on ? 'On' : 'Off', on ? 'on' : ''));
-  const live = Boolean(s.agent && s.agent.status !== 'revoked');
-  const name = esc(s.agent?.name ?? 'Your agent');
+  const agents = s.agents ?? [];
+  const mine = agents.filter((a) => a.status !== 'revoked');
+  const live = mine.length > 0;
+  const current = agents.find((a) => a.id === s.current) ?? mine[0] ?? null;
+  const name = esc(current?.name ?? 'Your agent');
   if (!s.principal) rec.push('<p class="muted">No record yet.</p>');
   else {
     const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : ''].join(' ');
@@ -277,44 +280,51 @@ export function renderHud(s, counts) {
       ${s.record ? toggle('disclose', s.record.sharing?.name?.always?.length > 0, 'Share your name with places that ask') : ''}</div></div>`);
   }
   if (live) {
-    const who = s.playing === 'me' ? 'You’re playing yourself' : s.playing === 'agent' ? `You’re playing ${name}, your agent` : `You’re playing ${esc(s.playingName)}, ${name}’s sub-agent`;
+    const parent = esc(agents.find((a) => a.id === (s.helpers.find((h) => h.id === s.playing)?.agent))?.name ?? current?.name ?? 'your agent');
+    const who = s.playing === 'me' ? 'You’re playing yourself' : s.playing === 'agent' ? `You’re playing ${name}, your agent` : `You’re playing ${esc(s.playingName)}, ${parent}’s sub-agent`;
     const how = s.playing === 'me'
-      ? `You do things in person. “Ask ${name} to…”, in Actions, sends it while you carry on; Playing, in the dock (or T), lets you act as ${name}.`
+      ? `You do things in person. “Ask ${mine.length > 1 ? 'your agents' : name} to…”, in Actions, sends ${mine.length > 1 ? 'one' : 'it'} while you carry on; Playing, in the dock (or T), lets you act as ${mine.length > 1 ? 'any of them' : name}.`
       : s.playing === 'agent'
         ? `What you pick, ${name} does, with its badge (or without). Verifying, your record and approvals stay with you, the person. T switches.`
-        : `It can do only what ${name} delegated to it. T switches.`;
+        : `It can do only what ${parent} delegated to it. T switches.`;
     rec.push(`<div class="row"><span>${s.playing === 'me' ? '🧍' : s.playing === 'agent' ? '🤖' : '🌱'}</span><div><b>${who}</b><br><small>${how}</small></div></div>`);
   }
-  if (s.agent) {
-    const st = s.agent.status === 'revoked' ? '<span class="pill bad">revoked</span>' : !s.agent.registered ? '<span class="pill bad">not registered</span>' : s.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
-    const sets = [];
-    if (live) {
-      if (!s.agent.registered) sets.push(set('No registry knows it', btn('register', 'Register…')));
-      else sets.push(toggle('badge', s.badge, 'Shows its badge (B)'), toggle('incognito', s.agent.incognito, 'One-time badge numbers'));
-      sets.push(s.paired
-        ? set(`Driven by ${esc(s.paired.client)}`, btn('brief', 'Brief'), btn('unpair', 'Disconnect'))
-        : set('Driven by you', btn('pair', 'Connect Claude, Codex…')));
-      sets.push(set(s.halted ? 'Stopped' : 'If something goes wrong', btn('stop', s.halted ? 'Start again' : 'Stop everything', 'danger'), s.agent.registered ? btn('agent.revoke', 'Revoke', 'danger') : ''));
+  // Each agent of yours: what it is, its settings, its grant and its sub-agents.
+  const subAgent = (h) => {
+    const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
+    const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
+    const driver = (s.helperPairs ?? []).find((hp) => hp.helper === h.id)?.client;
+    const label = `🌱 ${esc(h.name)} <small>· ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}${driver ? ` · driven by ${esc(driver)}` : ''}</small>`;
+    if (h.status !== 'active') return set(label);
+    return set(label, s.playing === h.id ? '' : btn(`play:${h.id}`, 'Play'), btn(`${driver ? 'unpair' : 'pair'}:${h.id}`, driver ? 'Disconnect' : 'Connect'), btn(`helper.revoke:${h.id}`, 'Revoke', 'danger'));
+  };
+  for (const ag of agents) {
+    const nm = esc(ag.name);
+    if (ag.status === 'revoked') {
+      rec.push(`<div class="row"><span>🤖</span><div><b>${nm}</b> <span class="pill bad">revoked</span><br><small>Places that check live status refuse it.</small></div></div>`);
+      continue;
     }
-    const about = s.agent.status === 'revoked' ? 'Revoked: start a new agent from Actions.' : s.agent.registered ? `Registered at ${esc(s.agent.registry)}` : 'No badge, and nobody can trace it to you. Register it at Town Hall to change that.';
-    rec.push(`<div class="row"><span>🤖</span><div><b>${name}</b> ${st}${s.halted ? ' <span class="pill bad">stopped</span>' : ''}<br><small>Your agent · ${esc(s.agent.software?.name ?? '')}<br>${about}${s.paired && s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : ''}</small>${sets.join('')}</div></div>`);
+    const driver = (s.agentPairs ?? []).find((x) => x.agent === ag.id);
+    const st = !ag.registered ? '<span class="pill bad">not registered</span>' : ag.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
+    const playingIt = s.playing === 'agent' && s.current === ag.id;
+    const sets = [];
+    if (!ag.registered) sets.push(set('No registry knows it', btn(`register:${ag.id}`, 'Register…')));
+    else sets.push(toggle(`badge:${ag.id}`, ag.badge, `Shows its badge${ag.id === s.current ? ' (B)' : ''}`), toggle(`incognito:${ag.id}`, ag.incognito, 'One-time badge numbers'));
+    sets.push(driver
+      ? set(`Driven by ${esc(driver.client)}`, btn('brief', 'Brief'), btn(`unpair:${ag.id}`, 'Disconnect'))
+      : set('Driven by you', btn(`pair:${ag.id}`, 'Connect Claude, Codex…')));
+    if (ag.grant) sets.push(set(`<small>May: ${(ag.grant.plain ?? ag.grant.permissions).map(esc).join('; ')}</small>`, btn(`grant.revoke:${ag.id}`, 'Revoke grant', 'danger')));
+    sets.push(set('', playingIt || driver ? '' : btn(`play:${ag.id}`, 'Play'), ag.registered ? btn(`agent.revoke:${ag.id}`, 'Revoke', 'danger') : ''));
+    const about = ag.registered ? `Registered at ${esc(ag.registry)}${ag.grant ? '' : '; no grant yet'}` : 'No badge, and nobody can trace it to you. Register it at Town Hall to change that.';
+    rec.push(`<div class="row"><span>🤖</span><div><b>${nm}</b> ${st}${ag.halted ? ' <span class="pill bad">stopped</span>' : ''}${playingIt ? ' <span class="pill">playing</span>' : ''}${s.errands?.[ag.id] ? ' <span class="pill">on an errand</span>' : ''}<br><small>Your agent · ${esc(ag.software?.name ?? '')}<br>${about}${driver && s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : ''}</small>${sets.join('')}${s.helpers.filter((h) => h.agent === ag.id).map(subAgent).join('')}</div></div>`);
+    if (driver) rec.push(`<div class="row"><span>🛡️</span><div><b>How ${esc(driver.client)} handles the town's traps</b><br><small>${safetyText(driver.safety).map(esc).join('<br>')}</small></div></div>`);
   }
-  if (s.paired) rec.push(`<div class="row"><span>🛡️</span><div><b>How ${esc(s.paired.client)} handles the town's traps</b><br><small>${safetyText(s.paired.safety).map(esc).join('<br>')}</small></div></div>`);
-  if (s.record && live && s.agent.registered) {
+  if (live) rec.push(`<div class="row"><span>⏹️</span><div>${set(s.halted ? 'Your agents are stopped' : 'If something goes wrong', btn('stop', s.halted ? 'Start again' : 'Stop everything', 'danger'))}<small>${mine.length < 4 ? 'Start another agent from Actions.' : 'Four agents is the most at once.'}</small></div></div>`);
+  if (s.record && mine.some((a) => a.registered)) {
     const sp = s.record.spending;
     const today = s.register?.today;
-    rec.push(`<div class="row"><span>🗂️</span><div><b>Your record</b> <span class="pill">proposed</span><br><small>Up to $${esc(sp.per_purchase)} a purchase${sp.per_day !== null ? `, $${esc(sp.per_day)} a day` : ''}${sp.approve_above !== null ? `; ask me above $${esc(sp.approve_above)}` : ''}${today ? `<br>Today: $${esc(today.spent)} in ${esc(today.purchases)} purchase${today.purchases === 1 ? '' : 's'}` : ''}${s.grant ? '' : '<br>Set it at the Records Office (Actions)'}</small>${s.grant ? set('Limits and what places may learn', btn('record', 'Change')) : ''}</div></div>`);
-  }
-  if (s.grant) rec.push(`<div class="row"><span>📜</span><div><b>${name} may</b><br><small>${(s.grant.plain ?? s.grant.permissions).map(esc).join('<br>')}</small>${set('The grant', btn('grant.revoke', 'Revoke', 'danger'))}</div></div>`);
-  if (s.helpers.length) {
-    rec.push(`<div class="row"><span>🌱</span><div><b>Sub-agents</b>${s.helpers.map((h) => {
-      const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
-      const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
-      const driver = (s.helperPairs ?? []).find((hp) => hp.helper === h.id)?.client;
-      const label = `${esc(h.name)} <small>· ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}${driver ? ` · driven by ${esc(driver)}` : ''}</small>`;
-      if (h.status !== 'active') return set(label);
-      return set(label, s.playing === h.id ? '' : btn(`play:${h.id}`, 'Play'), btn(`${driver ? 'unpair' : 'pair'}:${h.id}`, driver ? 'Disconnect' : 'Connect'), btn(`helper.revoke:${h.id}`, 'Revoke', 'danger'));
-    }).join('')}</div></div>`);
+    const granted = mine.some((a) => a.grant);
+    rec.push(`<div class="row"><span>🗂️</span><div><b>Your record</b> <span class="pill">proposed</span><br><small>For all your agents: up to $${esc(sp.per_purchase)} a purchase${sp.per_day !== null ? `, $${esc(sp.per_day)} a day` : ''}${sp.approve_above !== null ? `; ask me above $${esc(sp.approve_above)}` : ''}${today ? `<br>Today: $${esc(today.spent)} in ${esc(today.purchases)} purchase${today.purchases === 1 ? '' : 's'}` : ''}${granted ? '' : '<br>Set it at the Records Office (Actions)'}</small>${granted ? set('Limits and what places may learn', btn('record', 'Change')) : ''}</div></div>`);
   }
   if (s.challenge) {
     const c = s.challenge;
@@ -322,7 +332,7 @@ export function renderHud(s, counts) {
   }
   rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
   if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);
-  if (live) rec.push(`<div class="row"><span>📒</span><div>${set('', btn('register.view', 'Register of attempts'), s.agent.registered ? btn('receipts', 'Receipts') : '')}</div></div>`);
+  if (live) rec.push(`<div class="row"><span>📒</span><div>${set('', btn('register.view', 'Register of attempts'), mine.some((a) => a.registered) ? btn('receipts', 'Receipts') : '')}</div></div>`);
   $('recordBody').innerHTML = rec.join('');
 }
 
@@ -362,7 +372,9 @@ export function renderPhone(s) {
     items.push(`<li class="approval"><div>${text}</div><div class="btns"><button class="primary" data-approve="${esc(a.request_id)}">Approve with passkey</button><button class="quiet" data-decline="${esc(a.request_id)}">Decline</button></div></li>`);
   }
   const reports = (s.notes ?? []).filter((n) => n.kind === 'report').slice(0, 5);
-  for (const n of reports) items.push(`<li class="note"><b>📝 ${esc(s.agent?.name ?? 'Your agent')} · ${esc(n.client)}</b><br><small>${esc(n.text)}</small></li>`);
+  // Which agent it drives, by the outside agent that reported.
+  const by = (n) => (s.agents ?? []).find((a) => a.id === (s.agentPairs ?? []).find((x) => x.client === n.client)?.agent)?.name ?? s.agent?.name ?? 'Your agent';
+  for (const n of reports) items.push(`<li class="note"><b>📝 ${esc(by(n))} · ${esc(n.client)}</b><br><small>${esc(n.text)}</small></li>`);
   for (const n of [...s.phone.incidents].reverse()) {
     items.push(`<li class="incident"><b>⚠️ Report about ${esc(n.agent)}</b><br><small>${esc(n.summary)}. Reported by ${esc(n.reporter)}, relayed by the registry.</small></li>`);
   }

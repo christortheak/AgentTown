@@ -87,6 +87,9 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.equal(actions.find((a) => a.group === 'Get started')?.id, 'agent.start');
     assert.ok(!ids.some((id) => ['play', 'register', 'helper.spawn', 'helper.errand', 'court', 'badge', 'incognito', 'pair', 'disclose', 'stop.all'].includes(id) || id.startsWith('mischief.')), ids.join());
     assert.ok(actions.filter((a) => a.id === 'signup').every((a) => a.hereOnly && a.place), 'an account is offered where you sign in');
+    const knocks = actions.filter((a) => a.id === 'neighbor.knock');
+    assert.ok(knocks.length >= 3 && knocks.every((a) => a.place && a.fixed.home), 'a knock happens at a door');
+    assert.ok(actions.find((a) => a.id === 'id.ask').near, 'a badge is asked of someone near you');
 
     // You start as a person: a shop that takes people at their word serves you; one that has people sign in wants an account.
     const inPerson = await run('buy', { shop: 'bramble', item: 'guide' });
@@ -103,7 +106,9 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.equal(early.fix.action, 'verify');
     assert.equal((await run('verify')).decision, 'allow');
     assert.equal((await run('agent.start', { register: 'yes', name: 'Pip' })).decision, 'allow');
-    assert.ok(!(await get('/api/actions')).actions.some((a) => ['agent.start', 'register', 'verify'].includes(a.id)), 'what you have done leaves the deck');
+    const after = (await get('/api/actions')).actions;
+    assert.ok(!after.some((a) => ['register', 'verify'].includes(a.id)), 'what you have done leaves the deck');
+    assert.equal(after.find((a) => a.id === 'agent.start')?.label, 'Start another agent', 'you can run more than one');
     assert.equal((await run('play', { as: 'agent' })).playing, 'agent', 'play your agent: what you do, it does');
     assert.equal((await run('buy', { shop: 'bramble', item: 'guide' })).decision, 'deny', 'registered, but no authority yet');
     assert.equal((await run('grant', { budget: 50 })).decision, 'allow');
@@ -972,6 +977,95 @@ test('agents stay put, and an outside agent can drive a sub-agent', { timeout: 9
     assert.equal((await sky.get('/api/state')).helperPairs[0].client, 'codex');
     assert.equal((await sky.run('play', { as: sprout.id })).httpStatus, 409, 'driven by codex, so not yours to play just now');
     assert.equal((await sky.post('/api/pair/end', { target: sprout.id })).ended, true);
+  } finally {
+    await game.close();
+  }
+});
+
+test('several agents: each its own badge, grant, sub-agents and body, and an outside agent for each', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4480, portOffset: 11200, quiet: true, residents: false, timeScale: 25 });
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    await robin.get('/api/world?since=0&x=500&y=500');
+    assert.equal((await robin.run('verify')).decision, 'allow');
+
+    // Two agents: one registered, one nobody registered. The newest is the one you're dealing with.
+    assert.equal((await robin.run('agent.start', { register: 'yes', name: 'Pip' })).decision, 'allow');
+    assert.match((await robin.run('agent.start', { register: 'no' })).title, /^Bo is running, unregistered/, 'a name of its own');
+    let st = await robin.get('/api/state');
+    const [pip, bo] = st.agents;
+    assert.deepEqual(st.agents.map((a) => [a.name, a.registered, a.badge]), [['Pip', true, true], ['Bo', false, false]]);
+    assert.equal(st.current, bo.id);
+
+    // Your record covers every agent a registry knows: Pip gets a grant, Bo can't.
+    assert.equal((await robin.run('grant', { budget: 50, agent: pip.id })).decision, 'allow');
+    st = await robin.get('/api/state');
+    assert.ok(st.agents.find((a) => a.id === pip.id).grant && !st.agents.find((a) => a.id === bo.id).grant);
+
+    // Asking one of several: the deck asks which, and each goes on its own errand.
+    const deck = (await robin.get('/api/actions')).actions;
+    const errandEntry = deck.find((a) => a.id === 'agent.errand');
+    assert.equal(errandEntry.group, 'Ask your agents to…');
+    assert.deepEqual(errandEntry.params[0].options.map((o) => o.label), ['Pip', 'Bo']);
+    assert.ok(deck.some((a) => a.id === 'register' && a.fixed.agent === bo.id), 'Register Bo, at Town Hall');
+    const [byPip, byBo] = await Promise.all([
+      robin.run('agent.errand', { agent: pip.id, task: 'buy:bramble/guide' }),
+      robin.run('agent.errand', { agent: bo.id, task: 'buy:bakery/loaf' }),
+    ]);
+    assert.deepEqual([byPip.errand.by, byPip.decision, byPip.seenAs], ['Pip', 'allow', undefined]);
+    assert.deepEqual([byBo.errand.by, byBo.decision, byBo.seenAs], ['Bo', 'allow', 'a person (taken at their word)'], 'Bo has no badge: taken for a person');
+
+    // Each has a body of its own: another resident sees both, and neither's owner.
+    const sam = client(game);
+    await sam.join('agent', 'Sam Lee');
+    const seen = (await sam.get('/api/world?since=0')).people.filter((x) => x.role === 'companion');
+    assert.deepEqual(seen.map((x) => x.name).sort(), ['Bo', 'Pip']);
+    assert.ok(seen.every((x) => !x.principal));
+
+    // Sub-agents belong to their agent, and only it instructs them.
+    assert.equal((await robin.run('helper.spawn', { agent: pip.id, kind: 'standing' })).decision, 'allow');
+    st = await robin.get('/api/state');
+    const sprout = st.helpers.find((h) => h.agent === pip.id);
+    assert.ok(sprout);
+    await robin.run('play', { as: bo.id });
+    assert.equal((await robin.run('helper.fund', { helper: sprout.id, budget: 20 })).httpStatus, 403, "Bo can't fund Pip's sub-agent");
+    assert.equal((await robin.run('play', { as: pip.id })).agent, pip.id);
+    assert.equal((await robin.run('helper.fund', { helper: sprout.id, budget: 20 })).decision, 'allow');
+    // T goes round: you, Pip, Sprout, Bo, and back to you.
+    await robin.run('play', { as: 'me' });
+    const order = [];
+    for (let i = 0; i < 4; i++) order.push((await robin.run('play', {})).name);
+    assert.deepEqual(order, ['Pip', 'Sprout', 'Bo', 'you']);
+
+    // An outside agent for each: the code names the agent, and each drives only its own.
+    const { code: pipCode } = await robin.post('/api/pair', { target: pip.id });
+    const { code: boCode } = await robin.post('/api/pair', { target: bo.id });
+    const tool = async (token, name, args = {}) => (await (await fetch(`${game.url}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) })).json()).result;
+    const pipToken = (await tool(null, 'pair', { code: pipCode })).structuredContent.token;
+    const boToken = (await tool(null, 'pair', { code: boCode })).structuredContent.token;
+    assert.match((await tool(pipToken, 'look')).content[0].text, /You are Pip, an accountable agent/);
+    assert.match((await tool(boToken, 'look')).content[0].text, /You are Bo, an agent .*No registry knows you/);
+    assert.equal((await tool(boToken, 'act', { action: 'buy', params: { shop: 'bakery', item: 'cake' } })).structuredContent.decision, 'allow');
+    st = await robin.get('/api/state');
+    assert.deepEqual(st.agentPairs.map((a) => a.agent).sort(), [pip.id, bo.id].sort());
+    assert.equal((await robin.run('play', { as: bo.id })).httpStatus, 409, 'driven from outside, so not yours to play just now');
+
+    // Stop everything stops every agent, revokes every grant, and cuts off every outside agent.
+    const stopped = await robin.run('stop.all');
+    assert.match(stopped.facts.find((f) => f.label === 'Your software').value, /Pip and Bo/);
+    assert.match(stopped.story, /Bo is unregistered/);
+    st = await robin.get('/api/state');
+    assert.ok(st.agents.every((a) => a.halted && !a.grant) && st.halted && !st.agentPairs.length);
+    assert.ok((await tool(pipToken, 'look')).isError, "Pip's outside agent is cut off");
+
+    // Revoking one leaves the other; the deck offers another agent again.
+    await robin.run('agents.resume');
+    assert.equal((await robin.run('agent.revoke', { agent: pip.id })).decision, 'allow');
+    st = await robin.get('/api/state');
+    assert.deepEqual(st.agents.map((a) => a.status), ['revoked', 'active']);
+    assert.equal(st.current, bo.id, 'you deal with Bo now');
+    assert.ok(st.helpers.find((h) => h.id === sprout.id).status === 'revoked', 'the revocation cascades to its sub-agents');
   } finally {
     await game.close();
   }

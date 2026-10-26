@@ -235,7 +235,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     },
     world_(since = 0, s = null) {
       return {
-        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id && x.owner !== s?.id), me: sessions.me(s),
+        now: Date.now(), seq: ledger.seq, npcs: sim.snapshot(), people: sessions.people().filter((x) => x.id !== s?.id && (x.owner !== s?.id || (x.role === 'companion' && x.agentId !== s.player?.current()))), me: sessions.me(s),
         events: sessions.visibleEvents(s, ledger.items.filter((e) => e.seq > since && (!e.private || e.owner === s?.id)).slice(since ? 0 : -80, since ? 200 : undefined)), director: directorState(), market: places.market(),
       };
     },
