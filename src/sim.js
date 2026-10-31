@@ -22,7 +22,13 @@ export const LOOKS = {
   // An honest agent that was never registered: most agents, today.
   clank: { body: '#c9a77c', hood: '#a3825a', eyes: '#fff6dd', feet: '#5a4632', scale: 0.9 },
   person: PEOPLE_LOOKS.townsfolk, // a person, not an agent: no light on top
+  // An agent that came with its own badge, from a registry in another federation.
+  guest: { body: '#b8d8f0', bulb: '#5fb8d3', glow: true, badge: 'on', badgeColor: '#e8f4ff', badgeMark: '#3d7ea6' },
 };
+
+// How long an agent that came with its own badge stays at a place after its last request (town time).
+const GUEST_STAYS_MS = 180000;
+const MAX_GUESTS = 40;
 
 const RESIDENTS = [
   {
@@ -291,6 +297,30 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     return npc;
   }
 
+  // ---- Agents that came with their own badge ------------------------------------
+
+  /**
+   * Show an agent that came with its own badge at the place it went to. The town knows only the badge number
+   * that place saw, which no other place sees, so a body stands for one agent at one place. It leaves after
+   * a while without a request.
+   */
+  function guest({ placeId, ppid, from, decision }) {
+    const now = Date.now();
+    const guests = [...npcs.values()].filter((n) => n.kind === 'guest');
+    for (const n of guests) if (n.leaveAt < now) npcs.delete(n.id);
+    const id = `guest-${placeId}-${ppid.slice(-10)}`;
+    let npc = npcs.get(id);
+    if (!npc) {
+      if (guests.filter((n) => npcs.has(n.id)).length >= MAX_GUESTS) npcs.delete(guests.find((n) => npcs.has(n.id)).id);
+      const name = `${from ? `Visitor from ${from.replace(/ Registry$/, '')}` : 'A visitor'} (…${ppid.slice(-6)})`;
+      npc = spawn({ id, name, kind: 'guest', look: LOOKS.guest, placeId, from });
+      npc.pos = front(placeId, npc);
+    }
+    npc.leaveAt = now + GUEST_STAYS_MS / timeScale;
+    npc.bubble = { decision, at: now };
+    return npc;
+  }
+
   // ---- Bots with no badge -----------------------------------------------------
 
   async function botLife(npc) {
@@ -519,7 +549,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   function snapshot() {
     const now = Date.now();
-    return [...npcs.values()].filter((n) => !n.hidden).map((n) => ({
+    return [...npcs.values()].filter((n) => !n.hidden && !(n.leaveAt < now)).map((n) => ({
       id: n.id, name: n.name, kind: n.kind, look: n.look, pos: n.pos, move: n.move, follow: n.follow, owner: n.owner ?? null,
       status: n.ephemeralUntil && n.ephemeralUntil < now && n.status === 'active' ? 'expired' : n.status,
       bubble: n.bubble && now - n.bubble.at < 2600 ? n.bubble : null, busy: n.busy ?? null, say: n.say && now - n.say.at < 6000 ? n.say : null,
@@ -528,7 +558,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   }
 
   return {
-    map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor, visitorFrom,
+    map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor, visitorFrom, guest,
     /** Walk someone to a place (by id) or a point, on the shared routes; they stay there. */
     walkTo: (npc, target) => {
       npc.follow = false;

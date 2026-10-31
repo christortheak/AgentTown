@@ -18,7 +18,21 @@ import { startRelyingParty } from 'aaf-reference/src/rp/server.js';
 const hasKeys = (keysDir, id) => Boolean(keysDir && fs.existsSync(path.join(keysDir, `${fileNameFor(id)}.json`)));
 const prefer = (list, hint) => list.find((e) => e.id.includes(hint)) ?? null;
 
-export function buildWorld({ trust, keysDir, adminTokens = {}, federations = null }) {
+/** One of the town's own agents. Its requests carry the town's mark, so a place's front can tell it from an agent that came with its own badge. */
+class TownAgent extends Agent {
+  constructor(opts, mark) {
+    super(opts);
+    this.mark = mark;
+  }
+
+  act(rpUrl, action, params = {}, opts = {}) {
+    return super.act(rpUrl, action, params, { ...opts, headers: { ...this.mark, ...opts.headers } });
+  }
+}
+
+/** front: the places' front doors (src/front.js); each relying party is reached there, and the town's own requests are marked. */
+export function buildWorld({ trust, keysDir, adminTokens = {}, federations = null, front = null }) {
+  const mark = front?.mark ?? {};
   const registries = trust.registries;
   if (!registries.length) throw new Error('the federation has no registries');
   const regA = prefer(registries, 'registry-a') ?? registries[0];
@@ -94,11 +108,13 @@ export function buildWorld({ trust, keysDir, adminTokens = {}, federations = nul
       return p;
     },
 
-    agent: (name) => new Agent({ name, trust }),
+    agent: (name) => new TownAgent({ name, trust }, mark),
     provider: (name, contact) => new AgentProvider({ name, contact }),
 
-    async relyingParty(opts) {
+    /** A place's relying party, behind the front at /<the first label of its id>. `visitor` handles agents the town didn't make. */
+    async relyingParty({ visitor = null, ...opts }) {
       const rp = await startRelyingParty({ trust, ...opts });
+      if (front) front.mount(opts.id.split('.')[0], rp, visitor);
       relyingParties.push(rp);
       return rp;
     },
@@ -114,7 +130,7 @@ export function buildWorld({ trust, keysDir, adminTokens = {}, federations = nul
 
     /** A request without the agent SDK: no presentation, or with extra headers. */
     async rawRequest(rpUrl, action, params = {}, headers = {}) {
-      const res = await fetch(`${rpUrl}/actions/${action}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(params) });
+      const res = await fetch(`${rpUrl}/actions/${action}`, { method: 'POST', headers: { 'content-type': 'application/json', ...mark, ...headers }, body: JSON.stringify(params) });
       return { httpStatus: res.status, ...(await res.json()) };
     },
 
@@ -122,7 +138,7 @@ export function buildWorld({ trust, keysDir, adminTokens = {}, federations = nul
     async handBuiltRequest({ rp, action, params = {}, accountability, authorization, proofKey }) {
       const url = `${rp.url}/actions/${action}`;
       const { body, headers } = buildPresentationRequest({ url, rpId: rp.id, params, accountability, authorization, key: proofKey });
-      const res = await fetch(url, { method: 'POST', headers, body });
+      const res = await fetch(url, { method: 'POST', headers: { ...headers, ...mark }, body });
       return { httpStatus: res.status, ...(await res.json()) };
     },
 

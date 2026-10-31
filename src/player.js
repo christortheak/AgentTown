@@ -1008,6 +1008,13 @@ export function createPlayer({ id: pid, account, world, places: P, sim, worldid,
     'toll.pay': ({ humanApproval } = {}) => go('toll.pay', {}, 'toll', 'payments.authorize', { payee: 'Bridge Toll', amount: money(0.5) }, { humanApproval }),
 
     async 'id.ask'({ npc: who }) {
+      const guest = sim.npcs.get(who);
+      if (guest?.kind === 'guest') {
+        return service({
+          place: 'Your badge reader', keeper: { face: '🔍', who: guest.name }, title: `${guest.name} came with its own badge`, ok: null,
+          story: `It's registered${guest.from ? ` at ${guest.from}` : ''}, outside the town, and keeps its own key, so the town can't make it show you its badge. ${PLACE_DEFS[guest.placeId]?.name ?? 'The place'} checked it, and only that place has its badge number.`,
+        });
+      }
       const them = lookup(who);
       if (!them) throw new HttpError(404, 'gone', 'They have left.');
       const card = await P.visit('reader', 'id.check', {}, them);

@@ -31,6 +31,7 @@ import { createRulebook, JURISDICTIONS, SECTORS } from './rulebook.js';
 import { TYP } from './proposed/keeper.js';
 import { digestOf } from 'aaf-reference/src/lib/crypto.js';
 import { ASSET } from './x402.js';
+import { eventFromCard } from './explain.js';
 
 export const ADOPTION = {
   full: { label: 'Checks badges', blurb: 'On the framework: every request is checked.' },
@@ -185,7 +186,8 @@ export function needsOf(req) {
   return { identity: req?.accountability === 'disclosed', attributes: [...(req?.attributes ?? [])], provenance: Boolean(req?.provenance) };
 }
 
-export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null, keeper = null, federations = null }) {
+/** guest: shows an agent that came with its own badge at a place, on the map (the sim's); returns its body, or null. */
+export async function createPlaces({ world, origin, config = {}, worldid, x402, emit, alert = () => {}, law = null, keeper = null, federations = null, guest = () => null }) {
   // Every federation the town knows (proposed: several anchors); each place keeps to the ones it trusts.
   const live = federations ? federations.view() : world.trust;
   const outage = { until: 0 };
@@ -307,7 +309,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     refresh(place);
     place.rp = await world.relyingParty({
       id: `${id}.agenttown.test`, name: def.name, trust: trustFor(place), rules: place.rules, requests: place.requests, handlers,
-      accounts: { rpId: new URL(origin).hostname, origin }, ...extra,
+      accounts: { rpId: new URL(origin).hostname, origin }, visitor: (ctx) => visiting(place, ctx), ...extra,
     });
     places[id] = place;
     return place;
@@ -370,6 +372,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   hearth.rp = await world.relyingParty({
     id: 'hearth.agenttown.test', name: 'Hearth & Key', trust: trustFor(hearth),
     accounts: { rpId: new URL(origin).hostname, origin },
+    visitor: (ctx) => visiting(hearth, ctx),
     rules: hearth.rules,
     handlers: {
       'home.enter': async (p, v, rp) => ({ items: [...homes[accountOf(rp, p)]] }),
@@ -393,6 +396,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const reader = { id: 'reader', name: 'Your badge reader', adoption: 'full', policy: { accepts: null, anchors: null, aaf: 'off', worldid: false, x402: null }, rules: { 'id.check': [{ label: 'an ID check', require: { accountability: 'none' } }] } };
   reader.rp = await world.relyingParty({
     id: 'reader.agenttown.test', name: 'Your badge reader', trust: trustFor(reader),
+    visitor: (ctx) => visiting(reader, ctx),
     rules: reader.rules,
     handlers: { 'id.check': async () => ({ checked: true }) },
   });
@@ -817,11 +821,101 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     const ask = !people && r.decision === 'step_up' && !r.approval_request ? askOf(place, tier, shared) : null;
     const card = cardFrom(place, action, by.name, r, steps, extra({ card: { ask, shared, lane: people ? 'people' : 'agents', ...(people ? { seenAs: r.classification === C.HUMAN ? 'a person (signed in with a passkey)' : 'not signed in' } : {}) } }));
     if (r.extPlain?.length) card.plain = [...card.plain, ...r.extPlain];
-    // A badge from a registry the town knows, in a federation this place doesn't trust: say which.
+    const other = otherFederation(place, r);
+    if (other) card.otherFederation = other;
+    return finish(card);
+  }
+
+  /** A badge from a registry the town knows, in a federation this place doesn't trust: which. */
+  function otherFederation(place, r) {
     const issuer = /credential issuer (\S+) is not a member/.exec((r.reasons ?? []).join(' '))?.[1];
     const other = issuer && fedOf(issuer);
-    if (other && !trusts(place, issuer)) card.otherFederation = { name: other.name, registry: other.view.registry(issuer)?.name ?? issuer };
-    return finish(card);
+    return other && !trusts(place, issuer) ? { name: other.name, registry: other.view.registry(issuer)?.name ?? issuer } : null;
+  }
+
+  // ---- Agents that come with their own badge ------------------------------------------
+
+  /**
+   * Why a place can't serve an agent that holds its own badge (one the town didn't make), or null if it can.
+   * Such an agent talks to the place's relying party directly, so a place takes it only when everything the
+   * place checks is in the framework: not the town's simulated World ID or x402, nor the proposed questions
+   * the town's Records Office answers.
+   */
+  function closedTo(place) {
+    const p = place.policy;
+    if (!PLACE_DEFS[place.id]) return place.id === 'hearth' ? 'Homes let in only the agents their owners let in.' : 'This is a resident’s own badge reader, not a place.';
+    const adoption = adoptionOf(place);
+    if (adoption === 'none') return `${place.name} doesn't check badges at all, so there's nothing here for a badge to do.`;
+    if (adoption === 'block') return `${place.name} turns away anything that says it is an agent.`;
+    if (p.aaf === 'off') return `${place.name} doesn't check badges${p.x402 ? '; it asks for a payment instead (simulated x402)' : ''}.`;
+    const yet = 'which an agent from outside the town can’t give here yet';
+    if (p.worldid) return `${place.name} also asks for a World ID proof (simulated), ${yet}.`;
+    if (p.x402) return `${place.name} also asks for a payment (simulated x402), ${yet}.`;
+    if (p.budget) return `${place.name} also asks for proof a purchase is within the owner's spending limits, from the town's Records Office (proposed), ${yet}.`;
+    if (p.facts?.length) return `${place.name} also asks for facts from the owner's record at the town's Records Office (proposed), ${yet}.`;
+    return null;
+  }
+
+  /**
+   * An agent the town didn't make, holding its own key and a badge from its own registry, at a place's front
+   * door. The place's relying party checks it as it checks anyone's badge; the town notes the visit in the
+   * ledger and shows the agent at the place. The town knows only what the place learned: a badge number that
+   * works at this place alone, so the same agent at two places looks like two visitors.
+   */
+  async function visiting(place, { action, params, badged, forward }) {
+    const why = closedTo(place)
+      ?? (!badged ? 'This door is for agents that bring their own badge. People come in through the town.' : null)
+      ?? (params?.account || params?.account_token ? `Signing in to an account at ${place.name} is for its holder, in person.` : null);
+    if (why) {
+      emit(eventFromCard(cardFrom(place, action, 'A visiting agent', { decision: 'deny', reasons: [why] }, [], { card: { lane: 'agents', visiting: {}, headline: 'Turned away at the door', why } })));
+      return { status: 403, body: { decision: 'refused', reasons: [why] } };
+    }
+    const r = await forward();
+    const res = r.body ?? { decision: 'refused', reasons: [`${place.name} answered ${r.status}`] };
+    const ev = res.txn ? place.rp.evidence.find((e) => e.txn === res.txn) : null;
+    const other = otherFederation(place, res);
+    const from = (ev?.registry && world.trust.registry(ev.registry)?.name) || other?.registry || null;
+    const federation = (ev?.registry && fedOf(ev.registry)?.name) || other?.name || null;
+    const card = cardFrom(place, action, from ? `A visiting agent from ${from}` : 'A visiting agent', res, [], {
+      tier: pickTier(place.rules, action, params), card: { lane: 'agents', visiting: { registry: from, federation } },
+    });
+    if (other) card.otherFederation = other;
+    // On the map only once the place has read a badge number: before that, it can't tell one visitor from another.
+    const npc = ev?.ppid ? guest({ placeId: place.id, ppid: ev.ppid, from, decision: card.decision }) : null;
+    emit(eventFromCard(card, npc ?? {}));
+    return r;
+  }
+
+  /** What each place takes, as requests an agent can send: the action and its parameters. */
+  function requestsAt(id) {
+    const d = PLACE_DEFS[id];
+    switch (d.kind) {
+      case 'shop': return d.items.map((i) => ({ label: `${i.name}, $${i.price}`, action: d.action, params: purchaseParams(id, i) }));
+      case 'bank': return d.bills.map((b) => ({ label: `Pay ${b.name}, $${b.amount}`, action: d.action, params: { payee: b.name, amount: money(b.amount) } }));
+      case 'exchange': return d.symbols.map((s) => ({ label: `Buy 2 ${s.name}`, action: d.action, params: { symbol: s.id, side: 'buy', qty: 2, amount: money(Math.round(market.prices[s.id] * 2 * 100) / 100) } }));
+      case 'forge': return d.jobs.map((j) => ({ label: j.name, action: d.action, params: { units: j.units, unit: 'gpu_hours' } }));
+      case 'toll': return [{ label: 'Cross the bridge', action: d.action, params: { payee: 'Bridge Toll', amount: money(0.5) } }];
+      default: return [{ label: d.name, action: d.action, params: {} }];
+    }
+  }
+
+  /** The places, for an agent that holds its own badge: where to send requests, what each takes, and which federations it trusts. */
+  function directory() {
+    const feds = federations?.list() ?? [];
+    return Object.keys(PLACE_DEFS).map((id) => {
+      const place = places[id];
+      const closed = closedTo(place);
+      return {
+        id, name: place.name, kind: PLACE_DEFS[id].kind, url: place.rp.url, rp_id: place.rp.id,
+        serves_visiting_agents: !closed, ...(closed ? { why_not: closed } : {}),
+        trusts: feds.filter((f) => !place.policy.anchors || place.policy.anchors.includes(f.key)).map((f) => ({ federation: f.name, trust_anchor: f.anchor.entity_id })),
+        requests: requestsAt(id),
+      };
+    });
+  }
+
+  function purchaseParams(placeId, item) {
+    return { item: item.name, amount: money(item.price), category: item.category ?? PLACE_DEFS[placeId].category, ...(item.restricted ? { restricted: true } : {}) };
   }
 
   /** A place reports a customer's agent to the registry that issued its badge, which relays it to the principal. */
@@ -861,7 +955,8 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     market: () => PLACE_DEFS.exchange.symbols.map((s) => ({ id: s.id, name: s.name, price: market.prices[s.id], change: Math.round((market.prices[s.id] / market.opening[s.id] - 1) * 100) })),
     quote: (symbol) => market.prices[symbol],
     priceOf: (placeId, itemId) => PLACE_DEFS[placeId]?.items?.find((i) => i.id === itemId) ?? null,
-    purchase: (placeId, item) => ({ item: item.name, amount: money(item.price), category: item.category ?? PLACE_DEFS[placeId].category, ...(item.restricted ? { restricted: true } : {}) }),
+    purchase: purchaseParams,
+    directory,
     setPolicy(placeId, patch) {
       const place = places[placeId];
       if (!place || !PLACE_DEFS[placeId]) throw new HttpError(404, 'unknown_place', `no place ${placeId} with a policy`);

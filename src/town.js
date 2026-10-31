@@ -14,6 +14,7 @@ import { createKeeper } from './proposed/keeper.js';
 import { createFederations, startAnchor, readEntity } from './proposed/anchors.js';
 import { startSampleFederation, asMembers } from './proposed/sample-federation.js';
 import { checkService } from './proposed/door.js';
+import { startFront } from './front.js';
 import { generateSigningKey, thumbprint } from 'aaf-reference/src/lib/crypto.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
@@ -33,7 +34,9 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
     open: true,
   });
   await federations.add({ key: 'participants', name: 'AgentTown Participants', kind: 'participants', anchor: participants.anchor, owner: participants });
-  const world = buildWorld({ trust: federations.view(), keysDir: fed.keysDir, adminTokens: fed.adminTokens, federations });
+  // The places' front doors, where an agent that holds its own badge sends its requests (GET /api/places lists them).
+  const front = await startFront({ port: 4180 + portOffset, host: listen, address });
+  const world = buildWorld({ trust: federations.view(), keysDir: fed.keysDir, adminTokens: fed.adminTokens, federations, front });
   // Every party re-reads its federations every 30 s (Reference Profile §6.1): new members, new trust marks.
   const refresher = setInterval(() => federations.refresh().catch(() => {}), 30000);
 
@@ -52,13 +55,15 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   const x402 = createX402();
   // Proposed extension: the principal's record, allowances and statements (src/proposed, docs/PROPOSED.md).
   const keeper = createKeeper({ rpId: new URL(origin).hostname, origin });
+  let sim = null;
   const places = await createPlaces({
     world, origin, config: config.places, law: config.law, worldid, x402, emit, keeper, federations,
     alert: (a) => justice.fileCase({ kind: a.kind, placeId: a.placeId, title: a.title, evidence: a.evidence, by: PLACE_DEFS[a.placeId]?.name ?? 'Hearth & Key' }),
+    guest: (g) => sim?.guest(g) ?? null,
   });
   const keys = {};
   places.resetHomes(keys);
-  const sim = createSim({ world, places, emit, worldid, x402, origin, keys, timeScale });
+  sim = createSim({ world, places, emit, worldid, x402, origin, keys, timeScale });
   sessions = createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin, timeScale });
   if (residents) await sim.start();
   emit({ kind: 'director', tone: 'info', text: `AgentTown is open. Federation: ${fed.kind} (${world.registries.map((r) => r.name).join(', ')})` });
@@ -229,6 +234,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       registries: world.registries.map((r) => ({ id: r.id, name: r.name, url: r.url })),
       record_keepers: world.trust.recordKeepers.map((r) => ({ id: r.id, name: r.name, url: r.url, roles: r.roles })),
       identity_verifier: world.kyc?.id ?? null, court: world.court?.name ?? null,
+      places: front.url, // where agents that hold their own badge send requests (GET /api/places lists each place)
     }),
     actions(s) {
       return sessions.actions(s, npcOptions()).map((a) => ({ ...a, params: a.params?.map((pm) => (pm.options === 'npcs' ? { ...pm, options: npcOptions() } : pm)) }));
@@ -248,6 +254,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
       clearInterval(refresher);
       sessions.stop();
       sim.stop();
+      await front.close();
       await world.close();
       await sample?.close();
       await participants.close();

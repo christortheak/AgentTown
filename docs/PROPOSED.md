@@ -109,11 +109,13 @@ This allows an open market without a gatekeeper: a low-bar anchor that admits an
 - **Places choose.** Each place trusts the town's federation by default; shopkeepers tick the others in their panel, and the director can make every place trust one. A badge from a federation a place doesn't trust is refused, and the card says whose it was: "This badge comes from Riverside Co-op Registry, in Riverside Co-op Federation."
 - **Registering at another counter.** A resident can register an agent at any registry whose federation accepts the town's identity verifier. They are enrolled there too (one enrollment per registry, verified by the same verifier), and the grant is kept by a record keeper in that federation. A shop that trusts that federation checks the badge, the grant and the record keeper's accreditation under that federation's own anchor.
 - **Visitors.** When a federation is added, an agent registered there visits town.
+- **Agents with their own badge.** The visitors above are made by the town. An agent registered in another federation that holds its own key sends its requests to the places' front door (`src/front.js`; `GET /api/places` lists the places), and a place that trusts its federation checks it as it checks anyone. That is what a participant registered at someone else's registry needs: to come with the badge it already has.
 
 **The shim.** The reference verifier names the type it expects after `trust.trustAnchor`. A `MultiView` answers with the anchor of the federation whose member it was last asked about. The verifier always looks up an issuer and checks the type in the same synchronous step, so that is the issuer's own anchor. It works, but it is exactly what point 3 would make explicit: pass the issuer's anchor to the check.
 
 **Limits.**
 - The town's own registries and record keepers are reference services with one anchor each, so sub-agents registered in another federation, or grants at the town's record keepers for agents registered elsewhere, are refused (point 4).
+- A court can have a registry in another federation say who stands behind an agent, if that federation lists the town's court. It can't have that registry revoke the agent: the town revokes through a registry operator's own token, which it holds only for its own registries, and the profile's legal orders cover resolution only (§7.11).
 - No intermediate authorities, and an anchor's key isn't rolled over.
 - Taking a key on first use is only as good as checking the thumbprint with whoever runs the anchor.
 - Every party in town can add a federation and admit services: fine for a local event, not for a public server.

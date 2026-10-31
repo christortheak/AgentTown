@@ -976,7 +976,7 @@ async function talkTo(s) {
   interacting = true;
   try {
     const n = s.npc;
-    const kinds = { person: n.role ? 'someone playing' : 'a person, in person', companion: 'an agent following its resident', resident: 'a resident’s agent', helper: 'a sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer', unbadged: 'an honest agent nobody ever registered' };
+    const kinds = { person: n.role ? 'someone playing' : 'a person, in person', companion: 'an agent following its resident', resident: 'a resident’s agent', helper: 'a sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer', unbadged: 'an honest agent nobody ever registered', guest: 'an agent from outside the town, with its own badge' };
     const r = await say({ face: '🔍', who: n.name, where: kinds[n.kind] ?? '', text: n.busy ? `Out on an errand: ${n.busy}.` : n.status !== 'active' ? `Status: ${n.status}.` : 'Ask to see their badge?', choices: [{ label: 'Ask to see their badge', value: true, primary: true }, { label: 'Leave them be', value: false, cancel: true }] });
     closeDialog();
     if (!r.value) return;
@@ -1373,7 +1373,7 @@ function drawMinimapBase() {
   g.scale(dpr, dpr);
   drawMinimap(g, town, w, h);
 }
-const MINI_DOTS = { helper: '#5fd38a', resident: '#f2a541', swarm: '#9b6cff', bot: '#7d8590', newcomer: '#ff8fab', unbadged: '#c9a77c', person: '#e07a5f', companion: '#9fbbe0' };
+const MINI_DOTS = { helper: '#5fd38a', resident: '#f2a541', swarm: '#9b6cff', bot: '#7d8590', newcomer: '#ff8fab', unbadged: '#c9a77c', person: '#e07a5f', companion: '#9fbbe0', guest: '#5fb8d3' };
 function renderMinimap() {
   if (!miniBase) return;
   const w = mini.clientWidth || 220;

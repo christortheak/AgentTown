@@ -94,6 +94,8 @@ export async function startServer({
   const mayAdd = (headers) => {
     if (directorKey && headers['x-director-key'] !== directorKey) throw new HttpError(403, 'director_only', 'In this town only the director adds federations and admits services.');
   };
+  // For an agent that holds its own badge: where each place takes requests, what it takes, and whose badges.
+  app.get('/api/places', () => ({ places: town.places.directory() }));
   app.get('/api/federations', () => ({ federations: town.federationsView() }));
   app.post('/api/federations', async ({ body, headers }) => {
     mayAdd(headers);
@@ -132,6 +134,7 @@ export async function startServer({
     console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
     const p = town.bootstrap('participants');
     console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${lanOrigin}/trust-anchor.json`);
+    console.log(`Places take agents that hold their own badge at ${info.places}/<place>; ${lanOrigin}/api/places lists them`);
     if (!address) console.log('The federations listen on this machine only. To let teams on other machines reach them, set AGENTTOWN_ADDRESS to this machine\'s address on the network.');
     console.log(`Director: ${directorKey ? 'locked (AGENTTOWN_DIRECTOR_KEY)' : 'open to everyone'}. Use "localhost", not 127.0.0.1: passkeys are bound to the domain.`);
   }

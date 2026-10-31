@@ -18,6 +18,9 @@ import { generateSigningKey, generateEncryptionKey, b64u } from 'aaf-reference/s
 import { jwksOf } from 'aaf-reference/src/lib/openid-federation.js';
 import { discoverFederation } from 'aaf-reference/src/lib/trust.js';
 import { postJson } from 'aaf-reference/src/lib/http.js';
+import { Principal } from 'aaf-reference/src/actors/principal.js';
+import { Agent } from 'aaf-reference/src/actors/agent.js';
+import { money } from 'aaf-reference/src/sim/world.js';
 import crypto from 'node:crypto';
 
 /** One browser tab: it joins the town and sends its session with every call. */
@@ -1068,6 +1071,82 @@ test('several agents: each its own badge, grant, sub-agents and body, and an out
     assert.deepEqual(st.agents.map((a) => a.status), ['revoked', 'active']);
     assert.equal(st.current, bo.id, 'you deal with Bo now');
     assert.ok(st.helpers.find((h) => h.id === sprout.id).status === 'revoked', 'the revocation cascades to its sub-agents');
+  } finally {
+    await game.close();
+  }
+});
+
+test('an agent with its own badge: registered in another federation, it signs its own requests at the places’ front doors', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4479, portOffset: 11400, quiet: true, residents: false, timeScale: 25 });
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    const { url } = await robin.post('/api/director', { cue: 'sample' });
+    const riverside = await robin.post('/api/federations', { url });
+
+    // An agent made outside the town: its owner enrolls at Riverside's registry, is verified by a verifier that
+    // federation accepts (the town's), registers it and grants it authority at Riverside's record keeper.
+    // The town never holds its key.
+    const trust = await discoverFederation(game.town.federations.get(riverside.key).anchor);
+    const registry = trust.registries[0];
+    const rk = trust.recordKeepers.find((r) => r.roles.includes('authorization'));
+    const owner = new Principal({ type: 'natural_person', identity: { legal_name: 'Juniper Vale', jurisdiction: 'US-OR' }, registry, trust });
+    await owner.enroll();
+    owner.verification = await game.town.world.kyc.verify(owner, { assurance: 'IAL2', method: 'government ID + liveness check' });
+    const tansy = new Agent({ name: 'Tansy', trust });
+    await owner.registerAgent(tansy, { label: 'Tansy', records: [{ role: 'authorization', rk: rk.id }, { role: 'activity', rk: rk.id }] });
+    await owner.grant(tansy, { rk, permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(40), categories: ['books', 'food'] } }], purpose: 'Errands in AgentTown' });
+
+    // The town lists where each place takes requests, what it takes, and whose badges.
+    const { places } = await robin.get('/api/places');
+    const at = (id) => places.find((p) => p.id === id);
+    assert.ok(at('bramble').serves_visiting_agents);
+    assert.deepEqual(at('bramble').trusts.map((t) => t.federation), ['The town’s federation']);
+    assert.match(at('grocer').why_not, /Records Office/, 'what only the town can answer, it says so');
+    assert.match(at('fair').why_not, /World ID/);
+    const guide = at('bramble').requests.find((r) => r.params.item === 'Pocket guide to mushrooms');
+    const visits = async () => (await robin.get('/api/world')).events.filter((e) => e.card?.visiting);
+
+    // A shop that trusts only the town's federation checks the badge, and says whose it was.
+    assert.equal((await tansy.act(at('bramble').url, guide.action, guide.params)).decision, 'deny');
+    let seen = (await visits()).at(-1);
+    assert.match(seen.text, /^Bramble Books → A visiting agent from Riverside Co-op Registry/);
+    assert.equal(seen.card.otherFederation.name, 'Riverside Co-op Federation');
+
+    // Trusting Riverside, it checks the badge, the grant and the record keeper under Riverside's own anchor.
+    await robin.post('/api/director', { cue: 'trust', params: { key: riverside.key } });
+    const served = await tansy.act(at('bramble').url, guide.action, guide.params);
+    assert.deepEqual([served.decision, served.classification], ['allow', 'ACCOUNTABLE_PROTECTED']);
+    seen = (await visits()).at(-1);
+    assert.deepEqual([seen.decision, seen.card.visiting.federation], ['allow', 'Riverside Co-op Federation']);
+
+    // On the map at the shop, known by the badge number the shop saw; its owner's name stays with the registry.
+    let w = await robin.get('/api/world');
+    const body = w.npcs.find((n) => n.kind === 'guest');
+    assert.match(body.name, /^Visitor from Riverside Co-op \(…/);
+    assert.ok(!JSON.stringify(w).includes('Juniper Vale'));
+    assert.match((await robin.run('id.ask', { npc: body.id })).story, /keeps its own key/);
+
+    // At another place it has another badge number, so it's another visitor there.
+    const loaf = at('bakery').requests.find((r) => r.params.item === 'Seeded loaf');
+    assert.equal((await tansy.act(at('bakery').url, loaf.action, loaf.params)).decision, 'allow');
+    w = await robin.get('/api/world');
+    assert.equal(w.npcs.filter((n) => n.kind === 'guest').length, 2);
+
+    // Turned away at the door: a place that asks what only the town answers, someone's account, no badge at all.
+    const grocer = await tansy.act(at('grocer').url, 'commerce.purchase', at('grocer').requests[0].params);
+    assert.deepEqual([grocer.httpStatus, grocer.decision], [403, 'refused']);
+    assert.equal((await tansy.act(at('bramble').url, guide.action, { ...guide.params, account: 'hazel-bramble' })).httpStatus, 403);
+    const bare = await fetch(`${at('bramble').url}/actions/commerce.purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(guide.params) });
+    assert.equal(bare.status, 403);
+    // Only a place's description and its actions get through the front, never the accounts behind it.
+    assert.equal((await fetch(`${at('bramble').url}/accounts/hazel-bramble/passkeys/options`, { method: 'POST' })).status, 404);
+
+    // The town's own agents come through the same doors, and aren't taken for visitors.
+    const before = (await visits()).length;
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }], ['play', { as: 'agent' }]]) await robin.run(a, p);
+    assert.equal((await robin.run('buy', { shop: 'bramble', item: 'guide' })).decision, 'allow');
+    assert.equal((await visits()).length, before);
   } finally {
     await game.close();
   }

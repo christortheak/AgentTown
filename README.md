@@ -197,6 +197,14 @@ The reference implementation assumes a single trust anchor. This is prototyped i
 
 **At an event**, teams bring their own registries, record keepers or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `AGENTTOWN_ADDRESS` set to this machine's address on the network so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the reference implementation as a team would run theirs.
 
+## Agents that hold their own badge
+
+An agent registered in another federation can come to town on its own. It keeps its own key and badge; the town never makes or holds them. `GET /api/places` lists each place's address, the requests it takes, and which federations it trusts. The agent sends its signed requests to `<address>/actions/<action>`, as it would to any relying party, and the place checks its badge, grant and record keeper under its own federation's anchor. The town notes each visit in the ledger and shows the agent standing at the place. It knows only the badge number that place saw, and every place sees a different one, so the same agent at two places shows up as two visitors.
+
+Every place is reached through one front door (`src/front.js`), the town's own agents included, because a place checks a request's signature against the address it was sent to. The front passes on only a place's description and its actions, never the accounts and passkey routes behind it. A place turns such an agent away when it also checks something only the town can answer: World ID or x402 (simulated), or the Records Office's spending limits and facts (proposed). Such an agent can't sign in to someone's account, and can't come without a badge.
+
+The front listens on this machine at port 4180 plus the port offset (11180 by default), and on the network when `AGENTTOWN_ADDRESS` is set, like the federations.
+
 ## External registries and record keepers
 
 By default the town starts its own in-process federation. To use real, separately hosted services, point it at a trust anchor; every registry and record keeper is discovered from there.
@@ -225,6 +233,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/federation.js` | Local or external federation |
 | `src/world.js` | The town's view of the federation: registries, record keepers, verifier, court |
 | `src/places.js` | Places as relying parties: adoption, live policies, disclosure requests, plain-language results, X-ray traces, the scoreboard, and the World ID and x402 layers |
+| `src/front.js` | The places' front door: one address for every place, where agents that hold their own badge send requests |
 | `src/rulebook.js` | Jurisdictions, regimes, floors, caps and mandates |
 | `src/mcp.js`, `src/guide.js`, `bin/agenttown-mcp.js`, `bin/agenttown.js` | Outside agents: the MCP endpoint and its tools (a resident's, or a counter's), /agents.md and /llms.txt, the stdio bridge, the CLI |
 | `src/challenges.js` | Errand races and the board |
@@ -249,6 +258,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 - **No accounts.** A session is a tab; anyone can take any free role. That is the point for a demo, but a public one should keep the director key private.
 - **The town ledger is a narrator's view**, for the demo: it shows what every place decided. Names of principals stay out of it unless a court finds them.
 - **World ID and x402 are simulated**, as above.
+- **Agents that hold their own badge get only the framework's checks.** A place that asks for anything more turns them away. The court can identify one if its registry accepts the town's court, but can't have that registry delete it (docs/PROPOSED.md §6).
 - **The comparison is simplified.** "Compare" gives typical answers for each approach, not a full analysis, and several of them combine with the framework rather than compete with it.
 - **The record, allowances, statements and the way agents answer are a prototype** of proposed extensions, not the framework; see docs/PROPOSED.md for what a real version would need (allowances bound to the presentation key, the registry checking the principal's signature itself).
 - **The laws are illustrative.** The regimes are loosely modeled on real ones to show how one infrastructure serves different rules; they are not legal advice or faithful implementations.
