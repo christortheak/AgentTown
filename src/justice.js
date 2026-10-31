@@ -16,13 +16,37 @@ import { postJson, HttpError } from 'aaf-reference/src/lib/http.js';
 
 const MERGE_MS = 120000;
 const MISCONDUCT = new Set(['pump', 'break-in']);
+/** How many cases the police and the court keep on file; a case rarely has more than three petitions. */
+export const CASES_KEPT = 300;
+const PETITIONS_PER_CASE = 3;
 
-export function createJustice({ world, emit, people = () => ({ police: 0, judge: 0 }), timeScale = 1 }) {
+export function createJustice({ world, emit, people = () => ({ police: 0, judge: 0 }), timeScale = 1, casesKept = CASES_KEPT }) {
   const cases = [];
   const petitions = [];
   const bans = new Map(); // "legal name|jurisdiction" -> case id
   const banKey = (identity) => `${identity.legal_name}|${identity.jurisdiction}`.toLowerCase();
   const later = (ms, fn) => setTimeout(() => fn().catch((err) => emit({ kind: 'justice', tone: 'warn', text: `The court stumbled: ${err.message}` })), ms / timeScale);
+  const pending = (c) => petitions.some((p) => p.case === c.id && p.status === 'pending');
+  const onFile = (c) => cases.includes(c);
+
+  /**
+   * Old files go: the oldest cases, with their petitions, so no petition points at a case that's gone. A case
+   * with a petition still before the court stays until it's ruled on, and so does the case just filed. Petitions
+   * filed again and again in one case go oldest first, once ruled on.
+   */
+  function tidy() {
+    for (let i = 0; cases.length > casesKept && i < cases.length - 1;) {
+      if (pending(cases[i])) i++;
+      else {
+        const [gone] = cases.splice(i, 1);
+        for (let j = petitions.length - 1; j >= 0; j--) if (petitions[j].case === gone.id) petitions.splice(j, 1);
+      }
+    }
+    for (let i = 0; petitions.length > casesKept * PETITIONS_PER_CASE && i < petitions.length;) {
+      if (petitions[i].status === 'pending') i++;
+      else petitions.splice(i, 1);
+    }
+  }
 
   /** Open a case, or add to an open one of the same kind at the same place. */
   function fileCase({ kind, placeId, title, evidence, by = 'the town', owner = null }) {
@@ -36,6 +60,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
     }
     c = { id: randomId('case', 5), kind, placeId, title, by, owner, evidence: fresh, status: 'open', opened: now, updated: now, findings: null, outcome: [] };
     cases.push(c);
+    tidy();
     emit({ kind: 'justice', placeId: 'police', place: 'Police Station', tone: 'warn', owner, text: `Police opened case ${c.id}: ${title} (${fresh.length} badge${fresh.length === 1 ? '' : 's'} as evidence; filed by ${by})` });
     if (!people().police) later(4000, () => inspect(c));
     return c;
@@ -49,6 +74,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
     if (petitions.some((p) => p.case === caseId && p.kind === kind && p.status === 'pending')) throw new HttpError(409, 'already_pending', 'That petition is already before the court.');
     const p = { id: randomId('pet', 5), case: caseId, kind, by, owner, status: 'pending', filed: Date.now() };
     petitions.push(p);
+    tidy();
     const what = { identify: 'identify who stands behind', delete: 'delete the agents behind', ban: 'ban the principal behind' }[kind];
     emit({ kind: 'justice', placeId: 'court', place: 'Courthouse', tone: 'info', owner, text: `${by} petitioned the court to ${what} case ${caseId}` });
     if (!people().judge) later(3000, () => rule(p.id, { grant: true, by: 'Judge Rowan (simulated)' }));
@@ -149,7 +175,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
 
   /** The simulated inspector: identify first; then delete; ban a principal behind several cases or a scheme. */
   async function inspect(c) {
-    if (people().police) return;
+    if (people().police || !onFile(c)) return;
     if (!c.findings) {
       if (!petitions.some((p) => p.case === c.id && p.kind === 'identify')) petition(c.id, 'identify');
       return;
@@ -165,7 +191,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
     const scheme = c.findings.linked >= 3;
     if ((misconduct.length >= 2 || scheme) && !bans.has(banKey(c.findings.principal.identity)) && !petitions.some((p) => p.case === c.id && p.kind === 'ban')) {
       later(2500, async () => {
-        if (c.findings && !bans.has(banKey(c.findings.principal.identity))) petition(c.id, 'ban');
+        if (onFile(c) && c.findings && !bans.has(banKey(c.findings.principal.identity))) petition(c.id, 'ban');
       });
     }
   }
@@ -173,8 +199,8 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
   return {
     fileCase, petition, rule,
     isBanned: (identity) => bans.get(banKey(identity)) ?? null,
-    cases: () => cases.slice(-40),
-    petitions: () => petitions.slice(-40),
+    cases: (n = 40) => cases.slice(-n),
+    petitions: (n = 40) => petitions.slice(-n),
     caseById: (id) => cases.find((x) => x.id === id) ?? null,
   };
 }

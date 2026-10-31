@@ -39,6 +39,7 @@ export const SHARABLE = {
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ALLOWANCE_SECONDS = 120;
+const REGISTER_SHOWN = 40;
 
 export function defaultRecord({ perPurchase = 50 } = {}) {
   return {
@@ -88,8 +89,8 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
   const key = generateSigningKey();
   const log = new MerkleLog({ logId: id, signer: key });
   const phone = createAccounts({ rpId, origin, name: `${name}: your phone` });
-  const principals = new Map(); // principal id -> { jwk, versions, record, attempts }
-  const usedJti = new Set(); // allowances and statements already relied on, by any place
+  const principals = new Map(); // principal id -> { jwk, version, latest, record, attempts }
+  const usedJti = new Map(); // allowances and statements already relied on, by any place -> when they expire
 
   const mustPrincipal = (pid) => {
     const p = principals.get(pid);
@@ -102,6 +103,15 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
     const since = Date.now() - DAY_MS;
     const live = p.attempts.filter((a) => a.at > since && a.outcome === 'covered');
     return { spent: money(live.reduce((n, a) => n + a.amount, 0)), purchases: live.length };
+  }
+
+  /** The register keeps what it shows and what still counts toward today; older requests are in the log. */
+  function note(p, attempt) {
+    p.attempts.push(attempt);
+    if (p.attempts.length <= REGISTER_SHOWN) return;
+    const since = Date.now() - DAY_MS;
+    const shown = p.attempts.length - REGISTER_SHOWN;
+    p.attempts = p.attempts.filter((a, i) => i >= shown || (a.at > since && a.outcome === 'covered'));
   }
 
   const keeper = {
@@ -122,17 +132,19 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
       }
       if (payload.principal !== pid) throw new HttpError(403, 'wrong_principal', 'the record names a different principal');
       const record = normalizeRecord(payload.record);
-      const p = known ?? { jwk, versions: [], attempts: [] };
+      const p = known ?? { jwk, version: 0, attempts: [] };
       const digest = digestOf(record);
-      const { index } = log.append({ type: 'record', principal: pid, version: p.versions.length + 1, digest, at: new Date().toISOString() });
-      p.versions.push({ jws, digest, index, at: Date.now() });
+      const { index } = log.append({ type: 'record', principal: pid, version: p.version + 1, digest, at: new Date().toISOString() });
+      // Earlier versions are in the log, by digest; the keeper holds the signed one in force.
+      p.version++;
+      p.latest = { jws, digest, index, at: Date.now() };
       p.record = record;
       principals.set(pid, p);
-      return { version: p.versions.length, receipt: log.receipt(index) };
+      return { version: p.version, receipt: log.receipt(index) };
     },
 
     record: (pid) => principals.get(pid)?.record ?? null,
-    version: (pid) => principals.get(pid)?.versions.length ?? 0,
+    version: (pid) => principals.get(pid)?.version ?? 0,
 
     /**
      * An agent asks whether one purchase is within its principal's record. The
@@ -152,7 +164,7 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
       const attempt = { jti, at: Date.now(), place: payload.place, aud: payload.aud, action: payload.action, amount, category: payload.category ?? null, outcome: null, reason: null };
       const refuse = (outcome, reason, extra = {}) => {
         Object.assign(attempt, { outcome, reason });
-        p.attempts.push(attempt);
+        note(p, attempt);
         log.append({ type: 'allowance', principal: payload.principal, aud: payload.aud, amount, outcome, at: new Date().toISOString() });
         return { covered: false, outcome, reason, ...extra };
       };
@@ -171,7 +183,7 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
         approved = true;
       }
       Object.assign(attempt, { outcome: 'covered', approved });
-      p.attempts.push(attempt);
+      note(p, attempt);
       log.append({ type: 'allowance', principal: payload.principal, aud: payload.aud, amount, outcome: 'covered', at: new Date().toISOString() });
       const now = nowSeconds();
       const allowance = signJws({ iss: id, aud: payload.aud, params_digest: payload.params_digest, covered: true, ...(approved ? { approved_by_principal: true } : {}), jti, iat: now, exp: now + ALLOWANCE_SECONDS }, key, { typ: TYP.allowance });
@@ -196,7 +208,7 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
     register(pid) {
       const p = principals.get(pid);
       if (!p) return null;
-      return { record: p.record, version: p.versions.length, today: today(p), attempts: p.attempts.slice(-40).reverse() };
+      return { record: p.record, version: p.version, today: today(p), attempts: p.attempts.slice(-REGISTER_SHOWN).reverse() };
     },
 
     /** A place checks an allowance or statement: our signature, made out to it, for this request, unexpired, used once. */
@@ -205,9 +217,15 @@ export function createKeeper({ id = 'https://records-office.agenttown.test', nam
         const { payload } = verifyJws(jws, keeper.publicJwk, { typ });
         if (payload.aud !== aud) return { ok: false, reason: 'made out to another place' };
         if (params_digest && payload.params_digest !== params_digest) return { ok: false, reason: 'for a different request' };
-        if (payload.exp < nowSeconds()) return { ok: false, reason: 'expired' };
+        const now = nowSeconds();
+        if (payload.exp < now) return { ok: false, reason: 'expired' };
         if (usedJti.has(payload.jti)) return { ok: false, reason: 'already used' };
-        usedJti.add(payload.jti);
+        // Once expired, an allowance is refused for that alone, so the keeper need not remember it was used.
+        for (const [jti, exp] of usedJti) {
+          if (exp >= now) break;
+          usedJti.delete(jti);
+        }
+        usedJti.set(payload.jti, payload.exp);
         return { ok: true, payload };
       } catch (err) {
         return { ok: false, reason: `not signed by the ${name}: ${err.message}` };
