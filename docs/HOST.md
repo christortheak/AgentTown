@@ -69,7 +69,7 @@ To give every player passkeys, the game has to be served over HTTPS, at one name
 AGENTTOWN_ADDRESS=192.168.1.20 ORIGIN=https://agenttown.example.org npm start
 ```
 
-Then everyone, the host included, opens that address. AgentTown doesn't set this up for you, and we haven't tested it at an event yet. It needs either a reverse proxy on the host (Caddy or nginx) with a certificate for a name that points to the host on your network, or a tunnel service that gives the town an HTTPS address, which also puts it on the internet.
+Then everyone, the host included, opens that address. AgentTown doesn't set this up for you, and we haven't tested it at an event yet. It needs either a reverse proxy on the host (Caddy or nginx) with a certificate for a name that points to the host on your network, or a tunnel service that gives the town an HTTPS address, which also puts it on the internet: then start it in public mode ([On a public server](#on-a-public-server)).
 
 ## Running the session
 
@@ -90,9 +90,31 @@ A suggestion, for about an hour:
 
 If a team has built a registry, a record keeper or a whole federation, they can bring it: see [Bring your implementation to AgentTown](EVENT.md). It also says what the host has to do: share the trust anchor's key thumbprint (the startup log prints it), and admit services in the **Hall of Registries**, or let the teams do it themselves.
 
+## On a public server
+
+Everything above is for one network you trust. To run one town on the internet, on a small server behind a tunnel such as Cloudflare Tunnel, start it in **public mode**:
+
+```bash
+AGENTTOWN_PUBLIC=1 ORIGIN=https://town.example.org AGENTTOWN_DIRECTOR_KEY=<at least 16 characters> \
+  AGENTTOWN_PARTICIPANTS_URL=https://participants.example.org npm start
+```
+
+The town listens on the server only (127.0.0.1), and the tunnel brings everyone in. It's served over HTTPS at `ORIGIN`, so every player can use passkeys. With public mode off, nothing on this page changes. With it on:
+
+- **It won't start without a long director key**, at least 16 characters: on the internet a short word can be guessed. Open the director's view once with `?director=<key>`; the tab keeps the key and takes it out of the address bar, so it doesn't end up in history or screenshots.
+- **The server calls out only to public addresses.** Adding a federation, admitting a service and checking one at the door by its address are the director's. An address on a private network, on the server itself or at the cloud's metadata service is refused: "That address isn't on the public internet." A member a federation lists at such an address is left out, and checked again at every refresh. Anyone may still check a service the town knows, by its entity id. The town's own services are the exception, each at its own address. Since a name can resolve differently a moment after it's checked, the server's service file should also block the town from private addresses other than its own 127.0.0.1.
+- **Joining is limited.** Up to 100 players at once, and from one address 6 joins in 10 minutes, 4 players at once and 2 single seats (a place, a house, the judge's bench). Past a limit, the town says so and asks people to wait. That leaves room for one person playing two roles side by side, and for rejoining. People sharing an office's address may need more: see the settings in the [README](../README.md#settings).
+- **Players' addresses come from the tunnel.** Every connection comes from `cloudflared` on the server, so the town reads each player's address from Cloudflare's `CF-Connecting-IP` header (`AGENTTOWN_CLIENT_IP_HEADER` for another tunnel). Wrong pairing codes and joins count against each player's own address, not everyone's at once.
+- **Players the server walks about** (`headless` joins, for tests) are the director's only.
+- **The residents rest** after three minutes with nobody in town, and wake when someone joins. A pause the director chose stays until the director ends it.
+- **AgentTown Participants needs a name of its own** for teams to join it ([EVENT.md](EVENT.md)). Route a second name on the tunnel, one level under your domain (`participants.example.org`; Cloudflare's free certificate doesn't cover deeper names), to `http://127.0.0.1:11170` (4170 plus the port offset), with no sign-in in front, and set `AGENTTOWN_PARTICIPANTS_URL` to it. `/trust-anchor.json` hands teams that address; the town keeps calling the anchor on the server. Public mode refuses `AGENTTOWN_ADDRESS`, which would open every federation port on every interface, over plain HTTP.
+- **The places' front door stays on the server**, so agents that hold their own badge can't come to a public town yet. Residents' agents, paired with a code, can. `/agents.md` tells agents so.
+
+This page doesn't cover setting up the server or the tunnel. To try public mode for a few minutes from your own machine, a quick tunnel is enough: run `cloudflared tunnel --url http://127.0.0.1:4400`, then start the town with `AGENTTOWN_PUBLIC=1`, `ORIGIN` set to the https address it prints, and a long director key. A quick tunnel has one name, so teams can't join AgentTown Participants through it. Anyone with the address can come in, with no sign-in in front, so stop the tunnel when you're done.
+
 ## If something goes wrong
 
 - **Players can't reach the town.** Check the host's address hasn't changed, the firewall allows Node, and the network doesn't keep devices apart. From a player's laptop, `http://192.168.1.20:4400/api/info` should answer.
-- **"The director key is needed for that."** Open the director's view as `…/?director=<key>`. The browser tab remembers it.
+- **"The director key is needed for that."** Open the director's view as `…/?director=<key>`. The browser tab remembers it, and takes it out of the address bar.
 - **The town is slow or stuck.** Restart it: Ctrl-C, then start it again. Everyone joins again.
 - **A player's AI agent can't connect.** The pairing card gives the address the player used to open the town. Their agent's machine has to reach it too.

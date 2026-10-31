@@ -35,6 +35,7 @@ npm test         # the whole suite, one test file at a time; a few minutes
 - **Places are reached through the front.** A place's `rp.url` is its address at the front door (`src/front.js`), which passes on only its description and its actions; its accounts are used in-process (`rp.accounts`). The town's own requests carry the front's mark (`world.agent`, `rawRequest` and `handBuiltRequest` add it), and anything without it is an agent that came with its own badge. Never serve `rp.privateUrl`.
 - **Plain words first.** A result card leads with what happened, why, and what would fix it; the technical record comes after. Write for someone who has never heard of the framework.
 - **Simulations say so.** World ID and x402 are simulated, and the UI says so wherever they appear.
+- **Outside addresses go through the guard.** Anything that fetches an address a visitor, a team or an outside anchor gave calls `guard.check` (`src/addresses.js`) first and fetches with `guard.fetchOptions`. In public mode (`AGENTTOWN_PUBLIC=1`) only public addresses pass; the town's own services are exempt by entity id and address together, never for being in a federation the town knows. With public mode off, nothing may change: LAN events use private addresses.
 
 ## Testing in a browser
 

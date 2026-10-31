@@ -110,6 +110,8 @@ This allows an open market without a gatekeeper: a low-bar anchor that admits an
 - **Registering at another counter.** A resident can register an agent at any registry whose federation accepts the town's identity verifier. They are enrolled there too (one enrollment per registry, verified by the same verifier), and the grant is kept by a record keeper in that federation. A shop that trusts that federation checks the badge, the grant and the record keeper's accreditation under that federation's own anchor.
 - **Visitors.** When a federation is added, an agent registered there visits town.
 - **Agents with their own badge.** The visitors above are made by the town. An agent registered in another federation that holds its own key sends its requests to the places' front door (`src/front.js`; `GET /api/places` lists the places), and a place that trusts its federation checks it as it checks anyone. That is what a participant registered at someone else's registry needs: to come with the badge it already has.
+- **An anchor's own address.** AgentTown Participants can publish an address other than the one it listens on (`AGENTTOWN_PARTICIPANTS_URL`): teams reach it at a name of its own through a tunnel, while the town calls it on its own machine. Its entity id stays the same.
+- **Where members are served.** An anchor can list a member at any address, and move it later, including to one inside the relying party's own network. A public town (`AGENTTOWN_PUBLIC=1`, `src/addresses.js`) leaves such a member out of its view, at every refresh, rather than dropping the whole federation; its own services are exempt, each by its entity id and address. The reference discovery has already fetched the member's Entity Configuration by then, so a deployment also blocks the process from private addresses.
 
 **The shim.** The reference verifier names the type it expects after `trust.trustAnchor`. A `MultiView` answers with the anchor of the federation whose member it was last asked about. The verifier always looks up an issuer and checks the type in the same synchronous step, so that is the issuer's own anchor. It works, but it is exactly what point 3 would make explicit: pass the issuer's anchor to the check.
 
@@ -118,7 +120,7 @@ This allows an open market without a gatekeeper: a low-bar anchor that admits an
 - A court can have a registry in another federation say who stands behind an agent, if that federation lists the town's court. It can't have that registry revoke the agent: the town revokes through a registry operator's own token, which it holds only for its own registries, and the profile's legal orders cover resolution only (§7.11).
 - No intermediate authorities, and an anchor's key isn't rolled over.
 - Taking a key on first use is only as good as checking the thumbprint with whoever runs the anchor.
-- Every party in town can add a federation and admit services: fine for a local event, not for a public server.
+- In a town without a director key, every party can add a federation and admit services: fine for a local event. A public town leaves both to the director.
 
 ### Questions
 
@@ -126,6 +128,7 @@ This allows an open market without a gatekeeper: a low-bar anchor that admits an
 - Should relying parties trust no anchor by default, or a well-known few?
 - How is a whole federation withdrawn from trust, and how fast must parties notice?
 - Should a registry belong to several federations (several `authority_hints`), and what does it mean if they disagree about it?
+- Should discovery check where a member says it's served before fetching anything there, so a relying party that trusts an outside anchor can't be pointed at its own network?
 
 ## Open questions
 

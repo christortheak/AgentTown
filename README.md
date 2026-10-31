@@ -6,7 +6,7 @@ Many people can play at once, each in a role: a **resident** (you walk the town 
 
 **Start here:**
 - [Try AgentTown on your own computer](docs/TRY-IT.md): set it up and play a day, step by step.
-- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town, everyone plays from their own.
+- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town, everyone plays from their own. It also says how to run one town on a public server.
 - [Bring your implementation to AgentTown](docs/EVENT.md): for teams with their own registry, record keeper or federation.
 
 What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
@@ -29,7 +29,7 @@ Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because p
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper; plays yourself, your agent on errands, your agent, and its sub-agents; runs agents nobody registered and stops everything; and adds a federation by its trust anchor's address and a team's registry and record keeper to the participants' federation, which places trust only if they choose to.
+Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper; plays yourself, your agent on errands, your agent, and its sub-agents; runs agents nobody registered and stops everything; adds a federation by its trust anchor's address and a team's registry and record keeper to the participants' federation, which places trust only if they choose to; and runs a public town, which won't start without a long director key, calls out only to public addresses, leaves out a federation's members listed anywhere else, limits joins per address, reads players' addresses from the tunnel's header, and rests its residents while nobody is in town.
 
 ## Roles
 
@@ -203,7 +203,7 @@ An agent registered in another federation can come to town on its own. It keeps 
 
 Every place is reached through one front door (`src/front.js`), the town's own agents included, because a place checks a request's signature against the address it was sent to. The front passes on only a place's description and its actions, never the accounts and passkey routes behind it. A place turns such an agent away when it also checks something only the town can answer: World ID or x402 (simulated), or the Records Office's spending limits and facts (proposed). Such an agent can't sign in to someone's account, and can't come without a badge.
 
-The front listens on this machine at port 4180 plus the port offset (11180 by default), and on the network when `AGENTTOWN_ADDRESS` is set, like the federations.
+The front listens on this machine at port 4180 plus the port offset (11180 by default), and on the network when `AGENTTOWN_ADDRESS` is set, like the federations. A public town keeps it on this machine for now, so agents that hold their own badge can't come to one yet; `/agents.md` says so.
 
 ## External registries and record keepers
 
@@ -224,7 +224,28 @@ AGENTTOWN_CONFIG=./town.config.json npm start
 
 To host the framework's services on a LAN with aaf-reference as it is: set `"host"` in `aaf-reference/config/federation.json` to the machine's address, run `npm run reset` and `npm start` there, then copy `data.nosync/trust-anchor.json` (and, for verification and courts, the verifier's and court's key files from `data.nosync/keys/`) to the town's host. Those keys are private: share them only with the town that plays those roles.
 
-To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. For a public demo, set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them.
+To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. Set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them (the tab keeps the key, and takes it out of the address bar). For a town on the internet, use public mode, below.
+
+## Settings
+
+All are environment variables, and all are optional, except that public mode needs a director key.
+
+| Setting | What it does |
+|---|---|
+| `PORT` | The game's port (4400). |
+| `HOST` | Where the game listens: `127.0.0.1`, or `0.0.0.0` with `AGENTTOWN_ADDRESS` set. |
+| `ORIGIN` | Where players open the town, when not `http://localhost:4400`. Passkeys are bound to it; beyond `localhost` it must be https. |
+| `AGENTTOWN_DIRECTOR_KEY` | Keeps the director's cues, adding federations and admitting services to whoever has it. |
+| `AGENTTOWN_ADDRESS` | This machine's address on a LAN: the town's federations and the places' front listen on every interface and publish it ([docs/HOST.md](docs/HOST.md)). |
+| `AGENTTOWN_PORT_OFFSET` | Added to the federations' ports (7000). |
+| `AGENTTOWN_CONFIG` | An external federation and starting policies (above). |
+| `AGENTTOWN_PUBLIC=1` | **Public mode**, for one town on the internet behind a tunnel ([docs/HOST.md](docs/HOST.md), *On a public server*). It needs `AGENTTOWN_DIRECTOR_KEY` of at least 16 characters, and refuses `AGENTTOWN_ADDRESS`. The server calls out only to public addresses (the town's own services excepted, each at its own address), and leaves out any federation member listed elsewhere, at every refresh. A check at the door by address, and players the server walks about, are the director's. Joins are limited, players' addresses come from the tunnel's header, and the residents rest while nobody is in town. With it off, nothing changes. |
+| `AGENTTOWN_PARTICIPANTS_URL` | The address teams are given for AgentTown Participants' trust anchor, a name of its own such as `https://participants.example.org`, routed to its port on this machine (4170 plus the offset). The town still calls it there. |
+| `AGENTTOWN_MAX_PLAYERS` | Public mode: players in town at once (100). An empty town takes about 125 MB, and each player who plays about 1 MB more. |
+| `AGENTTOWN_JOINS_PER_ADDRESS` | Public mode: joins from one address in 10 minutes (6). |
+| `AGENTTOWN_PLAYERS_PER_ADDRESS` | Public mode: players from one address at once (4). Raise it for collaborators who share an office's address. |
+| `AGENTTOWN_SEATS_PER_ADDRESS` | Public mode: single seats (a place, a house, the judge's bench) one address holds at once (2). |
+| `AGENTTOWN_CLIENT_IP_HEADER` | Public mode: the header that names a player's address on connections from this machine (`cf-connecting-ip`, set by Cloudflare). |
 
 ## Layout
 
@@ -247,6 +268,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 | `src/sessions.js` | Joining, roles, what each role sees and can do, pairing outside agents (briefs, notes, limits), idle sessions let go |
 | `src/justice.js` | Cases, petitions, and court orders run on the registry and the identity verifier |
 | `src/town.js`, `src/server.js` | The ledger, director cues, and the HTTP API |
+| `src/addresses.js` | Public mode: which addresses the server may call for others, and a player's address behind the tunnel |
 | `src/worldid.js`, `src/x402.js` | The simulations |
 | `public/map.js`, `public/route.js` | The town's layout and drawing; routes shared with the server |
 | `public/game.js`, `public/palette.js`, `public/roles.js`, `public/ui.js`, `public/api.js` | The game, the action deck, joining and the role panels, cards and HUD, server calls and WebAuthn |
@@ -255,7 +277,7 @@ To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secu
 ## Limits of this prototype
 
 - **State is in memory**, and each start is a new town. Leaving town lets go of your role; a passkey you made stays in your password manager until you delete it there.
-- **No accounts.** A session is a tab; anyone can take any free role. That is the point for a demo, but a public one should keep the director key private.
+- **No accounts.** A session is a tab; anyone can take any free role. That is the point for a demo; a public town needs a long director key, kept private, and limits how many play and how many single seats one address holds.
 - **The town ledger is a narrator's view**, for the demo: it shows what every place decided. Names of principals stay out of it unless a court finds them.
 - **World ID and x402 are simulated**, as above.
 - **Agents that hold their own badge get only the framework's checks.** A place that asks for anything more turns them away. The court can identify one if its registry accepts the town's court, but can't have that registry delete it (docs/PROPOSED.md §6).

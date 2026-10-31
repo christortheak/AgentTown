@@ -1,6 +1,6 @@
 # Bring your implementation to AgentTown
 
-For teams who have built a registry, a record keeper, or a whole federation for the Accountable Agents framework, and want to see residents' agents use it in town. Everything here is a prototype for a local event: plain HTTP on one network, nothing kept after the town stops.
+For teams who have built a registry, a record keeper, or a whole federation for the Accountable Agents framework, and want to see residents' agents use it in town. Everything here is a prototype: at a local event, plain HTTP on one network; or one town on a public server, which asks a little more of your services ([Limits](#limits)). Nothing is kept after the town stops.
 
 There are two ways in:
 
@@ -13,15 +13,15 @@ Either way, **no place trusts you until it chooses to.** Shopkeepers tick federa
 
 ## For the host
 
-Run the town as in [Run AgentTown at a LAN event](HOST.md), with `AGENTTOWN_ADDRESS` set so the town's federations listen on the network and publish that address. Then:
+Run the town as in [Run AgentTown at a LAN event](HOST.md), with `AGENTTOWN_ADDRESS` set so the town's federations listen on the network and publish that address. A town on a public server uses public mode instead, with `AGENTTOWN_PARTICIPANTS_URL` set to AgentTown Participants' own name ([On a public server](HOST.md#on-a-public-server)). Then:
 
 - **Share the trust anchor's key thumbprint.** The startup log prints AgentTown Participants' trust anchor and its thumbprint: read it out, or put it on a slide, so teams can check it.
-- **Decide who admits services.** With `AGENTTOWN_DIRECTOR_KEY` set, only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can.
+- **Decide who admits services.** With `AGENTTOWN_DIRECTOR_KEY` set, only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can. A public town always has a key.
 - **Have something to add while teams get ready.** The director's **Start a sample outside federation** runs Riverside Co-op.
 
 ## Joining AgentTown Participants
 
-1. **Get the bootstrap.** `GET http://<town>:4400/trust-anchor.json` returns `{ name, entity_id, url, jwks, thumbprint }`, the same shape as aaf-reference's `trust-anchor.json`. Check the thumbprint with the host. Configure your services with it: it's your trust anchor.
+1. **Get the bootstrap.** `GET http://<town>:4400/trust-anchor.json` (on a public server, `https://town.example.org/trust-anchor.json`) returns `{ name, entity_id, url, jwks, thumbprint }`, the same shape as aaf-reference's `trust-anchor.json`. Check the thumbprint with the host. Configure your services with it: it's your trust anchor.
 2. **Describe yourself.** Serve a self-signed Entity Configuration at `/.well-known/openid-federation` (OpenID Federation 1.0, Reference Profile §6):
    - metadata `aaf_registry` or `aaf_record_keeper`, with `organization_name`, `endpoint_base` (where you're served), and `jwks` (a signing key; a registry also needs an encryption key). A record keeper lists its `roles`: `authorization`, `provenance`, `activity`;
    - `authority_hints: ["https://participants.agenttown.test"]`.
@@ -39,7 +39,7 @@ Credential and trust-mark types are named under this federation's anchor (`https
 
 ## The check at the door
 
-When a service is admitted by its address, and whenever someone presses **Check** beside it in the halls (or `POST /api/participants/check` with `{ "entity_id" }` or `{ "url" }`), the town probes what it must answer, without changing anything:
+When a service is admitted by its address, and whenever someone presses **Check** beside it in the halls (or `POST /api/participants/check` with `{ "entity_id" }` or `{ "url" }`; in a public town, only the director checks by `url`), the town probes what it must answer, without changing anything:
 
 | Every service | A registry | A record keeper |
 |---|---|---|
@@ -76,4 +76,6 @@ Runs a federation of its own and has the town add it, pinned to its anchor's key
 
 - **One anchor at a time, per service.** The town keeps several federations, but a registry or record keeper still trusts only its own anchor. So an agent registered in your federation keeps its grant with your record keeper, and its sub-agents register at your registry; see [PROPOSED.md](PROPOSED.md) §6.
 - **No intermediate authorities**, and anchor keys aren't rolled over.
-- **Plain HTTP, one network, nothing kept** after the town stops. Not for a public server.
+- **At a LAN event: plain HTTP, one network, nothing kept** after the town stops.
+- **A public town calls only public addresses.** Your services must be on the public internet, on a server of your own or behind a tunnel of your own, with https recommended: a laptop on venue Wi-Fi can't be reached from a cloud server. The town refuses an address on a private network or on its own server ("That address isn't on the public internet"), and leaves out of its view any member listed at one, checking again at every refresh. The bootstrap is at `https://town.example.org/trust-anchor.json`, and the anchor it names has a public https address of its own. `bin/agenttown-federation.js` publishes `http://<--address>:<port>`, so it suits a server with a public address; behind a tunnel, give your own services' public `endpoint_base`.
+- **A public town has no front door for agents that hold their own badge** yet: an agent registered in your federation comes as a resident's agent, paired with a code.
