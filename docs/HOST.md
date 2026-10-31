@@ -13,47 +13,54 @@ For whoever hosts. One laptop runs the whole town; everyone else plays in a brow
 ## Before the day
 
 1. **Set up the host laptop** as in [Try AgentTown on your own computer](TRY-IT.md), steps 1 and 2, and play a few minutes on it to check it works.
-2. **Find the host's address on the network**:
-   - macOS: `ipconfig getifaddr en0` (Wi-Fi) or `ipconfig getifaddr en1`
-   - Linux: `hostname -I`
-   - Windows: `ipconfig`, the IPv4 Address of the network you're on
-
-   It usually changes from one network to another, so look again at the venue.
-3. **Pick a director key**, any word or phrase. With one, only someone who has it can run the director's cues and add federations. Without one, every player can.
-4. **Do a dry run**: start the town as below and open it from a second device on the same network.
+2. **Do a dry run**: start the town as below and open it from a second device on the same network.
 
 ## On the day
 
-1. **Start the town** with the host's address and your director key:
+1. **Start the town in LAN mode**, in one step. In the AgentTown folder, double-click **Start LAN party.command** (on a Mac) or **Start LAN party.cmd** (on Windows). Or, in a terminal there:
 
    ```bash
-   AGENTTOWN_ADDRESS=192.168.1.20 AGENTTOWN_DIRECTOR_KEY=apple-tree npm start
+   npm run lan
    ```
 
-   On Windows, in PowerShell:
-
-   ```powershell
-   $env:AGENTTOWN_ADDRESS="192.168.1.20"; $env:AGENTTOWN_DIRECTOR_KEY="apple-tree"; npm start
-   ```
-
-   It prints, among other things:
+   It finds the host's address on the network, makes a director key, and prints:
 
    ```
-   AgentTown is open at http://localhost:4400
-   Players on other machines open http://192.168.1.20:4400
-   Director: locked (AGENTTOWN_DIRECTOR_KEY). …
+     AgentTown is on your network.
+
+     Players open     http://192.168.1.20:4400
+     You direct from  http://localhost:4400/?director=3f9a0c1b7e22
    ```
 
+   Then it opens the director's view in the host's browser.
 2. **Let it through the firewall.** If the host's firewall asks whether Node may accept incoming connections, allow it. If players can't reach the town, this is the first thing to check.
-3. **Check from another device**: open `http://192.168.1.20:4400`. You should see the join screen.
-4. **Open the director's view on the host**: `http://localhost:4400/?director=apple-tree`. Join in any role, then press **🎬**. On the host, use `localhost`, not the network address: that's where passkeys work (see below).
-5. **Give players the address**, on a slide or as a QR code: `http://192.168.1.20:4400`. Tell them:
+3. **Check from another device**: open the players' address (`http://192.168.1.20:4400` here). You should see the join screen.
+4. **In the director's view** that opened, join in any role, then press **🎬**. It's at `localhost`, not the network address: that's where passkeys work (see below). Only this tab has the key, so players can't run the cues. If you close it, open the director's link again; the key is new each time the town starts.
+5. **Give players the address.** The join screen on the host shows it, and so does the director's **Presenter view**, for the big screen. Or put it on a slide, or in a QR code. Tell them:
    - Pick a role and a name. Any name: others see your agent's name, never yours.
    - Each browser tab is its own player, so one person can play two roles side by side.
    - Close the tab, or let the laptop sleep, for four minutes and you leave town. Joining again starts over.
    - The **Try AgentTown** guide's step 4, *Play the day*, is a good path for a first go.
 
 When it's over, press **Ctrl-C** in the host's terminal. The town and everything in it are gone.
+
+### Choosing the address or the key
+
+LAN mode takes the first address it finds on Wi-Fi or a cable, and says which other networks the host is on. To choose one of those, or a director key of your own, set them:
+
+```bash
+AGENTTOWN_ADDRESS=192.168.1.20 AGENTTOWN_DIRECTOR_KEY=apple-tree npm run lan
+```
+
+On Windows, in PowerShell:
+
+```powershell
+$env:AGENTTOWN_ADDRESS="192.168.1.20"; $env:AGENTTOWN_DIRECTOR_KEY="apple-tree"; npm run lan
+```
+
+To find an address: on a Mac, `ipconfig getifaddr en0` (Wi-Fi) or `ipconfig getifaddr en1`; on Linux, `hostname -I`; on Windows, `ipconfig`, the IPv4 Address of the network you're on. It usually changes from one network to another.
+
+On a laptop with no browser, or over SSH, `npm run lan -- --no-open` doesn't open one. `npm start` with `AGENTTOWN_ADDRESS` set works too, as before: it opens nothing, and without `AGENTTOWN_DIRECTOR_KEY` every player can run the director's cues.
 
 ## What players can do, and passkeys
 
@@ -114,7 +121,9 @@ This page doesn't cover setting up the server or the tunnel. To try public mode 
 
 ## If something goes wrong
 
-- **Players can't reach the town.** Check the host's address hasn't changed, the firewall allows Node, and the network doesn't keep devices apart. From a player's laptop, `http://192.168.1.20:4400/api/info` should answer.
+- **"LAN mode couldn't find this machine's address on a network."** Join the Wi-Fi, or plug in a cable, and start it again. Or set `AGENTTOWN_ADDRESS` ([Choosing the address or the key](#choosing-the-address-or-the-key)).
+- **"Port 4400 is in use"** (or another port). A town is already running, perhaps in another window: stop it there with Ctrl-C. Or set `PORT` and `AGENTTOWN_PORT_OFFSET` to use other ports.
+- **Players can't reach the town.** Check the firewall allows Node, the network doesn't keep devices apart, and the host is on the same network as the players (LAN mode lists the others it's on). From a player's laptop, `http://192.168.1.20:4400/api/info` should answer.
 - **"The director key is needed for that."** Open the director's view as `…/?director=<key>`. The browser tab remembers it, and takes it out of the address bar.
 - **The town is slow or stuck.** Restart it: Ctrl-C, then start it again. Everyone joins again.
 - **A player's AI agent can't connect.** The pairing card gives the address the player used to open the town. Their agent's machine has to reach it too.

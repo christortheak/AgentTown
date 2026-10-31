@@ -1863,6 +1863,11 @@ if (!S) {
   await refresh();
 }
 Object.assign(player, startingPoint());
+// For the room, in presenter view: where to join, when the town is open to other machines.
+api.get('/api/info').then((i) => {
+  const at = i.players_url && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(i.players_url) ? i.players_url : null;
+  if (at) document.getElementById('joinAt').innerHTML = `Join at <b>${esc(at)}</b>`;
+}).catch(() => {});
 await poll();
 updateCamera(0, true);
 setInterval(poll, 500);

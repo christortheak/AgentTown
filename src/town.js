@@ -15,7 +15,7 @@ import { createFederations, startAnchor, readEntity } from './proposed/anchors.j
 import { startSampleFederation, asMembers } from './proposed/sample-federation.js';
 import { checkService } from './proposed/door.js';
 import { startFront } from './front.js';
-import { createGuard } from './addresses.js';
+import { createGuard, isLoopback } from './addresses.js';
 import { generateSigningKey, thumbprint } from 'aaf-reference/src/lib/crypto.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 import { discoverFederation } from 'aaf-reference/src/lib/trust.js';
@@ -28,8 +28,8 @@ import { discoverFederation } from 'aaf-reference/src/lib/trust.js';
  */
 export async function createTown({ origin, portOffset = 7000, config = loadConfig(), residents = true, timeScale = 1, address = null, public: isPublic = false, participantsUrl = null, limits = null, lookup }) {
   // With an address, the town's own federation, its participants' anchor and any sample are reachable from other
-  // machines at it (they listen on every interface); without one, they stay on this machine.
-  const listen = address ? '0.0.0.0' : '127.0.0.1';
+  // machines at it (they listen on every interface); without one, or with 127.0.0.1, they stay on this machine.
+  const listen = address && !isLoopback(address) ? '0.0.0.0' : '127.0.0.1';
   const fed = await connectFederation({ federation: config.federation, portOffset, address });
   // The town ledger: everything anyone did, newest last.
   const ledger = { seq: 0, items: [] };

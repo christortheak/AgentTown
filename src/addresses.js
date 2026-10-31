@@ -6,9 +6,11 @@
 // service. The town's own services are exempt, each at exactly its own address.
 // Behind a tunnel every connection comes from this machine, so a public town
 // takes a player's address from the header the tunnel sets.
-// At a LAN event (public mode off) none of this applies, as before.
+// At a LAN event (public mode off) none of this applies, as before; LAN mode
+// (npm run lan) finds this machine's address on the network for itself.
 import dns from 'node:dns';
 import net from 'node:net';
+import os from 'node:os';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
 export const NOT_PUBLIC = 'That address isn\'t on the public internet.';
@@ -91,6 +93,9 @@ export function createGuard({ on = false, lookup } = {}) {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+/** Is this address on this machine only? Then whatever is published at it needn't listen on the network. */
+export const isLoopback = (address) => LOOPBACK.has(address) || address === 'localhost' || /^127\./.test(address ?? '');
+
 /**
  * Where a request came from. In a public town, a connection from this machine is the tunnel, and the header it
  * sets (Cloudflare's CF-Connecting-IP by default) names the visitor. Anywhere else, or without the header, the
@@ -101,4 +106,30 @@ export function clientAddress(req, { trustHeader = false, header = 'cf-connectin
   if (!trustHeader || !LOOPBACK.has(socket)) return socket;
   const given = String(req.headers?.[header.toLowerCase()] ?? '').trim();
   return net.isIP(given) ? given : socket;
+}
+
+// Interfaces that aren't the network the room is on: virtual machines and containers, VPNs, Apple's own
+// peer-to-peer links, Bluetooth.
+const VIRTUAL = /^(lo\d*$|docker|br-|veth|virbr|vmnet|vboxnet|bridge|utun|tun\d|tap\d|wg\d|zt|tailscale|awdl|llw|anpi|ap\d|vEthernet)|virtual|vmware|hyper-v|bluetooth|loopback/i;
+const HOME = new net.BlockList(); // the ranges home, office and party routers hand out
+for (const [a, bits] of [['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]]) HOME.addSubnet(a, bits, 'ipv4');
+
+/**
+ * This machine's address on the network the room shares, for LAN mode: IPv4, on a real interface (Wi-Fi or a
+ * cable), an address a router hands out first. Returns { address, name, others } (others: the rest, best first),
+ * or null when there's none. `interfaces` is os.networkInterfaces()'s shape, so tests can give their own.
+ */
+export function lanAddress(interfaces = os.networkInterfaces()) {
+  const found = [];
+  for (const [name, addrs] of Object.entries(interfaces ?? {})) {
+    if (VIRTUAL.test(name)) continue;
+    for (const a of addrs ?? []) {
+      if (a.internal || net.isIP(a.address) !== 4 || isLoopback(a.address) || a.address.startsWith('169.254.')) continue;
+      found.push({ address: a.address, name, home: HOME.check(a.address, 'ipv4') });
+    }
+  }
+  found.sort((a, b) => b.home - a.home); // stable: otherwise in the system's order
+  if (!found.length) return null;
+  const [first, ...others] = found.map(({ address, name }) => ({ address, name }));
+  return { ...first, others };
 }

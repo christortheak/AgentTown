@@ -6,7 +6,7 @@ Many people can play at once, each in a role: a **resident** (you walk the town 
 
 **Start here:**
 - [Try AgentTown on your own computer](docs/TRY-IT.md): set it up and play a day, step by step.
-- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town, everyone plays from their own. It also says how to run one town on a public server.
+- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town with `npm run lan`, everyone plays from their own. It also says how to run one town on a public server.
 - [Bring your implementation to AgentTown](docs/EVENT.md): for teams with their own registry, record keeper or federation.
 
 What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
@@ -25,11 +25,13 @@ npm start
 
 Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because passkeys are bound to a domain.
 
+For a party on one network, run `npm run lan` instead, or double-click `Start LAN party.command` (Mac) or `Start LAN party.cmd` (Windows). It finds this machine's address on the network, makes a director key, opens the director's view and prints where players join ([docs/HOST.md](docs/HOST.md)).
+
 ```bash
 npm test
 ```
 
-Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper; plays yourself, your agent on errands, your agent, and its sub-agents; runs agents nobody registered and stops everything; adds a federation by its trust anchor's address and a team's registry and record keeper to the participants' federation, which places trust only if they choose to; and runs a public town, which won't start without a long director key, calls out only to public addresses, leaves out a federation's members listed anywhere else, limits joins per address, reads players' addresses from the tunnel's header, and rests its residents while nobody is in town.
+Plays a whole day through the API (town time runs 25× faster), starting in person, with disclosure requests answered once, always or not at all, by passkey; runs a town against an external federation reached by address; runs a town with five people in roles, in which a shopkeeper picks the registries she trusts, a homeowner approves a visitor from her own device, and police and a judge catch, delete and ban a crooked player, who then comes back under another name; runs a town where shops adopt the framework, or don't, and a council's laws change what they must ask for; plays people and agents side by side: signing in with a passkey, a record that stops the agent over its daily budget and asks before larger purchases, an agent taken for a person, and agent software that can't answer; pairs an outside agent over MCP, the stdio bridge and the CLI, which asks its principal and can't approve anything itself; gives an outside agent a brief, an errand race, a sign in a window telling it to ignore its limits, and a counter to mind for a shopkeeper; plays yourself, your agent on errands, your agent, and its sub-agents; runs agents nobody registered and stops everything; adds a federation by its trust anchor's address and a team's registry and record keeper to the participants' federation, which places trust only if they choose to; and runs a public town, which won't start without a long director key, calls out only to public addresses, leaves out a federation's members listed anywhere else, limits joins per address, reads players' addresses from the tunnel's header, and rests its residents while nobody is in town; and starts LAN mode in one step, which finds this machine's address on the network (never a VPN's or a virtual machine's), makes a director key and opens the director's view.
 
 ## Roles
 
@@ -195,7 +197,7 @@ Each place decides which federations it trusts: the town's own by default. Shopk
 
 The reference implementation assumes a single trust anchor. This is prototyped in `src/proposed/` and set out for discussion in [docs/PROPOSED.md](docs/PROPOSED.md) §6.
 
-**At an event**, teams bring their own registries, record keepers or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `AGENTTOWN_ADDRESS` set to this machine's address on the network so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the reference implementation as a team would run theirs.
+**At an event**, teams bring their own registries, record keepers or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `npm run lan`, or with `AGENTTOWN_ADDRESS` set to this machine's address on the network, so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the reference implementation as a team would run theirs.
 
 ## Agents that hold their own badge
 
@@ -224,7 +226,7 @@ AGENTTOWN_CONFIG=./town.config.json npm start
 
 To host the framework's services on a LAN with aaf-reference as it is: set `"host"` in `aaf-reference/config/federation.json` to the machine's address, run `npm run reset` and `npm start` there, then copy `data.nosync/trust-anchor.json` (and, for verification and courts, the verifier's and court's key files from `data.nosync/keys/`) to the town's host. Those keys are private: share them only with the town that plays those roles.
 
-To let other machines open the game itself: `HOST=0.0.0.0`. Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. Set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them (the tab keeps the key, and takes it out of the address bar). For a town on the internet, use public mode, below.
+To let other machines on your network open the game: `npm run lan` (or `HOST=0.0.0.0`, for the game alone). Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. Set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them (the tab keeps the key, and takes it out of the address bar). For a town on the internet, use public mode, below.
 
 ## Settings
 
@@ -236,7 +238,8 @@ All are environment variables, and all are optional, except that public mode nee
 | `HOST` | Where the game listens: `127.0.0.1`, or `0.0.0.0` with `AGENTTOWN_ADDRESS` set. |
 | `ORIGIN` | Where players open the town, when not `http://localhost:4400`. Passkeys are bound to it; beyond `localhost` it must be https. |
 | `AGENTTOWN_DIRECTOR_KEY` | Keeps the director's cues, adding federations and admitting services to whoever has it. |
-| `AGENTTOWN_ADDRESS` | This machine's address on a LAN: the town's federations and the places' front listen on every interface and publish it ([docs/HOST.md](docs/HOST.md)). |
+| `AGENTTOWN_ADDRESS` | This machine's address on a LAN: the town's federations and the places' front listen on every interface and publish it ([docs/HOST.md](docs/HOST.md)). At `127.0.0.1` they stay on this machine. |
+| `AGENTTOWN_LAN=1` | **LAN mode**, as `npm run lan` starts it, for a party on one network ([docs/HOST.md](docs/HOST.md), *On the day*): this machine's address on the network (on Wi-Fi or a cable, never a VPN or a virtual machine) unless `AGENTTOWN_ADDRESS` gives one, a director key unless `AGENTTOWN_DIRECTOR_KEY` sets one, and the director's view opened in this machine's browser (`npm run lan -- --no-open` doesn't). It refuses public mode. |
 | `AGENTTOWN_PORT_OFFSET` | Added to the federations' ports (7000). |
 | `AGENTTOWN_CONFIG` | An external federation and starting policies (above). |
 | `AGENTTOWN_PUBLIC=1` | **Public mode**, for one town on the internet behind a tunnel ([docs/HOST.md](docs/HOST.md), *On a public server*). It needs `AGENTTOWN_DIRECTOR_KEY` of at least 16 characters, and refuses `AGENTTOWN_ADDRESS`. The server calls out only to public addresses (the town's own services excepted, each at its own address), and leaves out any federation member listed elsewhere, at every refresh. A check at the door by address, and players the server walks about, are the director's. Joins are limited, players' addresses come from the tunnel's header, and the residents rest while nobody is in town. With it off, nothing changes. |
@@ -258,6 +261,7 @@ All are environment variables, and all are optional, except that public mode nee
 | `src/rulebook.js` | Jurisdictions, regimes, floors, caps and mandates |
 | `src/mcp.js`, `src/guide.js`, `bin/agenttown-mcp.js`, `bin/agenttown.js` | Outside agents: the MCP endpoint and its tools (a resident's, or a counter's), /agents.md and /llms.txt, the stdio bridge, the CLI |
 | `src/challenges.js` | Errand races and the board |
+| `Start LAN party.command`, `Start LAN party.cmd` | LAN mode in one double-click, on a Mac or on Windows |
 | `AGENTS.md`, `CLAUDE.md` | For coding agents working on AgentTown |
 | `src/proposed/keeper.js`, `src/proposed/driver.js` | Proposed: the principal's record, allowances, statements and the phone's passkey; the agent software that answers a place's question |
 | `src/proposed/anchors.js`, `src/proposed/sample-federation.js`, `src/proposed/door.js` | Proposed: several trust anchors, a view across them, an anchor that admits members while it runs; a sample outside federation; the check at the door |
@@ -268,7 +272,7 @@ All are environment variables, and all are optional, except that public mode nee
 | `src/sessions.js` | Joining, roles, what each role sees and can do, pairing outside agents (briefs, notes, limits), idle sessions let go |
 | `src/justice.js` | Cases, petitions, and court orders run on the registry and the identity verifier |
 | `src/town.js`, `src/server.js` | The ledger, director cues, and the HTTP API |
-| `src/addresses.js` | Public mode: which addresses the server may call for others, and a player's address behind the tunnel |
+| `src/addresses.js` | Public mode: which addresses the server may call for others, and a player's address behind the tunnel. LAN mode: this machine's address on the network |
 | `src/worldid.js`, `src/x402.js` | The simulations |
 | `public/map.js`, `public/route.js` | The town's layout and drawing; routes shared with the server |
 | `public/game.js`, `public/palette.js`, `public/roles.js`, `public/ui.js`, `public/api.js` | The game, the action deck, joining and the role panels, cards and HUD, server calls and WebAuthn |

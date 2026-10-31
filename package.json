@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "lan": "node src/server.js --lan",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\""
   },
   "dependencies": {

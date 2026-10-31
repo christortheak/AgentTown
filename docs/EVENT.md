@@ -13,10 +13,10 @@ Either way, **no place trusts you until it chooses to.** Shopkeepers tick federa
 
 ## For the host
 
-Run the town as in [Run AgentTown at a LAN event](HOST.md), with `AGENTTOWN_ADDRESS` set so the town's federations listen on the network and publish that address. A town on a public server uses public mode instead, with `AGENTTOWN_PARTICIPANTS_URL` set to AgentTown Participants' own name ([On a public server](HOST.md#on-a-public-server)). Then:
+Run the town as in [Run AgentTown at a LAN event](HOST.md), with `npm run lan` (or `AGENTTOWN_ADDRESS` set), so the town's federations listen on the network and publish its address there. A town on a public server uses public mode instead, with `AGENTTOWN_PARTICIPANTS_URL` set to AgentTown Participants' own name ([On a public server](HOST.md#on-a-public-server)). Then:
 
 - **Share the trust anchor's key thumbprint.** The startup log prints AgentTown Participants' trust anchor and its thumbprint: read it out, or put it on a slide, so teams can check it.
-- **Decide who admits services.** With `AGENTTOWN_DIRECTOR_KEY` set, only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can. A public town always has a key.
+- **Decide who admits services.** With `AGENTTOWN_DIRECTOR_KEY` set, only the director can add federations or admit services (open the town with `?director=<key>`). Without it, anyone in town can. LAN mode makes one, and a public town always has one.
 - **Have something to add while teams get ready.** The director's **Start a sample outside federation** runs Riverside Co-op.
 
 ## Joining AgentTown Participants

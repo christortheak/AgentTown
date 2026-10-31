@@ -11,7 +11,7 @@ import { startFederationInProcess } from 'aaf-reference/src/lib/federation.js';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { startServer } from '../src/server.js';
-import { assertPublicAddress, createGuard, clientAddress } from '../src/addresses.js';
+import { assertPublicAddress, createGuard, clientAddress, lanAddress } from '../src/addresses.js';
 import { startAnchor } from '../src/proposed/anchors.js';
 import { buildTown, placeFront } from '../public/map.js';
 import { startRegistry } from 'aaf-reference/src/registry/server.js';
@@ -1383,5 +1383,59 @@ test('at a LAN event none of it applies: any address, any number of joins, the h
     assert.equal(game.town.sim.residentsActive, true);
   } finally {
     await game.close();
+  }
+});
+
+test('LAN mode, in one step: it finds the address, makes a director key and opens the director’s view', { timeout: 60000 }, async () => {
+  // This machine's address on the network: a real interface, and an address a router hands out first. Never
+  // loopback, a VPN, a virtual machine's bridge, a link-local address or IPv6.
+  const lo0 = [{ address: '127.0.0.1', family: 'IPv4', internal: true }];
+  const interfaces = {
+    lo0,
+    utun3: [{ address: '100.101.102.103', family: 'IPv4', internal: false }],
+    bridge100: [{ address: '192.168.64.1', family: 'IPv4', internal: false }],
+    en7: [{ address: '169.254.10.20', family: 'IPv4', internal: false }],
+    en0: [{ address: 'fe80::1', family: 'IPv6', internal: false }, { address: '203.0.113.9', family: 'IPv4', internal: false }],
+    en1: [{ address: '192.168.1.20', family: 'IPv4', internal: false }],
+    'Local Area Connection': [{ address: '10.0.0.7', family: 'IPv4', internal: false }],
+  };
+  assert.deepEqual(lanAddress(interfaces), { address: '192.168.1.20', name: 'en1', others: [{ address: '10.0.0.7', name: 'Local Area Connection' }, { address: '203.0.113.9', name: 'en0' }] });
+  assert.equal(lanAddress({ lo0, utun3: interfaces.utun3 }), null);
+
+  // Off any network, or with public mode on too, it says why before anything starts.
+  await assert.rejects(startServer({ quiet: true, lan: true, interfaces: { lo0 } }), { message: /couldn't find this machine's address on a network\..*AGENTTOWN_ADDRESS/ });
+  await assert.rejects(startServer({ quiet: true, lan: true, public: true, directorKey: KEY }), { message: /^LAN mode and public mode don't go together/ });
+  const out = await promisify(execFile)('node', ['src/server.js', '--lan'], { env: { ...process.env, AGENTTOWN_PUBLIC: '1', AGENTTOWN_DIRECTOR_KEY: KEY } }).catch((err) => err);
+  assert.equal(out.code, 1);
+  assert.match(out.stderr, /AgentTown didn't start\. LAN mode and public mode/);
+
+  // AGENTTOWN_ADDRESS, when set, is used as it is. At 127.0.0.1 nothing listens on the network.
+  const opened = [];
+  const game = await startServer({ port: 4466, portOffset: 15500, quiet: true, residents: false, timeScale: 25, lan: true, address: '127.0.0.1', directorKey: null, open: (url) => opened.push(url) });
+  try {
+    // A key of its own, and the host's browser opens with it, at localhost (where passkeys work).
+    assert.match(game.directorKey, /^[0-9a-f]{12}$/);
+    assert.deepEqual(opened, [`http://localhost:4466/?director=${game.directorKey}`]);
+    const info = await (await fetch(`${game.url}/api/info`)).json();
+    assert.equal(info.director_locked, true);
+    assert.equal(info.players_url, 'http://127.0.0.1:4466');
+    // Players can't run the director's cues; the host can.
+    const cue = (key) => fetch(`${game.url}/api/director`, { method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { 'x-director-key': key } : {}) }, body: JSON.stringify({ cue: 'residents', params: { on: false } }) });
+    assert.equal((await cue()).status, 403);
+    assert.equal((await cue(game.directorKey)).status, 200);
+    // Teams are handed the address, as at any LAN event.
+    const boot = await (await fetch(`${game.url}/trust-anchor.json`)).json();
+    assert.equal(boot.url, 'http://127.0.0.1:19670');
+  } finally {
+    await game.close();
+  }
+
+  // A key the host chose is kept, and without `open` nothing opens.
+  const again = await startServer({ port: 4466, portOffset: 15500, quiet: true, residents: false, lan: true, address: '127.0.0.1', directorKey: 'apple-tree' });
+  try {
+    assert.equal(again.directorKey, 'apple-tree');
+    assert.equal(opened.length, 1);
+  } finally {
+    await again.close();
   }
 });

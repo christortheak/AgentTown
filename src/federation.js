@@ -23,6 +23,7 @@ import { discoverWithRetry, discoverFederation, loadFederationConfig, loadKeys, 
 import { startTrustAnchor } from 'aaf-reference/src/trustanchor/server.js';
 import { startRegistry } from 'aaf-reference/src/registry/server.js';
 import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
+import { isLoopback } from './addresses.js';
 
 export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
   if (!file) return { federation: null, places: {}, law: null };
@@ -44,12 +45,12 @@ export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
 /**
  * The local federation, as aaf-reference starts it in one process, but reachable from other machines when given
  * an address: every URL its trust anchor publishes uses that address, and the services listen on every interface.
- * Without one, it stays on this machine (127.0.0.1), as before.
+ * Without one, or with one on this machine only (127.0.0.1), it stays on this machine, as before.
  */
 async function startLocalFederation({ dataDir, portOffset, address = null }) {
   const base = loadFederationConfig();
   const config = address ? { ...base, host: address } : base;
-  const listen = address ? '0.0.0.0' : base.host;
+  const listen = address && !isLoopback(address) ? '0.0.0.0' : base.host;
   const { trustAnchor, paths } = setupFederation({ dataDir, portOffset, config });
   const handles = [await startTrustAnchor({ dataDir, port: config.trustAnchor.port + portOffset, host: listen, quiet: true })];
   const initial = await discoverFederation(trustAnchor);

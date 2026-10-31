@@ -7,9 +7,12 @@
 // Set AGENTTOWN_DIRECTOR_KEY to keep the director's cues to whoever has the key.
 // Set AGENTTOWN_ADDRESS (this machine's address on the network, e.g. 192.168.1.20)
 // to make the town's federations reachable by teams on other machines.
+// Or run npm run lan, for a party on one network: it finds that address, makes a
+// director key and opens the director's view (docs/HOST.md, "On the day").
 // Set AGENTTOWN_PUBLIC=1 for a town on the internet, behind a tunnel: see
 // "On a public server" in docs/HOST.md, and the settings in README.md.
 // Open it at "localhost", not 127.0.0.1: passkeys are bound to the domain.
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,7 +21,7 @@ import { createApp, closeServer, html, typed, HttpError } from 'aaf-reference/sr
 import { createTown } from './town.js';
 import { createMcp } from './mcp.js';
 import { agentsMd, llmsTxt } from './guide.js';
-import { clientAddress } from './addresses.js';
+import { clientAddress, isLoopback, lanAddress } from './addresses.js';
 
 export const PORT = Number(process.env.PORT ?? 4400);
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
@@ -55,13 +58,30 @@ const limitsFromEnv = () => ({
  *   participantsUrl: where teams reach AgentTown Participants (AGENTTOWN_PARTICIPANTS_URL)
  *   limits:          a public town's limits on joining, over those from the environment
  *   lookup:          how the guard looks up names (tests stub it)
+ *   lan:             LAN mode (npm run lan, or AGENTTOWN_LAN=1): this machine's address on the network unless
+ *                    AGENTTOWN_ADDRESS gives one, a director key unless one is set, and `open` for the director's view
+ *   interfaces:      the network interfaces LAN mode looks through (tests give their own)
+ *   open:            opens a link in this machine's browser (LAN mode only; nothing opens without it)
  */
 export async function startServer({
   port = PORT, portOffset = Number(process.env.AGENTTOWN_PORT_OFFSET ?? 7000), host = process.env.HOST, origin = process.env.ORIGIN,
   directorKey = process.env.AGENTTOWN_DIRECTOR_KEY ?? null, quiet = false, residents = true, timeScale = 1, config, address = process.env.AGENTTOWN_ADDRESS ?? null,
   public: isPublic = flag(process.env.AGENTTOWN_PUBLIC), participantsUrl = process.env.AGENTTOWN_PARTICIPANTS_URL || null,
   clientIpHeader = process.env.AGENTTOWN_CLIENT_IP_HEADER || 'cf-connecting-ip', limits: given = {}, lookup,
+  lan = flag(process.env.AGENTTOWN_LAN), interfaces, open = null,
 } = {}) {
+  // LAN mode: everything a party on one network needs, found or made here, so the host only starts it.
+  let network = null;
+  if (lan) {
+    if (isPublic) throw new SetupError('LAN mode and public mode don\'t go together: LAN mode opens the town to the network you\'re on, over plain HTTP, and public mode is for a town on the internet. Pick one.');
+    if (!address) {
+      network = lanAddress(interfaces);
+      if (!network) throw new SetupError('LAN mode couldn\'t find this machine\'s address on a network. Join the Wi-Fi (or plug in a cable) and start it again, or set AGENTTOWN_ADDRESS to the address (on a Mac: ipconfig getifaddr en0).');
+      address = network.address;
+    }
+    // Only the host's browser needs it, and it opens with it: players can't run the cues.
+    if (!directorKey) directorKey = crypto.randomBytes(6).toString('hex');
+  }
   // What a public town refuses to start without, before anything starts.
   if (isPublic && (!directorKey || directorKey.length < MIN_KEY)) {
     throw new SetupError(`Public mode needs AGENTTOWN_DIRECTOR_KEY, at least ${MIN_KEY} characters: without it, anyone on the internet could run the director's cues and add federations.`);
@@ -104,7 +124,8 @@ export async function startServer({
     if (!isDirector(headers)) throw new HttpError(403, 'director_only', message);
   };
 
-  app.get('/api/info', () => ({ ...town.info(), director_locked: Boolean(directorKey) }));
+  // players_url: where everyone else opens the town (the join screen and the presenter view show it).
+  app.get('/api/info', () => ({ ...town.info(), director_locked: Boolean(directorKey), players_url: lanOrigin }));
   app.get('/api/roles', () => sessions.roles());
   app.post('/api/join', ({ body, headers, req }) => sessions.join(body ?? {}, { from: from(req), director: isDirector(headers) }));
   app.post('/api/leave', ({ headers }) => {
@@ -197,11 +218,29 @@ export async function startServer({
   });
 
   // With an address for the network, the game listens there too (unless HOST says otherwise), so teams can reach /trust-anchor.json and the halls.
-  const server = await app.listen(port, host ?? (address ? '0.0.0.0' : '127.0.0.1'));
+  const server = await app.listen(port, host ?? (address && !isLoopback(address) ? '0.0.0.0' : '127.0.0.1'));
+  const directorUrl = `${townOrigin}/${directorKey ? `?director=${encodeURIComponent(directorKey)}` : ''}`;
   if (!quiet) {
     const info = town.info();
-    console.log(`AgentTown is open at ${townOrigin}`);
-    if (lanOrigin !== townOrigin) console.log(`Players on other machines open ${lanOrigin}`);
+    if (lan) {
+      console.log([
+        '',
+        '  AgentTown is on your network.',
+        '',
+        `  Players open     ${lanOrigin}`,
+        `  You direct from  ${directorUrl}`,
+        '',
+        `  ${open ? 'Your browser opens the director\'s view' : 'Open the director\'s link on this machine'}: join in any role, then press 🎬.`,
+        ...(/^https:/.test(townOrigin) ? [] : ['  Passkeys work on this machine only (at localhost). Players elsewhere can do everything else.']),
+        '  If your computer asks whether node may accept incoming connections, allow it.',
+        ...(network?.others.length ? [`  Also on ${network.others.map((o) => `${o.address} (${o.name})`).join(', ')}. To use another, set AGENTTOWN_ADDRESS.`] : []),
+        '  Ctrl-C stops the town, and everything in it is gone.',
+        '',
+      ].join('\n'));
+    } else {
+      console.log(`AgentTown is open at ${townOrigin}`);
+      if (lanOrigin !== townOrigin) console.log(`Players on other machines open ${lanOrigin}`);
+    }
     console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
     const p = town.bootstrap('participants');
     console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${lanOrigin}/trust-anchor.json`);
@@ -216,17 +255,35 @@ export async function startServer({
     if (!isPublic && /^https:/.test(townOrigin) && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(new URL(townOrigin).hostname)) {
       console.log(`Warning: ORIGIN is ${townOrigin}, and public mode is off. If this town is on the internet, set AGENTTOWN_PUBLIC=1.`);
     }
-    console.log(`Director: ${directorKey ? 'locked (AGENTTOWN_DIRECTOR_KEY)' : 'open to everyone'}. Use "localhost", not 127.0.0.1: passkeys are bound to the domain.`);
+    if (!lan) console.log(`Director: ${directorKey ? 'locked (AGENTTOWN_DIRECTOR_KEY)' : 'open to everyone'}. Use "localhost", not 127.0.0.1: passkeys are bound to the domain.`);
   }
-  return { town, origin: townOrigin, url: `http://127.0.0.1:${port}`, close: async () => { await closeServer(server); await town.close(); } };
+  if (lan && open) open(directorUrl);
+  return { town, origin: townOrigin, url: `http://127.0.0.1:${port}`, players: lanOrigin, directorKey, close: async () => { await closeServer(server); await town.close(); } };
+}
+
+/** Opens a link in this machine's browser. Where there's none (a server), nothing happens: the link is printed. */
+function openInBrowser(url) {
+  const [cmd, args, opts] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url], { windowsVerbatimArguments: true }]
+      : ['xdg-open', [url]];
+  try {
+    spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts }).on('error', () => {}).unref();
+  } catch {
+    // no browser to open
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try {
-    await startServer();
-  } catch (err) {
-    if (!(err instanceof SetupError)) throw err;
-    console.error(`AgentTown didn't start. ${err.message}`);
+  const args = process.argv.slice(2);
+  // Why it didn't start, said plainly. A port already taken (most likely by a town still running) can come from a
+  // listener that throws instead of rejecting, so that's caught too, until everything is listening.
+  const fail = (err) => {
+    if (err instanceof SetupError) console.error(`AgentTown didn't start. ${err.message}`);
+    else if (err?.code === 'EADDRINUSE') console.error(`AgentTown didn't start. Port ${err.port} is in use: is a town already running? Stop it (Ctrl-C in its window), or set PORT and AGENTTOWN_PORT_OFFSET to use other ports.`);
+    else console.error(err);
     process.exit(1); // so a service manager shows the failure
-  }
+  };
+  process.on('uncaughtException', fail);
+  await startServer({ ...(args.includes('--lan') ? { lan: true } : {}), open: args.includes('--no-open') ? null : openInBrowser }).catch(fail);
+  process.off('uncaughtException', fail);
 }

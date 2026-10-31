@@ -13,6 +13,9 @@ export async function showJoin() {
   const box = $('joinBox');
   root.hidden = false;
   let roles = await api.get('/api/roles');
+  // On the host's own screen (localhost), where everyone else opens the town.
+  const info = await api.get('/api/info').catch(() => ({}));
+  const others = info.players_url && info.players_url !== location.origin ? info.players_url : null;
   let role = 'agent';
   let claim = null;
   let name = '';
@@ -29,7 +32,8 @@ export async function showJoin() {
         <label class="input"><span>${role === 'agent' ? 'Your name (only the registry keeps it)' : 'Your name'}</span><input id="joinName" maxlength="30" placeholder="e.g. Robin Ash" value="${esc(name)}" autocomplete="off" spellcheck="false"></label>
         ${error ? `<p class="err">${esc(error)}</p>` : ''}
         <div class="actions"><button class="primary" id="joinGo">Join the town</button></div>
-        <p class="muted small">To play another role at the same time, open the town in another tab or on another device. Anyone can leave and join again, under any name.</p>`;
+        <p class="muted small">To play another role at the same time, open the town in another tab or on another device. Anyone can leave and join again, under any name.</p>
+        ${others ? `<p class="small">Everyone else opens <b>${esc(others)}</b></p>` : ''}`;
       const input = $('joinName');
       input.oninput = () => { name = input.value; };
       input.onkeydown = (e) => { if (e.key === 'Enter') go(); };

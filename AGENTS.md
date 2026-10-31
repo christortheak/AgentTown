@@ -11,10 +11,12 @@ Needs Node.js 22 or later, with `aaf-reference` checked out next to this folder 
 ```bash
 npm install
 npm start        # http://localhost:4400 (use localhost, not 127.0.0.1: passkeys are bound to a domain)
+npm run lan      # a party on one network: finds this machine's address, makes a director key, opens the director's view
 npm test         # the whole suite, one test file at a time; a few minutes
 ```
 
 - Each test starts its own town on its own port (4490s, with its own `portOffset`) and runs town time 25× faster (`timeScale: 25`). Pick a free port and offset for a new test. A town's sample outside federation listens at `4150 + portOffset` and the next port, and the participants' test uses 15501–15502.
+- A test of LAN mode or `AGENTTOWN_ADDRESS` gives the address `127.0.0.1`: at a loopback address nothing listens on the network, and LAN mode doesn't look for one.
 - Tests that run the CLI give it a scratch `HOME`: the CLI writes `~/.agenttown.json`, and a test must never touch the real one.
 - There is no build step and no bundler. The browser loads `public/*.js` as ES modules; the server shares `public/map.js` and `public/route.js`, so keep those free of DOM code.
 
