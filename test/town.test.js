@@ -11,6 +11,8 @@ import { startFederationInProcess } from 'aaf-reference/src/lib/federation.js';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { startServer } from '../src/server.js';
+import { assertPublicAddress, createGuard, clientAddress } from '../src/addresses.js';
+import { startAnchor } from '../src/proposed/anchors.js';
 import { buildTown, placeFront } from '../public/map.js';
 import { startRegistry } from 'aaf-reference/src/registry/server.js';
 import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
@@ -1147,6 +1149,238 @@ test('an agent with its own badge: registered in another federation, it signs it
     for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }], ['play', { as: 'agent' }]]) await robin.run(a, p);
     assert.equal((await robin.run('buy', { shop: 'bramble', item: 'guide' })).decision, 'allow');
     assert.equal((await visits()).length, before);
+  } finally {
+    await game.close();
+  }
+});
+
+// ---- A town on the internet (AGENTTOWN_PUBLIC=1) ------------------------------------------------------------
+
+const KEY = 'a-long-director-key-for-tests'; // public mode needs at least 16 characters
+const NOT_PUBLIC = 'That address isn\'t on the public internet.';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(fn, timeout, label) {
+  const deadline = Date.now() + timeout;
+  while (!fn()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await sleep(100);
+  }
+}
+/** A request as it arrives through the tunnel: from this machine, with the visitor's address in Cloudflare's header. */
+const fromAddress = (game, ip) => async (method, p, body, headers = {}) => {
+  const res = await fetch(game.url + p, { method, headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { ...(await res.json()), httpStatus: res.status };
+};
+
+test('a public town calls out only to public addresses, and reads a player’s address from the tunnel', async () => {
+  // Names are looked up with a stub, so nothing here needs a network.
+  const lookup = async (host) => ({ localhost: [{ address: '127.0.0.1', family: 4 }, { address: '::1', family: 6 }], 'registry.example.org': [{ address: '93.184.215.14', family: 4 }], 'inward.example.org': [{ address: '93.184.215.14', family: 4 }, { address: '10.0.0.5', family: 4 }] })[host] ?? [];
+  const refused = ['http://127.0.0.1', 'http://localhost', 'http://10.0.0.5', 'http://172.16.0.1', 'http://192.168.1.20', 'http://169.254.169.254', 'http://100.64.0.1', 'http://[::1]', 'http://[fc00::1]', 'http://[fe80::1]', 'http://[::ffff:127.0.0.1]', 'http://0.0.0.0', 'http://2130706433', 'ftp://example.org', 'http://inward.example.org', 'http://nowhere.example.org'];
+  for (const url of refused) await assert.rejects(assertPublicAddress(url, { lookup }), (err) => err.status === 400, url);
+  await assert.rejects(assertPublicAddress('http://169.254.169.254/latest/meta-data', { lookup }), { message: NOT_PUBLIC });
+  await assertPublicAddress('https://registry.example.org:8443/aaf', { lookup });
+  await assertPublicAddress('http://[2606:4700::1111]', { lookup });
+
+  // The guard: off, everything passes, as at a LAN event; on, the town's own services pass at exactly their address.
+  const off = createGuard({ on: false, lookup });
+  for (const url of refused) assert.equal(await off.allows(url), true, url);
+  const on = createGuard({ on: true, lookup });
+  on.allow({ id: 'https://registry-a.aaf.test', url: 'http://127.0.0.1:11101' });
+  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://registry-a.aaf.test' }), true);
+  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://registry.someone-else.test' }), false, 'another entity at the town’s own port');
+  assert.equal(await on.allows('http://127.0.0.1:11102', { id: 'https://registry-a.aaf.test' }), false);
+  assert.equal(await on.allows('https://registry.example.org', { id: 'https://registry.example.org' }), true);
+  assert.deepEqual([on.fetchOptions, off.fetchOptions], [{ redirect: 'manual' }, {}]);
+
+  // Behind the tunnel every connection is from this machine; only then does the header name the visitor.
+  const req = (remoteAddress, headers = {}) => ({ socket: { remoteAddress }, headers });
+  assert.equal(clientAddress(req('127.0.0.1', { 'cf-connecting-ip': '198.51.100.7' }), { trustHeader: true }), '198.51.100.7');
+  assert.equal(clientAddress(req('::ffff:127.0.0.1', { 'cf-connecting-ip': '2001:db8::7' }), { trustHeader: true }), '2001:db8::7');
+  assert.equal(clientAddress(req('127.0.0.1', { 'cf-connecting-ip': '198.51.100.7' }), { trustHeader: false }), '127.0.0.1', 'public mode off');
+  assert.equal(clientAddress(req('127.0.0.1'), { trustHeader: true }), '127.0.0.1', 'no header');
+  assert.equal(clientAddress(req('203.0.113.9', { 'cf-connecting-ip': '198.51.100.7' }), { trustHeader: true }), '203.0.113.9', 'not from this machine');
+  assert.equal(clientAddress(req('127.0.0.1', { 'cf-connecting-ip': 'not an address' }), { trustHeader: true }), '127.0.0.1');
+  assert.equal(clientAddress(req('127.0.0.1', { 'x-real-ip': '198.51.100.7' }), { trustHeader: true, header: 'X-Real-IP' }), '198.51.100.7');
+});
+
+test('a public town won’t start without a long director key, or with AGENTTOWN_ADDRESS', async () => {
+  const needsKey = /^Public mode needs AGENTTOWN_DIRECTOR_KEY, at least 16 characters: without it, anyone on the internet could run the director's cues and add federations\.$/;
+  await assert.rejects(startServer({ quiet: true, public: true, directorKey: null }), { message: needsKey });
+  await assert.rejects(startServer({ quiet: true, public: true, directorKey: 'apple-tree' }), { message: needsKey });
+  await assert.rejects(startServer({ quiet: true, public: true, directorKey: KEY, address: '192.168.1.20' }), { message: /AGENTTOWN_ADDRESS.*AGENTTOWN_PARTICIPANTS_URL/ });
+  await assert.rejects(startServer({ quiet: true, participantsUrl: 'https://town.example.org/participants' }), { message: /AGENTTOWN_PARTICIPANTS_URL must be an address of its own/ });
+  // The server's own entry point says why, and exits with a failure for the service manager.
+  const out = await promisify(execFile)('node', ['src/server.js'], { env: { ...process.env, AGENTTOWN_PUBLIC: '1', AGENTTOWN_DIRECTOR_KEY: 'short' } }).catch((err) => err);
+  assert.equal(out.code, 1);
+  assert.match(out.stderr, /AgentTown didn't start\. Public mode needs AGENTTOWN_DIRECTOR_KEY/);
+});
+
+test('a public town: the director key, the check at the door, outside members’ addresses, and pairing per address', { timeout: 90000 }, async () => {
+  // Here "localhost" stands for a public name: an outside anchor and its members listen on it, and the guard is
+  // told it's public. Addresses written as numbers are judged as they are.
+  const lookup = async (host) => (host === 'localhost' ? [{ address: '198.51.100.40', family: 4 }] : []);
+  const game = await startServer({ port: 4469, portOffset: 14000, quiet: true, residents: false, timeScale: 25, public: true, directorKey: KEY, participantsUrl: 'https://participants.example.org', lookup });
+  let outside = null;
+  try {
+    const robin = client(game);
+    await robin.join('agent', 'Robin Ash');
+    const director = { 'x-director-key': KEY };
+    const call = fromAddress(game, '198.51.100.7');
+    // The town's own services listen on this machine, and play goes on as anywhere.
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
+    await robin.run('play', { as: 'agent' });
+    assert.equal((await robin.run('buy', { shop: 'bakery', item: 'loaf' })).decision, 'allow');
+
+    // Teams are given the anchor's public address; the town keeps calling it here, and it listens here only.
+    const boot = await (await fetch(`${game.url}/trust-anchor.json`)).json();
+    assert.equal(boot.url, 'https://participants.example.org');
+    const local = game.town.federations.get('participants').anchor.url;
+    assert.match(local, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.equal((await fetch(`${local}/list`)).status, 200);
+    assert.ok((await robin.get('/api/federations')).federations.some((f) => f.url === 'https://participants.example.org'));
+    // The places' front door stays on this machine too, and the guide for agents says so.
+    assert.match(await (await fetch(`${game.url}/agents.md`)).text(), /front doors aren't open to agents from outside it yet/);
+
+    // The director's routes refuse a wrong key, and take the right one.
+    assert.equal((await call('POST', '/api/director', { cue: 'newcomer' }, { 'x-director-key': 'a-wrong-key-of-the-same-size' })).httpStatus, 403);
+    assert.equal((await call('POST', '/api/director', { cue: 'residents', params: { on: true } }, director)).ok, true);
+
+    // A check by address is the director's, and only public addresses are called; by entity id, anyone may.
+    assert.equal((await call('POST', '/api/participants/check', { url: 'http://169.254.169.254' })).httpStatus, 403);
+    const metadata = await call('POST', '/api/participants/check', { url: 'http://169.254.169.254' }, director);
+    assert.deepEqual([metadata.httpStatus, metadata.message], [400, NOT_PUBLIC]);
+    const regA = game.town.world.regA;
+    const own = await call('POST', '/api/participants/check', { entity_id: regA.id });
+    assert.ok(own.passed > 5 && own.failed === 0, 'the town’s own registry, at its own address');
+
+    // A team can't put its service at one of the town's own ports, or on a private network.
+    const team = (id, at) => ({ statement: { entity_id: id, entity_type: 'aaf_registry', jwks: jwksOf(generateSigningKey()), metadata: { organization_name: 'Team Grey Registry', endpoint_base: at, jwks: jwksOf(generateSigningKey()) } } });
+    for (const at of [regA.url, 'http://10.0.0.5:4101']) {
+      const r = await call('POST', '/api/participants', team('https://registry.team-grey.test', at), director);
+      assert.deepEqual([r.httpStatus, r.message], [400, NOT_PUBLIC], at);
+    }
+    assert.equal((await call('POST', '/api/participants', team('https://registry.team-grey.test', 'http://localhost:7'), director)).httpStatus, 200);
+
+    // An outside federation lists a member at the town's own registry: that member is left out, the rest come in.
+    const policies = game.town.federations.get('town').view.policies;
+    const member = (id, type, at) => ({ entity_id: id, entity_type: type, jwks: jwksOf(generateSigningKey()), metadata: { organization_name: id.split('//')[1], endpoint_base: at, jwks: jwksOf(generateSigningKey()), ...(type === 'aaf_record_keeper' ? { roles: ['authorization'] } : {}) } });
+    outside = await startAnchor({
+      entityId: 'https://federation.faraway.test', name: 'Faraway Federation', key: generateSigningKey(), address: 'localhost', policies,
+      members: [member('https://registry.faraway.test', 'aaf_registry', 'http://localhost:1'), member('https://records.faraway.test', 'aaf_record_keeper', 'http://localhost:2'), member('https://sneaky.faraway.test', 'aaf_registry', regA.url)],
+    });
+    assert.equal((await call('POST', '/api/federations', { url: `http://127.0.0.1:${new URL(outside.url).port}` }, director)).httpStatus, 400, 'an anchor by a private address');
+    const added = await call('POST', '/api/federations', { url: outside.url }, director);
+    assert.deepEqual(added.registries.map((r) => r.id), ['https://registry.faraway.test']);
+    assert.deepEqual(added.recordKeepers.map((r) => r.id), ['https://records.faraway.test']);
+    await until(robin.get, (e) => e.kind === 'federation' && /lists sneaky\.faraway\.test at an address that isn't on the public internet/.test(e.text), { label: 'the member left out' });
+
+    // Later its registry moves inward (here, to this machine, so nothing leaves it): at the next refresh it's left
+    // out, and the federation's record keeper stays.
+    outside.admit(member('https://registry.faraway.test', 'aaf_registry', 'http://127.0.0.1:9'));
+    await game.town.federations.refresh(added.key);
+    const now = game.town.federations.get(added.key).view;
+    assert.deepEqual([now.registries.length, now.recordKeepers.map((r) => r.id)], [0, ['https://records.faraway.test']]);
+    assert.equal(game.town.world.trust.registry('https://registry.faraway.test'), null);
+
+    // The town's own sample federation is the town's: in public mode it's added whole.
+    const { url: sampleUrl } = await call('POST', '/api/director', { cue: 'sample', params: { add: true } }, director);
+    const sample = (await robin.get('/api/federations')).federations.find((f) => f.url === sampleUrl);
+    assert.deepEqual([sample.registries.length, sample.recordKeepers.length], [1, 1]);
+
+    // Ten wrong pairing codes from one visitor lock out that visitor only.
+    const pair = (ip, code) => fromAddress(game, ip)('POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } }).then((r) => r.result.content[0].text);
+    for (let i = 0; i < 10; i++) assert.match(await pair('198.51.100.7', 'WRONG-CODE'), /unknown or has expired/);
+    assert.match(await pair('198.51.100.7', 'WRONG-CODE'), /Too many wrong pairing codes/);
+    assert.match(await pair('198.51.100.8', 'WRONG-CODE'), /unknown or has expired/);
+    const wren = client(game);
+    await wren.join('shopkeeper', 'Wren Hart', 'kettle');
+    assert.match(await pair('198.51.100.8', (await wren.post('/api/pair')).code), /^Paired\./);
+  } finally {
+    await outside?.close();
+    await game.close();
+  }
+});
+
+test('a public town: limits on joining, and the residents rest while nobody is in town', { timeout: 90000 }, async () => {
+  const game = await startServer({ port: 4468, portOffset: 14500, quiet: true, timeScale: 25, public: true, directorKey: KEY, limits: { maxPlayers: 5, joinsPerAddress: 3, playersPerAddress: 2, seatsPerAddress: 1 } });
+  try {
+    const { sim, sessions } = game.town;
+    // Nobody has come: after three minutes of town time (7.2 s here) the residents rest.
+    await waitFor(() => !sim.residentsActive, 20000, 'the residents to rest');
+    const join = (ip, body, headers) => fromAddress(game, ip)('POST', '/api/join', body, headers);
+    const leave = (r) => fetch(`${game.url}/api/leave`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-session': r.session }, body: '{}' });
+
+    // A player the server walks about is the director's to start. The first one in wakes the residents.
+    assert.equal((await join('198.51.100.1', { role: 'agent', name: 'Robin Ash', headless: true })).httpStatus, 403);
+    assert.ok((await join('198.51.100.1', { role: 'agent', name: 'Robin Ash', headless: true }, { 'x-director-key': KEY })).session);
+    assert.equal(sim.residentsActive, true);
+
+    // From one address: one single seat here, two players at once, three joins in ten minutes.
+    const b = '198.51.100.2';
+    const { houses } = await (await fetch(`${game.url}/api/roles`)).json();
+    assert.ok((await join(b, { role: 'shopkeeper', name: 'Wren Hart', claim: 'bakery' })).session);
+    const house = await join(b, { role: 'homeowner', name: 'Wren Hart', claim: houses[0].id });
+    assert.deepEqual([house.httpStatus, house.error], [429, 'too_many_seats']);
+    assert.equal((await join(b, { role: 'judge', name: 'Wren Hart' })).httpStatus, 429);
+    const sam = await join(b, { role: 'agent', name: 'Sam Lee' });
+    const two = await join(b, { role: 'agent', name: 'Sam Lee' });
+    assert.deepEqual([two.httpStatus, two.error], [429, 'too_many_players']);
+    await leave(sam);
+    await leave(await join(b, { role: 'agent', name: 'Kit Moss' }));
+    const often = await join(b, { role: 'agent', name: 'Kit Moss' });
+    assert.deepEqual([often.httpStatus, often.error], [429, 'too_many_joins']);
+    assert.ok((await join('198.51.100.3', { role: 'agent', name: 'Kit Moss' })).session, 'another address');
+
+    // The town holds five.
+    for (const [i, name] of ['Ada Fox', 'Bea Lin'].entries()) assert.ok((await join(`198.51.100.${10 + i}`, { role: 'agent', name })).session);
+    const full = await join('198.51.100.20', { role: 'agent', name: 'Dee Ross' });
+    assert.deepEqual([full.httpStatus, full.message], [503, 'The town is full. Try again in a few minutes.']);
+    // Five minutes on, everyone has gone quiet and been let go: there's room again.
+    sessions.sweep(Date.now() + 5 * 60 * 1000);
+    assert.equal(sessions.size, 0);
+    const dee = await join('198.51.100.20', { role: 'agent', name: 'Dee Ross' });
+    assert.ok(dee.session);
+
+    // A pause the director chose stays through a join; the director's resume ends it.
+    const cue = (on) => fromAddress(game, '198.51.100.1')('POST', '/api/director', { cue: 'residents', params: { on } }, { 'x-director-key': KEY });
+    await cue(false);
+    await leave(dee);
+    assert.ok((await join('198.51.100.21', { role: 'agent', name: 'Eve Hale' })).session);
+    assert.equal(sim.residentsActive, false, 'still the director’s pause');
+    await cue(true);
+    assert.equal(sim.residentsActive, true);
+  } finally {
+    await game.close();
+  }
+});
+
+test('at a LAN event none of it applies: any address, any number of joins, the header ignored, residents always out', { timeout: 60000 }, async () => {
+  const game = await startServer({ port: 4467, portOffset: 15000, quiet: true, residents: false, timeScale: 100, directorKey: 'apple-tree' });
+  try {
+    // The bootstrap is the anchor's own address, as before.
+    const boot = await (await fetch(`${game.url}/trust-anchor.json`)).json();
+    assert.equal(boot.url, game.town.federations.get('participants').anchor.url);
+    assert.match(boot.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+
+    // Eight joins, three single seats and a player the server walks about, all from one address, without the key.
+    const call = fromAddress(game, '198.51.100.7');
+    const { houses } = await (await fetch(`${game.url}/api/roles`)).json();
+    for (let i = 0; i < 5; i++) assert.ok((await call('POST', '/api/join', { role: 'agent', name: `Robin ${i}` })).session);
+    for (const body of [{ role: 'shopkeeper', claim: 'bakery' }, { role: 'homeowner', claim: houses[0].id }, { role: 'judge' }, { role: 'agent', headless: true }]) assert.ok((await call('POST', '/api/join', { name: 'Wren Hart', ...body })).session, body.role);
+
+    // The check at the door goes wherever it's sent (nothing answers here), for anyone.
+    const nothing = await call('POST', '/api/participants/check', { url: 'http://127.0.0.1:9' });
+    assert.deepEqual([nothing.passed, nothing.failed], [0, 1]);
+
+    // Wrong pairing codes count against the socket's address, whatever the header says.
+    const pair = (ip) => fromAddress(game, ip)('POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code: 'WRONG-CODE' } } }).then((r) => r.result.content[0].text);
+    for (let i = 0; i < 10; i++) await pair(`198.51.100.${i}`);
+    assert.match(await pair('198.51.100.99'), /Too many wrong pairing codes/);
+
+    // Nobody in town for longer than a public town waits (1.8 s here): the residents stay out.
+    game.town.sessions.sweep(Date.now() + 5 * 60 * 1000);
+    await sleep(2500);
+    assert.equal(game.town.sim.residentsActive, true);
   } finally {
     await game.close();
   }

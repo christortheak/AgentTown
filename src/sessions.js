@@ -13,7 +13,9 @@
 // only to them. A shopkeeper can pair one too, to mind the counter.
 // A session that goes quiet for a few minutes is let go, with whatever it held.
 // Anyone can come back with a new session, under any name; a banned identity
-// just won't be verified again.
+// just won't be verified again. A public town limits how many play, how many
+// join from one address, and how many single seats one address holds; and its
+// residents rest while nobody is in town.
 import crypto from 'node:crypto';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 import { createPlayer, placeOfAction } from './player.js';
@@ -33,6 +35,9 @@ const TALK_GAP_MS = 1000; // between things it says, thinks or reports
 const NOTES_KEPT = 30;
 const PAIR_TRIES = 10; // wrong pairing codes from one address, per window, before it must wait
 const PAIR_WINDOW_MS = 10 * 60 * 1000;
+const JOIN_WINDOW_MS = 10 * 60 * 1000; // a public town counts joins from one address over this long
+const SEATS = ['shopkeeper', 'homeowner', 'judge']; // one person each: a place, a house, the bench
+const REST_AFTER_MS = 3 * 60 * 1000; // town time with nobody in a public town before its residents rest
 
 export const ROLES = {
   agent: { icon: '🧍', label: 'A resident', blurb: 'You walk the town yourself. Start an agent, registered or not, and play yourself, it, or its sub-agents. Shop, trade, send it on errands. Play it straight, or try to get away with something.' },
@@ -44,8 +49,13 @@ export const ROLES = {
 };
 
 
-export function createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin, timeScale = 1 }) {
+/**
+ * limits:        in a public town, { maxPlayers, joinsPerAddress, playersPerAddress, seatsPerAddress }; null at a LAN event
+ * restWhenEmpty: residents rest while nobody is in town, and wake on the next join
+ */
+export function createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin, timeScale = 1, limits = null, restWhenEmpty = false }) {
   const sessions = new Map(); // token -> session
+  const starting = new Set(); // sessions still being set up (an agent is enrolled at its registry)
   const byId = new Map(); // public id -> session
   const accounts = places.hearth.rp.accounts;
   const challenges = createChallenges({ emit });
@@ -73,14 +83,63 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     return null;
   }
 
-  async function join({ role, name, claim, headless = false }) {
+  // ---- A public town's limits on joining ----------------------------------------------------------------------
+
+  const joinsFrom = new Map(); // address -> times of its recent joins
+
+  /** May someone at this address join in this role? Throws if not; counts the join if so. */
+  function mayJoin(role, from, { headless, director }) {
+    if (headless && !director) throw new HttpError(403, 'director_only', 'Only the director can start a player the server walks about.');
+    if (sessions.size + starting.size >= limits.maxPlayers) throw new HttpError(503, 'town_full', 'The town is full. Try again in a few minutes.');
+    const recent = (joinsFrom.get(from) ?? []).filter((t) => Date.now() - t < JOIN_WINDOW_MS);
+    if (recent.length >= limits.joinsPerAddress) throw new HttpError(429, 'too_many_joins', 'A lot of players have joined from your address in the last few minutes. Wait a little, then try again.');
+    const here = [...sessions.values(), ...starting].filter((x) => x.from === from);
+    if (here.length >= limits.playersPerAddress) throw new HttpError(429, 'too_many_players', `Your address already has ${here.length} players in town. Leave one, or let it time out, before you join again.`);
+    if (SEATS.includes(role) && here.filter((x) => SEATS.includes(x.role)).length >= limits.seatsPerAddress) throw new HttpError(429, 'too_many_seats', `Your address already holds ${limits.seatsPerAddress} of the town's single seats (a place, a house or the judge's bench). Leave one first.`);
+    joinsFrom.delete(from); // to the back of the line, so the one let go when there are too many is the longest quiet
+    joinsFrom.set(from, [...recent, Date.now()]);
+    if (joinsFrom.size > 5000) joinsFrom.delete(joinsFrom.keys().next().value);
+  }
+
+  // ---- Residents rest in a public town nobody is in ---------------------------------------------------------
+  // The director's own choice (the residents cue) is kept apart, so a join never undoes it.
+
+  let residentsWanted = sim.residentsActive;
+  let resting = false;
+  let restTimer = null;
+  const applyResidents = () => sim.setResidentsActive(residentsWanted && !resting);
+  function restIfEmpty() {
+    if (!restWhenEmpty || sessions.size || restTimer) return;
+    restTimer = setTimeout(() => {
+      restTimer = null;
+      if (sessions.size) return;
+      resting = true;
+      applyResidents();
+    }, REST_AFTER_MS / timeScale);
+    restTimer.unref?.();
+  }
+  function wake() {
+    clearTimeout(restTimer);
+    restTimer = null;
+    if (!resting) return;
+    resting = false;
+    applyResidents();
+  }
+  restIfEmpty();
+
+  /**
+   * Join the town. `from` is the client's address and `director` whether it sent the director key; a public town
+   * limits joins by them.
+   */
+  async function join({ role, name, claim, headless = false }, { from = 'unknown', director = true } = {}) {
     if (!ROLES[role]) throw new HttpError(400, 'bad_role', 'Pick a role.');
     const display = String(name ?? '').trim().slice(0, 30) || 'A Resident';
     if (role === 'shopkeeper' && (!PLACE_DEFS[claim] || holder(claim))) throw new HttpError(409, 'taken', 'Pick a place nobody else is running.');
     if (role === 'homeowner' && (!HOUSES[claim] || holder(claim))) throw new HttpError(409, 'taken', 'Pick a house nobody else owns.');
     if (role === 'judge' && ofRole('judge').length) throw new HttpError(409, 'taken', 'The town already has a judge.');
+    if (limits) mayJoin(role, from, { headless, director });
     const id = `p_${crypto.randomBytes(4).toString('hex')}`;
-    const s = { token: crypto.randomBytes(18).toString('base64url'), id, role, name: display, claim: ['shopkeeper', 'homeowner'].includes(role) ? claim : null, pos: null, lastSeen: Date.now(), joined: Date.now() };
+    const s = { token: crypto.randomBytes(18).toString('base64url'), id, role, name: display, claim: ['shopkeeper', 'homeowner'].includes(role) ? claim : null, pos: null, lastSeen: Date.now(), joined: Date.now(), from };
     // A player with no browser: the server walks them about, so others see where they go.
     if (headless) Object.assign(s, { headless: true, pos: { ...SPOTS.spawn }, move: null });
     if (role === 'agent') {
@@ -88,7 +147,12 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         const b = s.bodies?.get(agentId ?? s.player.current());
         return b ? whereIs(b) : null;
       } });
-      await s.player.enroll({ name: display });
+      starting.add(s);
+      try {
+        await s.player.enroll({ name: display });
+      } finally {
+        starting.delete(s);
+      }
     } else if (role === 'shopkeeper') {
       places.claimPlace(claim, { id, name: display });
     } else if (role === 'homeowner') {
@@ -96,6 +160,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     }
     sessions.set(s.token, s);
     byId.set(id, s);
+    wake();
     // An agent's principal stays private: others see a new agent, never whose it is.
     const where = s.claim ? ` (${PLACE_DEFS[s.claim]?.name ?? HOUSES[s.claim]})` : '';
     emit({ kind: 'people', tone: 'info', owner: id, text: role === 'agent' ? 'Someone new moved into town' : `${display} joined as ${ROLES[role].label.toLowerCase()}${where}` });
@@ -118,11 +183,14 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
       accounts.get(s.claim).owner = HOUSES[s.claim].replace("'s", '');
     }
     emit({ kind: 'people', tone: 'info', text: s.role === 'agent' ? 'A resident left town' : `${s.name} left town` });
+    restIfEmpty();
   }
 
-  const sweep = setInterval(() => {
-    for (const s of sessions.values()) if (Date.now() - s.lastSeen > IDLE_MS) leave(s);
-  }, 30000);
+  /** Let go of every session quiet for longer than IDLE_MS, as of `now`. */
+  function sweepIdle(now = Date.now()) {
+    for (const s of sessions.values()) if (now - s.lastSeen > IDLE_MS) leave(s);
+  }
+  const sweep = setInterval(() => sweepIdle(), 30000);
 
   function get(token) {
     const s = sessions.get(token);
@@ -883,7 +951,16 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         if (h?.owner === s.id && !h.busy) Object.assign(h, { follow: false, pos: at, move: null });
       }
     },
-    stop: () => clearInterval(sweep),
+    sweep: sweepIdle,
+    /** The director's choice for the residents. In a public town nobody is in, they rest anyway until someone joins. */
+    setResidents(on) {
+      residentsWanted = on;
+      applyResidents();
+    },
+    stop() {
+      clearInterval(sweep);
+      clearTimeout(restTimer);
+    },
     get size() {
       return sessions.size;
     },

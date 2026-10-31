@@ -5,12 +5,12 @@
 // (something that comes later, like accreditation).
 import { decodeJws, verifyJws } from 'aaf-reference/src/lib/crypto.js';
 import { verifyEntityStatement, WELL_KNOWN, TRUST_MARK_TYP } from 'aaf-reference/src/lib/openid-federation.js';
+import { NOT_PUBLIC } from '../addresses.js';
 
 const STH_TYP = 'aaf-sth+jwt';
 const STATUS_LIST_TYP = 'statuslist+jwt';
 const ROLES = ['authorization', 'provenance', 'activity'];
 
-const get = (url, init) => fetch(url, { signal: AbortSignal.timeout(5000), ...init }).catch(() => null);
 const signingKey = (jwks, kid) => jwks.keys.find((k) => k.use !== 'enc' && (!kid || k.kid === kid)) ?? jwks.keys.find((k) => k.use !== 'enc');
 
 /** Is this a JWS of that type, signed by one of these keys? */
@@ -27,13 +27,16 @@ function signedBy(jwt, jwks, typ) {
  * Check a service at its address.
  *   anchors:     the entity ids of trust anchors the town knows
  *   registryKeys(id): the signing keys of a registry the town knows (to check a record keeper's trust marks)
+ *   guard:       which addresses the town may call (src/addresses.js); id: the entity the address is meant to be
  */
-export async function checkService(url, { anchors = [], registryKeys = () => null } = {}) {
+export async function checkService(url, { anchors = [], registryKeys = () => null, guard = null, id } = {}) {
   const base = String(url ?? '').trim().replace(/\/+$/, '');
   const results = [];
   const note = (check, ok, detail = '') => results.push({ check, ok, detail });
   const done = (extra = {}) => ({ url: base, results, passed: results.filter((r) => r.ok === true).length, failed: results.filter((r) => r.ok === false).length, ...extra });
+  const get = (u, init) => fetch(u, { signal: AbortSignal.timeout(5000), ...guard?.fetchOptions, ...init }).catch(() => null);
 
+  if (/^https?:\/\/[^/]+/.test(base)) await guard?.check(base, { id });
   const res = /^https?:\/\/[^/]+/.test(base) ? await get(`${base}${WELL_KNOWN}`) : null;
   note('Answers at its address', Boolean(res?.ok), res ? `${WELL_KNOWN} answered ${res.status}` : 'nothing answered');
   if (!res?.ok) return done();
@@ -56,6 +59,11 @@ export async function checkService(url, { anchors = [], registryKeys = () => nul
   note('Says where it is served', md.endpoint_base ? true : null, md.endpoint_base ?? 'no endpoint_base: the town assumes the address you gave');
   const jwks = md.jwks ?? ec.jwks;
   const at = md.endpoint_base ?? base;
+  // Where it says it's served is the service's word, so the town checks it may go there before it does.
+  if (guard && !(await guard.allows(at, { id: ec.sub }))) {
+    note('Is served on the public internet', false, NOT_PUBLIC);
+    return done({ entity_id: ec.sub, name: md.organization_name ?? ec.sub, type });
+  }
 
   // Its Token Status List, signed by its own key.
   const sl = await get(`${at}/status-lists/1`);

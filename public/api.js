@@ -13,6 +13,12 @@ const store = {
 let session = store.get('agenttown.session');
 let directorKey = new URLSearchParams(location.search).get('director') ?? store.get('agenttown.director');
 if (directorKey) store.set('agenttown.director', directorKey);
+// Once the tab has it, the key leaves the address bar: it would end up in history, screenshots and shared links.
+if (new URLSearchParams(location.search).has('director')) {
+  const url = new URL(location.href);
+  url.searchParams.delete('director');
+  history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+}
 
 export const hasSession = () => Boolean(session);
 export function setSession(token) {

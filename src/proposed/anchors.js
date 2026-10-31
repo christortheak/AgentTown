@@ -40,10 +40,11 @@ const ROLES = ['authorization', 'provenance', 'activity'];
 /**
  * A trust anchor (OpenID Federation): its Entity Configuration, the list of its members, and a Subordinate
  * Statement for each. Unlike the reference one, it can admit a member while it runs.
- *   members: [{ entity_id, entity_type, jwks, metadata }]
- *   open:    a registry it admits may accredit record keepers in this federation, for every role
+ *   members:   [{ entity_id, entity_type, jwks, metadata }]
+ *   open:      a registry it admits may accredit record keepers in this federation, for every role
+ *   publicUrl: where others reach it, when that isn't where it listens (a name of its own, behind a tunnel)
  */
-export async function startAnchor({ entityId, name, key, port = 0, host = '127.0.0.1', address = null, policies, members = [], trustMarkIssuers = {}, open = false }) {
+export async function startAnchor({ entityId, name, key, port = 0, host = '127.0.0.1', address = null, publicUrl = null, policies, members = [], trustMarkIssuers = {}, open = false }) {
   const list = [...members];
   const issuers = structuredClone(trustMarkIssuers);
   const app = createApp(entityId);
@@ -59,10 +60,12 @@ export async function startAnchor({ entityId, name, key, port = 0, host = '127.0
     return typed(subordinateStatement({ issuer: entityId, key, sub: m.entity_id, jwks: m.jwks, metadata: { [m.entity_type]: m.metadata } }), STATEMENT);
   });
   const server = await listen(app.handler, port, host);
-  const url = `http://${address ?? host}:${server.address().port}`; // where others reach it: an address, if it listens on every interface
+  // Where the town reaches it (an address, if it listens on every interface), and where others do.
+  const localUrl = `http://${address ?? host}:${server.address().port}`;
+  const url = publicUrl ? publicUrl.replace(/\/+$/, '') : localUrl;
   return {
-    entityId, name, url,
-    anchor: { entity_id: entityId, url, jwks: jwksOf(key) },
+    entityId, name, url, localUrl,
+    anchor: { entity_id: entityId, url: localUrl, jwks: jwksOf(key) },
     thumbprint: thumbprint(key.publicJwk),
     members: () => list,
     /** Admit a member. A registry in an open federation may then accredit record keepers here. */
@@ -85,12 +88,14 @@ export async function startAnchor({ entityId, name, key, port = 0, host = '127.0
 
 /**
  * What a service says about itself at its URL: its Entity Configuration, self-signed. Read before admitting it.
- * Returns the member entry an anchor needs, and what was found, in words.
+ * Returns the member entry an anchor needs, and what was found, in words. `guard` (src/addresses.js) says
+ * whether the town may go there.
  */
-export async function readEntity(url) {
+export async function readEntity(url, { guard = null } = {}) {
   const base = String(url).replace(/\/+$/, '');
   if (!/^https?:\/\/[^/]+/.test(base)) throw new HttpError(400, 'bad_url', 'Give the service’s address, like http://192.168.1.20:4101');
-  const res = await fetch(`${base}${WELL_KNOWN}`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+  await guard?.check(base);
+  const res = await fetch(`${base}${WELL_KNOWN}`, { signal: AbortSignal.timeout(5000), ...guard?.fetchOptions }).catch(() => null);
   if (!res) throw new HttpError(502, 'unreachable', `Nothing answered at ${base}${WELL_KNOWN}. If your service must be a member before it can start, give its entity statement instead.`);
   if (!res.ok) throw new HttpError(502, 'unreachable', `${base}${WELL_KNOWN} answered ${res.status}`);
   const jwt = await res.text();
@@ -184,20 +189,50 @@ export class MultiView {
 /**
  * The federations the town knows. The town's own is first; the participants' federation is run by the town and
  * admits members while it runs; any other is added by its trust anchor's address.
+ *   guard:  which addresses the town may call (src/addresses.js). A member listed somewhere it may not is left out.
+ *   onDrop(f, members): told when members are first left out of a federation's view
  */
-export function createFederations() {
-  const feds = new Map(); // key -> { key, name, kind, anchor, view, owner?, added }
+export function createFederations({ guard = null, onDrop = () => {} } = {}) {
+  const feds = new Map(); // key -> { key, name, kind, anchor, view, owner?, added, dropped }
 
   const discover = async (anchor, overrides) => {
     const view = await discoverFederation(anchor);
     return overrides ? view.withUrlOverrides(overrides) : view;
   };
 
+  /**
+   * The view without any member the town may not call at its address. An anchor can list a member anywhere, and
+   * change where later, so this runs on every discovery. (The framework has already fetched each member's own
+   * description by then; in a public town the service file's IPAddressDeny is what stops that.)
+   */
+  async function screen(view) {
+    if (!guard?.on) return { view, dropped: [] };
+    const dropped = [];
+    const keep = async (list) => {
+      const ok = await Promise.all(list.map((e) => !e.url || guard.allows(e.url, { id: e.id })));
+      dropped.push(...list.filter((e, i) => !ok[i]));
+      return list.filter((e, i) => ok[i]);
+    };
+    const doc = { ...view.doc };
+    for (const k of ['registries', 'record_keepers', 'verifiers', 'resolution_authorities']) doc[k] = await keep(doc[k] ?? []);
+    return { view: dropped.length ? new Federation(doc) : view, dropped };
+  }
+  /** Take a fresh view, and say which members are newly left out. */
+  async function take(f, view) {
+    const { view: v, dropped } = await screen(view);
+    const before = new Set((f.dropped ?? []).map((e) => e.id));
+    f.view = v;
+    f.dropped = dropped;
+    const fresh = dropped.filter((e) => !before.has(e.id));
+    if (fresh.length) onDrop(f, fresh);
+  }
+
   /** A federation by its anchor: discovered now, or with a view already in hand (and where its members are really served). */
   async function add({ key, name, kind, anchor, owner = null, view = null, overrides = null }) {
     if (feds.has(key)) throw new HttpError(409, 'known', `The town already knows ${name}.`);
     const v = view ?? (await discover(anchor, overrides));
-    const f = { key, name: name ?? v.doc.federation, kind, anchor, view: v, owner, overrides, added: Date.now() };
+    const f = { key, name: name ?? v.doc.federation, kind, anchor, view: null, owner, overrides, added: Date.now(), dropped: [] };
+    await take(f, v);
     feds.set(key, f);
     return f;
   }
@@ -210,7 +245,7 @@ export function createFederations() {
     async refresh(key) {
       for (const f of key ? [feds.get(key)].filter(Boolean) : feds.values()) {
         try {
-          f.view = await discover(f.anchor, f.overrides);
+          await take(f, await discover(f.anchor, f.overrides));
         } catch (err) {
           if (key) throw err;
         }
@@ -231,7 +266,8 @@ export function createFederations() {
     async addByUrl(url, { pin = null, name = null } = {}) {
       const base = String(url ?? '').trim().replace(/\/+$/, '');
       if (!/^https?:\/\/[^/]+/.test(base)) throw new HttpError(400, 'bad_url', 'Give the trust anchor’s address, like http://192.168.1.20:4100');
-      const res = await fetch(`${base}${WELL_KNOWN}`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+      await guard?.check(base);
+      const res = await fetch(`${base}${WELL_KNOWN}`, { signal: AbortSignal.timeout(5000), ...guard?.fetchOptions }).catch(() => null);
       if (!res?.ok) throw new HttpError(502, 'unreachable', `Nothing answered at ${base}${WELL_KNOWN}.`);
       const jwt = await res.text();
       const claimed = decodeJws(jwt).payload;

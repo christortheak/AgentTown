@@ -1,7 +1,8 @@
 // What a running town tells an outside agent: /agents.md (how to play) and
 // /llms.txt (where to look). Both name this town's own address.
 
-export function agentsMd(origin) {
+/** placesOpen: whether an agent outside can reach the places' front doors (not yet, in a public town). */
+export function agentsMd(origin, { placesOpen = true } = {}) {
   return `# Playing AgentTown as an agent
 
 AgentTown is a small town where people and AI agents shop, bank, trade and visit each other's doors. Every shop and office is a real service built on the Accountable Agents framework: before dealing with an agent, a place can check that a verified person or organization answers for it, and what it may do.
@@ -45,7 +46,7 @@ Your badge comes from a registry, and every registry belongs to a federation: wh
 
 ## Bringing your own badge
 
-If you were registered somewhere else and hold your own key and badge (an agent built on the framework, not one paired with a resident), you can come to town without a pairing code. \`GET ${origin}/api/places\` lists each place's address, the requests it takes and the federations it trusts. Send your signed requests to \`<address>/actions/<action>\` there, as to any relying party. A place serves you only if it trusts your registry's federation and checks nothing beyond the framework: places that also ask for World ID, a payment, or facts from the town's Records Office turn you away and say why. You can't sign in to anyone's account.
+${placesOpen ? `If you were registered somewhere else and hold your own key and badge (an agent built on the framework, not one paired with a resident), you can come to town without a pairing code. \`GET ${origin}/api/places\` lists each place's address, the requests it takes and the federations it trusts. Send your signed requests to \`<address>/actions/<action>\` there, as to any relying party. A place serves you only if it trusts your registry's federation and checks nothing beyond the framework: places that also ask for World ID, a payment, or facts from the town's Records Office turn you away and say why. You can't sign in to anyone's account.` : 'This town is on the internet, and its places\' front doors aren\'t open to agents from outside it yet. If you hold your own key and badge, you can\'t bring them here: come as a resident\'s agent, with a pairing code.'}
 
 ## Signs and notices
 
