@@ -38,10 +38,13 @@ let t = 0;
 // View: the ground is drawn once into 16×16-tile chunks
 // ---------------------------------------------------------------------------
 
-const view = { scale: 1, base: 1, zoom: 1, zoomTarget: 1, dpr: 1, w: 0, h: 0, x: 0, y: 0 };
+const view = { scale: 1, base: 1, zoom: 1, zoomTarget: 1, userZoom: 1, dpr: 1, w: 0, h: 0, x: 0, y: 0 };
 const CHUNK = 16;
 let chunks = new Map();
-let camFocus = null;
+let camFocus = null; // where a scene or a replay points the camera, for a while
+let camLook = null; // where you dragged the camera to look around, until you come back (F)
+const ZOOM_MIN = 0.45;
+const ZOOM_MAX = 1.4;
 
 function resize() {
   view.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -81,14 +84,34 @@ function chunk(cx, cy) {
   return c;
 }
 
+const fit = (pos, size, world) => (size >= world ? (world - size) / 2 : Math.max(0, Math.min(world - size, pos - size / 2)));
+/** Where the camera's corner goes to put a point in the middle (a little below it, for whoever stands there). */
+const cornerFor = (target) => ({ x: fit(target.x, view.w, COLS * TILE), y: fit(target.y - 20, view.h, ROWS * TILE) });
+
 function updateCamera(dt, snap = false) {
-  const target = camFocus ?? player;
-  const fit = (pos, size, world) => (size >= world ? (world - size) / 2 : Math.max(0, Math.min(world - size, pos - size / 2)));
-  const tx = fit(target.x, view.w, COLS * TILE);
-  const ty = fit(target.y - 20, view.h, ROWS * TILE);
+  const { x: tx, y: ty } = cornerFor(camFocus ?? camLook ?? player);
   const a = snap ? 1 : Math.min(1, dt * 5);
   view.x += (tx - view.x) * a;
   view.y += (ty - view.y) * a;
+}
+
+/** Look somewhere else without walking there. `now` moves the camera at once, as under a dragging finger. */
+function lookAt(point, now = false) {
+  const corner = cornerFor(point);
+  // Kept inside the town, so dragging past the edge doesn't wind up slack to drag back.
+  camLook = { x: corner.x + view.w / 2, y: corner.y + view.h / 2 + 20 };
+  if (now) Object.assign(view, corner);
+}
+const lookingAround = () => Boolean(camLook) || view.userZoom !== 1;
+/** Back to whoever you play, at the usual zoom. */
+function comeBack() {
+  camLook = null;
+  if (!scene) camFocus = null;
+  zoomTo(1);
+}
+function zoomTo(z) {
+  view.userZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+  view.zoomTarget = view.userZoom;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +257,7 @@ function walkTo(point, then = null, speed = 125) {
   player.path = path;
   player.then = then;
   player.speed = speed;
+  camLook = null; // when you go somewhere, the camera goes with you
   return true;
 }
 
@@ -425,6 +449,7 @@ addEventListener('keydown', (e) => {
   if (busyNow()) return;
   if (MOVE[k]) {
     keys.add(k);
+    camLook = null;
     if (player.path) {
       player.path = null;
       player.then = null;
@@ -445,6 +470,12 @@ addEventListener('keydown', (e) => {
     toggleXray();
   } else if (k === 't') {
     run({ id: 'play', label: 'Who you play' }, {});
+  } else if (k === 'f') {
+    comeBack();
+  } else if (k === '-' || k === '_') {
+    zoomTo(view.userZoom / 1.2);
+  } else if (k === '=' || k === '+') {
+    zoomTo(view.userZoom * 1.2);
   }
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
@@ -453,7 +484,42 @@ addEventListener('blur', () => keys.clear());
 // For checking the game from a browser's console: open the town with ?debug.
 if (new URLSearchParams(location.search).has('debug')) window.agenttown = { player, companion, standIn, sprites, view, get playing() { return playing; } };
 
+// Press and drag to look around; a press that barely moves is a click.
+let drag = null;
 canvas.addEventListener('pointerdown', (e) => {
+  if (busyNow() || e.button !== 0) return;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, from: { x: view.x + view.w / 2, y: view.y + view.h / 2 + 20 }, moved: false };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (drag?.id !== e.pointerId) return;
+  const dx = e.clientX - drag.x;
+  const dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+  drag.moved = true;
+  canvas.classList.add('dragging');
+  lookAt({ x: drag.from.x - dx / view.scale, y: drag.from.y - dy / view.scale }, true);
+});
+const endDrag = (e, click) => {
+  if (drag?.id !== e.pointerId) return;
+  const moved = drag.moved;
+  drag = null;
+  canvas.classList.remove('dragging');
+  if (click && !moved) clickAt(e);
+};
+canvas.addEventListener('pointerup', (e) => endDrag(e, true));
+canvas.addEventListener('pointercancel', (e) => endDrag(e, false));
+// Two fingers on a trackpad (or a mouse wheel) look around; a pinch zooms.
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (scene) return;
+  const px = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1;
+  if (e.ctrlKey) return zoomTo(view.userZoom * Math.exp(-e.deltaY * px * 0.01));
+  const from = camLook ?? { x: view.x + view.w / 2, y: view.y + view.h / 2 + 20 };
+  lookAt({ x: from.x + (e.deltaX * px) / view.scale, y: from.y + (e.deltaY * px) / view.scale }, true);
+}, { passive: false });
+
+function clickAt(e) {
   if (busyNow()) return;
   const wx = e.clientX / view.scale + view.x;
   const wy = e.clientY / view.scale + view.y;
@@ -467,7 +533,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const hit = PLACES.find((p) => wx >= p.rect.x && wx <= p.rect.x + p.rect.w && wy >= p.rect.y && wy <= p.rect.y + p.rect.h);
   if (hit) return walkTo(hit.front, () => interact(hit));
   walkTo({ x: wx, y: wy });
-});
+}
 
 // ---------------------------------------------------------------------------
 // Running actions
@@ -1332,11 +1398,11 @@ function replay(c, who = null) {
   saveCounts();
   const w = box.x1 - box.x0 + 8 * TILE;
   const h = box.y1 - box.y0 + 8 * TILE;
-  view.zoomTarget = Math.max(0.3, Math.min(1, innerWidth / view.base / w, innerHeight / view.base / h));
+  view.zoomTarget = Math.max(0.3, Math.min(view.userZoom, innerWidth / view.base / w, innerHeight / view.base / h));
   camFocus = { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 + 20 };
   clearTimeout(replay.timer);
   replay.timer = setTimeout(() => {
-    view.zoomTarget = 1;
+    view.zoomTarget = view.userZoom;
     if (!scene) camFocus = null;
   }, xray.durationOf(c) + 900);
 }
@@ -1401,11 +1467,23 @@ function renderMinimap() {
   miniCtx.fill();
   miniCtx.stroke();
 }
-mini.addEventListener('pointerdown', (e) => {
-  if (busyNow()) return;
+/** The point in town under a pointer on the minimap. */
+function miniPoint(e) {
   const r = mini.getBoundingClientRect();
   const { s, ox, oy } = minimapScale(town, r.width, r.height);
-  walkTo({ x: (e.clientX - r.left - ox) / s, y: (e.clientY - r.top - oy) / s }, null, 220);
+  return { x: (e.clientX - r.left - ox) / s, y: (e.clientY - r.top - oy) / s };
+}
+// Click the minimap to look there, drag across it to look around, double-click to go there.
+mini.addEventListener('pointerdown', (e) => {
+  if (scene) return;
+  mini.setPointerCapture(e.pointerId);
+  lookAt(miniPoint(e), true);
+});
+mini.addEventListener('pointermove', (e) => {
+  if (mini.hasPointerCapture(e.pointerId)) lookAt(miniPoint(e), true);
+});
+mini.addEventListener('dblclick', (e) => {
+  if (!busyNow()) walkTo(miniPoint(e), null, 220);
 });
 
 // ---------------------------------------------------------------------------
@@ -1428,7 +1506,9 @@ async function refresh() {
   document.getElementById('quest').hidden = !isAgent();
   document.getElementById('record').hidden = !isAgent();
   document.getElementById('rolePanel').hidden = isAgent();
-  document.getElementById('phone').hidden = !(isAgent() || S.me.role === 'homeowner');
+  // A resident's phone matters once they have an agent, or something comes to it.
+  const onPhone = S.agents?.length || S.phone?.asks?.length || S.phone?.approvals?.length || S.phone?.incidents?.length || S.notes?.length;
+  document.getElementById('phone').hidden = !(S.me.role === 'homeowner' || (isAgent() && onPhone));
   saveCounts();
   if (!isAgent()) {
     const panel = document.getElementById('rolePanel');
@@ -1653,12 +1733,25 @@ document.getElementById('phoneList').addEventListener('click', async (e) => {
   }
 });
 
+// Panels start folded, so a newcomer sees the town, the next step and the dock. One you open stays open next time.
+const PANELS_KEY = 'agenttown.panels';
+const openPanels = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(PANELS_KEY) ?? '{}') ?? {};
+  } catch {
+    return {};
+  }
+})();
 for (const id of ['phone', 'record', 'quest', 'ledger']) {
-  document.getElementById(id).classList.add('foldable');
+  const el = document.getElementById(id);
+  el.classList.add('foldable');
+  el.classList.toggle('open', Boolean(openPanels[id]) && innerWidth > 900);
   document.getElementById(`${id}Head`).title = 'Show or hide';
-  document.getElementById(`${id}Head`).addEventListener('click', () => document.getElementById(id).classList.toggle('open'));
+  document.getElementById(`${id}Head`).addEventListener('click', () => {
+    openPanels[id] = el.classList.toggle('open');
+    try { localStorage.setItem(PANELS_KEY, JSON.stringify(openPanels)); } catch { /* private mode: folded again next time */ }
+  });
 }
-if (innerWidth > 900) for (const id of ['quest', 'ledger', 'phone', 'record']) document.getElementById(id).classList.add('open');
 
 async function leaveTown() {
   const r = await say({ face: '🌼', who: 'Leave town?', text: "You'll let go of your role and everything that came with it. You can join again straight away, as anyone, under any name; the rest of the town carries on. (A passkey you made here stays in your password manager; delete it there.)", choices: [{ label: 'Leave town', value: true, primary: true }, { label: 'Stay', value: false, cancel: true }] });
@@ -1704,10 +1797,19 @@ const INTROS = {
   judge: "You rule. Petitions from the police arrive on your **docket**. Each one asks you to order a registry to identify who stands behind a badge, to delete a principal's agents, or to ban a principal outright.\n\nEvery order runs on the framework: identifying is logged in the registry's transparency log, deleting revokes a whole lineage, banning withdraws a verification.",
 };
 
+/** What a newcomer needs to start; the rest is a click away. */
+const FIRST_STEPS = {
+  agent: "You're a **resident** of AgentTown: a person, with no agent yet.\n\n**Walk** with WASD or the arrow keys, or click where you want to go. **Drag** the town, or the map, to look around; **F** brings you back.\n\nYour next step is always at the top left. Press **Q** for everything you can do.",
+};
+
 async function welcome() {
   interacting = true;
   try {
-    await say({ face: '🌼', who: `Welcome, ${S.me.name}`, where: S.me.claimName ?? 'AgentTown', text: INTROS[S.me.role], choices: [{ label: "Let's go", value: true, primary: true }] });
+    const where = S.me.claimName ?? 'AgentTown';
+    const first = FIRST_STEPS[S.me.role];
+    const go = { label: "Let's go", value: true, primary: true };
+    const r = await say({ face: '🌼', who: `Welcome, ${S.me.name}`, where, text: first ?? INTROS[S.me.role], choices: first ? [go, { label: 'Tell me more', value: 'more' }] : [go] });
+    if (r.value === 'more') await say({ face: '🌼', who: 'How the town works', where, text: INTROS[S.me.role], choices: [go] });
   } finally {
     closeDialog();
     interacting = false;
@@ -1834,6 +1936,19 @@ function render() {
   }
 }
 
+/** The way back, shown only while you're looking somewhere else. */
+const backBtn = document.getElementById('backBtn');
+backBtn.addEventListener('click', comeBack);
+let backShown = null;
+function renderBack() {
+  const who = playing === 'me' ? 'Back to you' : `Back to ${playedName()}`;
+  const show = lookingAround() && !scene ? who : '';
+  if (show === backShown) return;
+  backShown = show;
+  backBtn.hidden = !show;
+  if (show) document.getElementById('backWho').textContent = who;
+}
+
 let last = performance.now();
 let lastMini = 0;
 function frame(now) {
@@ -1844,6 +1959,7 @@ function frame(now) {
   if (now - lastMini > 120) {
     lastMini = now;
     renderMinimap();
+    renderBack();
   }
   requestAnimationFrame(frame);
 }
@@ -1865,7 +1981,9 @@ if (!S) {
 Object.assign(player, startingPoint());
 // For the room, in presenter view: where to join, when the town is open to other machines.
 api.get('/api/info').then((i) => {
-  const at = i.players_url && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(i.players_url) ? i.players_url : null;
+  // Where the director's cues are kept to whoever has the key, the 🎬 is only for them.
+  document.getElementById('directorBtn').hidden = i.director_locked && !api.hasDirectorKey();
+  const at =i.players_url && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(i.players_url) ? i.players_url : null;
   if (at) document.getElementById('joinAt').innerHTML = `Join at <b>${esc(at)}</b>`;
 }).catch(() => {});
 await poll();

@@ -37,13 +37,14 @@ It's ready when it prints `AgentTown is open at http://localhost:4400`. Leave th
 
 How it works:
 - **Walk** with WASD or the arrow keys, or click where you want to go. Click a building to walk to it and talk to it.
+- **Look around** by dragging the town, or the map at the top right (two fingers on a trackpad work too, and a pinch zooms). **F**, or **Back to you**, brings the camera back.
 - **Q** opens the **action deck**: what you can do now, what you can do where you stand first. Pick something elsewhere and you walk there first.
-- The **You** panel (right) shows who you are and holds your settings. Your **phone** (bottom right) is where places ask for your OK.
-- Panels with a **›** fold and unfold when you click their heading.
+- The **You** panel (right) shows who you are and holds your settings. Your **phone** (bottom right) shows up once you have an agent: it's where places ask for your OK.
+- Panels start folded. Click a heading with a **›** to open it; it stays open next time.
 
 ## 4. Play the day
 
-The list at the top left is your day. Do it in order; the deck pins the next step at the top.
+The panel at the top left shows your next step; click its heading for the whole day. Do it in order; the deck pins the next step at the top.
 
 1. **Buy something yourself, in person.** Walk to Oakleaf Bakery and buy something. No agent yet: the bakery takes you at your word.
 2. **Get verified at Town Hall.** The slow step, done once. The registry learns your name; places don't.

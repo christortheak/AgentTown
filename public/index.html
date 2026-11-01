@@ -17,14 +17,17 @@
   </header>
   <div class="fold">
     <ol id="questList"></ol>
+    <details id="questMore"><summary>More to try <span id="extrasCount"></span></summary><ol id="extrasList"></ol></details>
     <button id="restart" class="quiet small">Leave town</button>
   </div>
 </section>
 
 <section id="rolePanel" class="panel" hidden></section>
 
+<button id="backBtn" class="primary" hidden title="Bring the camera back to whoever you play">◎ <span id="backWho">Back to you</span> <kbd>F</kbd></button>
+
 <section id="mapCard" class="panel">
-  <canvas id="minimap" aria-label="Map of AgentTown"></canvas>
+  <canvas id="minimap" aria-label="Map of AgentTown" title="Click to look there, drag to look around, double-click to go there"></canvas>
   <button id="townScore" class="quiet small" title="How much of town uses the framework">…</button>
 </section>
 

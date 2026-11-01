@@ -21,6 +21,7 @@ if (new URLSearchParams(location.search).has('director')) {
 }
 
 export const hasSession = () => Boolean(session);
+export const hasDirectorKey = () => Boolean(directorKey);
 export function setSession(token) {
   session = token;
   store.set('agenttown.session', token);

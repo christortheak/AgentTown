@@ -257,8 +257,10 @@ export const nextQuest = (s, counts) => QUESTS.find((q) => !q.done(s, counts)) ?
 export function renderHud(s, counts) {
   const next = nextQuest(s, counts);
   $('questNext').textContent = next ? next.text : 'You did the whole day. Try the extras.';
-  $('questList').innerHTML = QUESTS.map((q) => `<li class="${q.done(s, counts) ? 'done' : q === next ? 'next' : ''}">${esc(q.text)}</li>`).join('')
-    + '<li class="extras-title">Try this</li>' + EXTRAS.map((q) => `<li class="extra ${q.done(s, counts) ? 'done' : ''}">${esc(q.text)}</li>`).join('');
+  $('questList').innerHTML = QUESTS.map((q) => `<li class="${q.done(s, counts) ? 'done' : q === next ? 'next' : ''}">${esc(q.text)}</li>`).join('');
+  // The extras wait in a fold of their own: the day comes first.
+  $('extrasList').innerHTML = EXTRAS.map((q) => `<li class="extra ${q.done(s, counts) ? 'done' : ''}">${esc(q.text)}</li>`).join('');
+  $('extrasCount').textContent = `${EXTRAS.filter((q) => q.done(s, counts)).length}/${EXTRAS.length}`;
   $('questCount').textContent = `${QUESTS.filter((q) => q.done(s, counts)).length}/${QUESTS.length}`;
 
   // The You panel: who you are and what's set, with the settings beside them. The deck is for doing things.

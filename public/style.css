@@ -61,16 +61,22 @@ button kbd { margin-right: 7px; }
 #questNext { margin: 2px 0 0; font-size: 13px; line-height: 1.35; }
 #questNext::before { content: "→ "; color: var(--green); font-weight: 800; }
 .count { flex: none; font-weight: 800; font-size: 12px; color: #fff; background: var(--green); border-radius: 999px; padding: 2px 8px; }
-#questList { margin: 10px 0 6px; padding: 0; list-style: none; font-size: 13px; }
-#questList li { position: relative; padding: 3px 0 3px 24px; color: var(--muted); }
-#questList li::before { content: ""; position: absolute; left: 2px; top: 5px; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--frame); background: #fff; }
-#questList li.done { color: var(--ok); text-decoration: line-through; text-decoration-color: rgba(63, 155, 92, 0.4); }
-#questList li.done::before { background: var(--ok); border-color: var(--ok); }
+#questList, #extrasList { margin: 10px 0 6px; padding: 0; list-style: none; font-size: 13px; }
+#extrasList { margin-top: 4px; }
+#quest li { position: relative; padding: 3px 0 3px 24px; color: var(--muted); }
+#quest li::before { content: ""; position: absolute; left: 2px; top: 5px; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--frame); background: #fff; }
+#quest li.done { color: var(--ok); text-decoration: line-through; text-decoration-color: rgba(63, 155, 92, 0.4); }
+#quest li.done::before { background: var(--ok); border-color: var(--ok); }
 #questList li.next { color: var(--ink); font-weight: 700; }
 #questList li.next::before { border-color: var(--green); box-shadow: 0 0 0 3px rgba(90, 166, 90, 0.25); }
-#questList li.extras-title { padding-left: 0; margin-top: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; }
-#questList li.extras-title::before { display: none; }
-#questList li.extra::before { border-radius: 4px; }
+#extrasList li.extra::before { border-radius: 4px; }
+#questMore { margin: 4px 0 8px; }
+#extrasCount { margin-left: 4px; font-weight: 600; }
+
+/* The way back to whoever you play, while you look around the town. */
+#backBtn { position: fixed; z-index: 6; top: 14px; left: 0; right: 0; width: max-content; margin: 0 auto; box-shadow: var(--shadow); }
+#backBtn kbd { margin: 0 0 0 6px; }
+#world.dragging { cursor: grabbing; }
 
 #mapCard { top: 14px; right: 14px; padding: 6px; line-height: 0; }
 #minimap { width: 264px; height: 132px; border-radius: 12px; cursor: crosshair; }
@@ -417,6 +423,7 @@ body.presenter #joinAt:not(:empty) { display: block; }
   .banner.reveal { font-size: 12px; padding: 6px 10px; }
   #quest { top: 10px; left: 10px; right: 10px; padding: 8px 12px; }
   #quest h1 { font-size: 15px; }
+  #backBtn { top: auto; bottom: 104px; }
   #rolePanel { top: 10px; left: 10px; right: 10px; width: auto; max-height: 42vh; }
   #ledger { display: block; left: 10px; right: 10px; width: auto; bottom: 60px; max-height: 30vh; padding: 6px 10px; }
   #ledger:not(.open) { right: auto; }
