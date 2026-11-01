@@ -12,7 +12,8 @@ export const ASSET = 'USDC (simulated)';
 
 export function createX402() {
   const wallets = new Map(); // wallet id -> { balance, key }
-  const spentNonces = new Set();
+  const spentNonces = new Map(); // nonce -> its payment's validBefore
+  const nowSeconds = () => Math.floor(Date.now() / 1000);
   const sign = (w, ...parts) => crypto.createHmac('sha256', w.key).update(parts.join('|')).digest('base64url');
 
   const x402 = {
@@ -33,12 +34,13 @@ export function createX402() {
       return { x402Version: 2, accepts: [{ scheme: 'exact', network: 'agenttown-sim', asset: ASSET, amount, payTo, resource, description, maxTimeoutSeconds: 60 }] };
     },
 
-    /** The client's PAYMENT-SIGNATURE: an authorization to move `amount` from its wallet. */
+    /** The client's PAYMENT-SIGNATURE: an authorization to move `amount` from its wallet, good until validBefore (as in x402's exact scheme). */
     pay(walletId, required) {
       const w = wallets.get(walletId);
       const accepted = required.accepts[0];
       const nonce = crypto.randomBytes(12).toString('base64url');
-      return { x402Version: 2, accepted, payload: { from: walletId, nonce, signature: w ? sign(w, accepted.payTo, accepted.amount, accepted.resource, nonce) : 'none' } };
+      const validBefore = nowSeconds() + accepted.maxTimeoutSeconds;
+      return { x402Version: 2, accepted, payload: { from: walletId, nonce, validBefore, signature: w ? sign(w, accepted.payTo, accepted.amount, accepted.resource, nonce, validBefore) : 'none' } };
     },
 
     facilitator: {
@@ -49,7 +51,8 @@ export function createX402() {
         if (payment.accepted.amount !== accepted.amount || payment.accepted.payTo !== accepted.payTo || payment.accepted.resource !== accepted.resource) {
           return { isValid: false, invalidReason: 'payment does not match the requirements' };
         }
-        if (payment.payload.signature !== sign(w, accepted.payTo, accepted.amount, accepted.resource, payment.payload.nonce)) return { isValid: false, invalidReason: 'invalid signature' };
+        if (payment.payload.signature !== sign(w, accepted.payTo, accepted.amount, accepted.resource, payment.payload.nonce, payment.payload.validBefore)) return { isValid: false, invalidReason: 'invalid signature' };
+        if (!(nowSeconds() < payment.payload.validBefore)) return { isValid: false, invalidReason: 'payment expired' };
         if (spentNonces.has(payment.payload.nonce)) return { isValid: false, invalidReason: 'payment already used' };
         if (w.balance < accepted.amount) return { isValid: false, invalidReason: `insufficient funds (${w.balance} ${ASSET})` };
         return { isValid: true, payer: payment.payload.from };
@@ -60,7 +63,13 @@ export function createX402() {
         const amount = required.accepts[0].amount;
         wallets.get(payment.payload.from).balance = Math.round((wallets.get(payment.payload.from).balance - amount) * 100) / 100;
         x402.wallet(required.accepts[0].payTo).balance += amount;
-        spentNonces.add(payment.payload.nonce);
+        // A spent payment past its validBefore is refused as expired anyway, so the facilitator forgets it then.
+        const now = nowSeconds();
+        for (const [nonce, until] of spentNonces) {
+          if (until > now) break;
+          spentNonces.delete(nonce);
+        }
+        spentNonces.set(payment.payload.nonce, payment.payload.validBefore);
         return { success: true, transaction: `simtx_${crypto.randomBytes(6).toString('hex')}`, network: 'agenttown-sim', payer: payment.payload.from };
       },
     },

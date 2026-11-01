@@ -18,6 +18,12 @@ import { startRelyingParty } from 'aaf-reference/src/rp/server.js';
 const hasKeys = (keysDir, id) => Boolean(keysDir && fs.existsSync(path.join(keysDir, `${fileNameFor(id)}.json`)));
 const prefer = (list, hint) => list.find((e) => e.id.includes(hint)) ?? null;
 
+/** How many of its latest decisions each place keeps in memory. */
+export const DECISIONS_KEPT = 200;
+const keepLast = (list, n) => {
+  if (list.length > n) list.splice(0, list.length - n);
+};
+
 /** One of the town's own agents. Its requests carry the town's mark, so a place's front can tell it from an agent that came with its own badge. */
 class TownAgent extends Agent {
   constructor(opts, mark) {
@@ -30,8 +36,11 @@ class TownAgent extends Agent {
   }
 }
 
-/** front: the places' front doors (src/front.js); each relying party is reached there, and the town's own requests are marked. */
-export function buildWorld({ trust, keysDir, adminTokens = {}, federations = null, front = null }) {
+/**
+ * front: the places' front doors (src/front.js); each relying party is reached there, and the town's own requests are marked.
+ * decisionsKept: how many of its latest decisions each place keeps (see relyingParty).
+ */
+export function buildWorld({ trust, keysDir, adminTokens = {}, federations = null, front = null, decisionsKept = DECISIONS_KEPT }) {
   const mark = front?.mark ?? {};
   const registries = trust.registries;
   if (!registries.length) throw new Error('the federation has no registries');
@@ -111,9 +120,21 @@ export function buildWorld({ trust, keysDir, adminTokens = {}, federations = nul
     agent: (name) => new TownAgent({ name, trust }, mark),
     provider: (name, contact) => new AgentProvider({ name, contact }),
 
-    /** A place's relying party, behind the front at /<the first label of its id>. `visitor` handles agents the town didn't make. */
-    async relyingParty({ visitor = null, ...opts }) {
-      const rp = await startRelyingParty({ trust, ...opts });
+    /**
+     * A place's relying party, behind the front at /<the first label of its id>. `visitor` handles agents the town didn't make.
+     * The framework's relying party keeps every decision it makes (rp.evidence, rp.received). The town only reads the
+     * one it just got back, which is always the newest, and the place's signed account of each decision is in the
+     * agent's activity log already, so a place keeps its latest few and lets the rest go.
+     */
+    async relyingParty({ visitor = null, onDecision, ...opts }) {
+      const rp = await startRelyingParty({
+        trust, ...opts,
+        onDecision: (d) => {
+          keepLast(d.rp.evidence, decisionsKept);
+          keepLast(d.rp.received, decisionsKept);
+          return onDecision?.(d);
+        },
+      });
       if (front) front.mount(opts.id.split('.')[0], rp, visitor);
       relyingParties.push(rp);
       return rp;
