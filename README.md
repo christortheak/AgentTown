@@ -4,10 +4,15 @@ A cozy town where you play an accountable agent. It is a launch demo for the *Ac
 
 Many people can play at once, each in a role: a **resident** (you walk the town yourself, and can register an agent and send it), a **shopkeeper**, a **homeowner**, the **police**, **the judge** or the **town council**. Simulated residents' agents, a person who shops in person, a newcomer, sub-agents, an honest agent nobody registered and, on cue, a rogue swarm fill the rest of the town. Every door, shop, bank, exchange and office is a real relying party. Every decision you see is a service's actual decision, told in plain words first (what happened, why, and what would fix it), with every check it ran, what it learned, and a verified receipt for its activity-log entry underneath.
 
-**Start here:**
-- [Try AgentTown on your own computer](docs/TRY-IT.md): set it up and play a day, step by step.
-- [Run AgentTown at a LAN event](docs/HOST.md): one laptop runs the town with `npm run lan`, everyone plays from their own. It also says how to run one town on a public server.
-- [Bring your implementation to AgentTown](docs/EVENT.md): for teams with their own registry, record keeper or federation.
+**Three ways to run it:**
+
+| | Start it with | Who plays | Guide |
+|---|---|---|---|
+| **On your own computer** | `npm start` | You, in a browser. Open another tab to play a second role. | [Try AgentTown](docs/TRY-IT.md): set it up and play a day, step by step |
+| **At a LAN party** | `npm run lan`, or double-click **Start LAN party** | Everyone on one network, each from their own laptop. The host directs. | [Run AgentTown at a LAN event](docs/HOST.md) |
+| **On a public server** | `AGENTTOWN_PUBLIC=1 npm start`, behind a tunnel | Anyone with the address, over HTTPS | [On a public server](docs/HOST.md#on-a-public-server) |
+
+Teams with their own registry, record keeper or federation can bring it to a LAN party or a public town: [Bring your implementation to AgentTown](docs/EVENT.md).
 
 What the town is built to show: the framework is neutral infrastructure for one thing, **a place asking a counterparty for information, the counterparty deciding whether to give it, and the answer being reliable**. Places decide what to ask; principals decide what to share; lawmakers decide what places must ask for; and none of that changes the registries, record keepers or badges. Not every place has to adopt it, and the town shows what that costs.
 
@@ -26,6 +31,14 @@ npm start
 Then open **http://localhost:4400**. Use `localhost`, not `127.0.0.1`, because passkeys are bound to a domain.
 
 For a party on one network, run `npm run lan` instead, or double-click `Start LAN party.command` (Mac) or `Start LAN party.cmd` (Windows). It finds this machine's address on the network, makes a director key, opens the director's view and prints where players join ([docs/HOST.md](docs/HOST.md)).
+
+For one town on the internet, use **public mode**, on a small server behind a tunnel such as Cloudflare Tunnel:
+
+```bash
+AGENTTOWN_PUBLIC=1 ORIGIN=https://town.example.org AGENTTOWN_DIRECTOR_KEY=<at least 16 characters> npm start
+```
+
+The town listens on the server only and the tunnel brings everyone in, over HTTPS, so every player can use passkeys. It calls out only to public addresses, limits how many join and from where, reads each player's address from the tunnel, and rests the residents while nobody is in town ([docs/HOST.md](docs/HOST.md#on-a-public-server); the settings are [below](#settings)). To try it for a few minutes from your own computer, a quick tunnel is enough (`cloudflared tunnel --url http://127.0.0.1:4400`). Anyone with its address can come in, so stop it when you're done.
 
 ```bash
 npm test
@@ -228,7 +241,7 @@ AGENTTOWN_CONFIG=./town.config.json npm start
 
 To host the framework's services on a LAN with aaf-reference as it is: set `"host"` in `aaf-reference/config/federation.json` to the machine's address, run `npm run reset` and `npm start` there, then copy `data.nosync/trust-anchor.json` (and, for verification and courts, the verifier's and court's key files from `data.nosync/keys/`) to the town's host. Those keys are private: share them only with the town that plays those roles.
 
-To let other machines on your network open the game: `npm run lan` (or `HOST=0.0.0.0`, for the game alone). Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. Set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them (the tab keeps the key, and takes it out of the address bar). For a town on the internet, use public mode, below.
+To let other machines on your network open the game: `npm run lan` (or `HOST=0.0.0.0`, for the game alone). Passkeys need a secure origin, so beyond `localhost` serve it over HTTPS and set `ORIGIN=https://your.domain`. Set `AGENTTOWN_DIRECTOR_KEY` so only you can cue the swarm, outages and policies; open the town with `?director=<key>` to use them (the tab keeps the key, and takes it out of the address bar). For a town on the internet, use public mode ([Run it](#run-it)).
 
 ## Settings
 
@@ -283,6 +296,7 @@ All are environment variables, and all are optional, except that public mode nee
 ## Limits of this prototype
 
 - **State is in memory**, and each start is a new town. Leaving town lets go of your role; a passkey you made stays in your password manager until you delete it there.
+- **A town that runs for days still grows, slowly.** Each place keeps its latest 200 decisions, the court its latest 300 cases with their petitions, and the Records Office and the x402 toll forget what no longer counts. The activity logs, and a little for each player who has left, still grow, so restart a long-running town now and then (once a day is plenty).
 - **No accounts.** A session is a tab; anyone can take any free role. That is the point for a demo; a public town needs a long director key, kept private, and limits how many play and how many single seats one address holds.
 - **The town ledger is a narrator's view**, for the demo: it shows what every place decided. Names of principals stay out of it unless a court finds them.
 - **World ID and x402 are simulated**, as above.
