@@ -39,6 +39,12 @@ const JOIN_WINDOW_MS = 10 * 60 * 1000; // a public town counts joins from one ad
 const SEATS = ['shopkeeper', 'homeowner', 'judge']; // one person each: a place, a house, the bench
 const REST_AFTER_MS = 3 * 60 * 1000; // town time with nobody in a public town before its residents rest
 
+/**
+ * Is `key` one of this table's own names? What a client sends may be anything: a list (which looks up like the
+ * name inside it, but isn't equal to it) or a name every object has, like "constructor".
+ */
+const named = (table, key) => typeof key === 'string' && Object.hasOwn(table, key);
+
 export const ROLES = {
   agent: { icon: '🧍', label: 'A resident', blurb: 'You walk the town yourself. Start an agent, registered or not, and play yourself, it, or its sub-agents. Shop, trade, send it on errands. Play it straight, or try to get away with something.' },
   shopkeeper: { icon: '🏪', label: 'A shopkeeper', blurb: 'Run a shop, the bank, the exchange or the toll: decide which registries you trust and what you ask for, and see exactly what each customer proves.' },
@@ -132,10 +138,10 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
    * limits joins by them.
    */
   async function join({ role, name, claim, headless = false }, { from = 'unknown', director = true } = {}) {
-    if (!ROLES[role]) throw new HttpError(400, 'bad_role', 'Pick a role.');
+    if (!named(ROLES, role)) throw new HttpError(400, 'bad_role', 'Pick a role.');
     const display = String(name ?? '').trim().slice(0, 30) || 'A Resident';
-    if (role === 'shopkeeper' && (!PLACE_DEFS[claim] || holder(claim))) throw new HttpError(409, 'taken', 'Pick a place nobody else is running.');
-    if (role === 'homeowner' && (!HOUSES[claim] || holder(claim))) throw new HttpError(409, 'taken', 'Pick a house nobody else owns.');
+    if (role === 'shopkeeper' && (!named(PLACE_DEFS, claim) || holder(claim))) throw new HttpError(409, 'taken', 'Pick a place nobody else is running.');
+    if (role === 'homeowner' && (!named(HOUSES, claim) || holder(claim))) throw new HttpError(409, 'taken', 'Pick a house nobody else owns.');
     if (role === 'judge' && ofRole('judge').length) throw new HttpError(409, 'taken', 'The town already has a judge.');
     if (limits) mayJoin(role, from, { headless, director });
     const id = `p_${crypto.randomBytes(4).toString('hex')}`;
@@ -188,7 +194,16 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
 
   /** Let go of every session quiet for longer than IDLE_MS, as of `now`. */
   function sweepIdle(now = Date.now()) {
-    for (const s of sessions.values()) if (now - s.lastSeen > IDLE_MS) leave(s);
+    for (const s of [...sessions.values()]) {
+      if (now - s.lastSeen <= IDLE_MS) continue;
+      // This runs on a timer, where an error nobody catches stops the town: one session that can't be let go
+      // cleanly mustn't take the others with it.
+      try {
+        leave(s);
+      } catch (err) {
+        console.error(`[agenttown] couldn't let go of an idle ${s.role} cleanly:`, err);
+      }
+    }
   }
   const sweep = setInterval(() => sweepIdle(), 30000);
 

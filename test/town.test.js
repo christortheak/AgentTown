@@ -360,6 +360,60 @@ test('people in roles: a shopkeeper, a homeowner, police, a judge, and a crook',
   }
 });
 
+test('joining takes only the town’s own roles, places and houses, and the idle sweep outlives a session it can’t let go', { timeout: 60000 }, async () => {
+  const game = await startServer({ port: 4498, portOffset: 8000, quiet: true, residents: false, timeScale: 25 });
+  const { sessions, places } = game.town;
+  const [carol, bob, judge] = [client(game), client(game), client(game)];
+  try {
+    await carol.join('shopkeeper', 'Carol Lee', 'bramble');
+    await bob.join('homeowner', 'Bob Hart', 'hazel');
+    await judge.join('judge', 'Judge One');
+    const seated = sessions.size;
+    const tryJoin = (role, claim) => client(game).join(role, 'Mallory', claim);
+
+    // A list looks up like the name inside it, but isn't equal to it: it must not get past "already taken".
+    assert.equal((await tryJoin('shopkeeper', ['bramble'])).httpStatus, 409, 'a claimed place, named in a list');
+    assert.equal((await tryJoin('homeowner', ['hazel'])).httpStatus, 409, 'a claimed house, named in a list');
+    assert.equal((await tryJoin(['judge'])).httpStatus, 400, 'the one bench, named in a list');
+    assert.deepEqual(places.places.bramble.human.name, 'Carol Lee', 'the place is still hers');
+    assert.equal(places.hearth.rp.accounts.get('hazel').owner, 'Bob Hart', 'and the house still his');
+
+    // Names every object has are not places, houses or roles.
+    for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      assert.equal((await tryJoin('shopkeeper', name)).httpStatus, 409, `no place called ${name}`);
+      assert.equal((await tryJoin('homeowner', name)).httpStatus, 409, `no house called ${name}`);
+      assert.equal((await tryJoin(name)).httpStatus, 400, `no role called ${name}`);
+    }
+    for (const role of [null, 7, {}, ['agent']]) assert.equal((await tryJoin(role)).httpStatus, 400, `not a role: ${JSON.stringify(role)}`);
+    assert.equal(sessions.size, seated, 'none of them took a seat');
+    assert.equal(Object.prototype.human, undefined, 'and nothing was written where every object would see it');
+
+    // If letting one session go fails, the sweep says so and still lets the others go. It runs on a timer, where
+    // an error nobody catches would stop the town.
+    const dave = client(game);
+    await dave.join('shopkeeper', 'Dave Moss', 'apothecary');
+    const { claimPlace } = places;
+    const said = [];
+    const { error } = console;
+    console.error = (...a) => said.push(a);
+    places.claimPlace = (id, keeper) => {
+      if (id === 'bramble' && !keeper) throw new Error('the shutters stuck');
+      return claimPlace(id, keeper);
+    };
+    try {
+      assert.doesNotThrow(() => sessions.sweep(Date.now() + 5 * 60 * 1000));
+    } finally {
+      places.claimPlace = claimPlace;
+      console.error = error;
+    }
+    assert.equal(said.length, 1, 'it said which one it could not let go cleanly');
+    assert.equal(sessions.size, 0, 'everyone idle was let go');
+    assert.equal(places.places.apothecary.human, null, 'and the place after the stuck one went back to the town');
+  } finally {
+    await game.close();
+  }
+});
+
 test('partial adoption and the law: same rails, different questions', { timeout: 60000 }, async () => {
   const game = await startServer({ port: 4496, portOffset: 9000, quiet: true, residents: false, timeScale: 25 });
   const [ana, sam, cy, viv] = [client(game), client(game), client(game), client(game)];
