@@ -1,6 +1,6 @@
 // Proposed: several trust anchors at once (docs/PROPOSED.md §6).
 //
-// The reference implementation trusts exactly one trust anchor, and names its
+// The sample implementation trusts exactly one trust anchor, and names its
 // credential and trust-mark types after it. Here the town keeps a set of
 // federations, each discovered from its own anchor, and every party chooses
 // which of them it trusts: a shop may take badges from the town's federation
@@ -12,7 +12,7 @@
 //   MultiView            one view over several federations, shaped like
 //                        aaf-reference's Federation so its code can use it
 //
-// The one shim: the reference verifier names the credential type it expects
+// The one shim: the sample implementation's verifier names the credential type it expects
 // after `trust.trustAnchor`. A MultiView answers with the anchor of the
 // federation whose member it was last asked about. The verifier always looks
 // up the issuer and then checks the type in the same synchronous step, so that
@@ -39,7 +39,7 @@ const ROLES = ['authorization', 'provenance', 'activity'];
 
 /**
  * A trust anchor (OpenID Federation): its Entity Configuration, the list of its members, and a Subordinate
- * Statement for each. Unlike the reference one, it can admit a member while it runs.
+ * Statement for each. Unlike the sample implementation's, it can admit a member while it runs.
  *   members:   [{ entity_id, entity_type, jwks, metadata }]
  *   open:      a directory it admits may accredit records services in this federation, for every role
  *   publicUrl: where others reach it, when that isn't where it listens (a name of its own, behind a tunnel)

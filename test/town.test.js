@@ -1051,7 +1051,7 @@ test('several trust anchors: the halls, a federation added by address, and the p
     assert.equal((await robin.run('buy', { shop: 'kettle', item: 'kettle' })).headline, 'Refused: a badge from a federation it doesn’t trust');
 
     // A team brings only a directory and a records service: admitted to the participants' federation, by statement
-    // first (the reference directory can't start until it's a member), then started, then accredited.
+    // first (the sample implementation's directory can't start until it's a member), then started, then accredited.
     const tok = () => b64u.encode(crypto.randomBytes(18));
     const dirKeys = { signing: generateSigningKey(), encryption: generateEncryptionKey(), pairwiseSecret: tok(), adminToken: tok() };
     const rsKeys = { signing: generateSigningKey(), encryption: null, pairwiseSecret: null, adminToken: tok() };

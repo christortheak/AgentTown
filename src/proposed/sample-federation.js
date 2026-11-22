@@ -1,5 +1,5 @@
-// A federation someone else runs: its own trust anchor, a directory and a record
-// keeper, built from the reference implementation's parts. It stands in for a
+// A federation someone else runs: its own trust anchor, a directory and a records
+// service, built from the sample implementation's parts. It stands in for a
 // team that brings its own implementation to an event: they run theirs on
 // their own machine, and the town adds it by its trust anchor's address.
 //

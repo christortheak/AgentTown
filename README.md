@@ -216,7 +216,7 @@ Each place decides which federations it trusts: the town's own by default. Shopk
 
 The sample implementation assumes a single trust anchor. This is prototyped in `src/proposed/` and set out for discussion in [docs/PROPOSED.md](docs/PROPOSED.md) §6.
 
-**At an event**, teams bring their own directories, records services or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `npm run lan`, or with `AGENTTOWN_ADDRESS` set to this machine's address on the network, so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the reference implementation as a team would run theirs.
+**At an event**, teams bring their own directories, records services or whole federations: see [docs/EVENT.md](docs/EVENT.md). Start the town with `npm run lan`, or with `AGENTTOWN_ADDRESS` set to this machine's address on the network, so they can reach it; each service is checked at the door (what it must answer, probed without changing anything), and `bin/agenttown-federation.js` runs the framework's sample implementation as a team would run theirs.
 
 ## Agents that hold their own badge
 

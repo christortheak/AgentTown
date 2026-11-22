@@ -1,4 +1,4 @@
-// PROPOSED EXTENSION to the Reference Profile, prototyped in AgentTown.
+// PROPOSED EXTENSION to the Sample Profile, prototyped in AgentTown.
 // Nothing here is part of aaf-reference; see docs/PROPOSED.md.
 //
 // The principal's record at the authorization records service (in town, the

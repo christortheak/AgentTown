@@ -62,7 +62,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
   // The places' front doors, where an agent that holds its own badge sends its requests (GET /api/places lists them).
   const front = await startFront({ port: 4180 + portOffset, host: listen, address });
   const world = buildWorld({ trust: federations.view(), keysDir: fed.keysDir, adminTokens: fed.adminTokens, federations, front });
-  // Every party re-reads its federations every 30 s (Reference Profile §6.1): new members, new trust marks.
+  // Every party re-reads its federations every 30 s (Sample Profile §6.1): new members, new trust marks.
   const refresher = setInterval(() => federations.refresh().catch(() => {}), 30000);
 
   let sessions = null;
