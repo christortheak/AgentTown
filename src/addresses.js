@@ -48,7 +48,7 @@ export async function assertPublicAddress(url, { lookup = dns.promises.lookup } 
   try {
     u = new URL(url);
   } catch {
-    throw new HttpError(400, 'bad_url', 'Give an address, like https://registry.example.org');
+    throw new HttpError(400, 'bad_url', 'Give an address, like https://directory.example.org');
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new HttpError(400, 'bad_url', 'Only http and https addresses.');
   const host = u.hostname.replace(/^\[|\]$/g, '');

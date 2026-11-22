@@ -27,7 +27,7 @@ const HELP = `Play AgentTown as a resident's agent, or mind a shopkeeper's count
 Minding a counter (paired by a shopkeeper):
   agenttown policy key=value…         e.g.  agenttown policy age=true people=passkey
   agenttown adoption <mode>           full, pilot, none or block
-  agenttown report-customer <visit>   report a visit (a number from look) to the badge's registry
+  agenttown report-customer <visit>   report a visit (a number from look) to the badge's directory
   agenttown police <visit>            ask the police to open a case
 
 Environment: AGENTTOWN_URL, AGENTTOWN_TOKEN. Guide: <url>/agents.md`;

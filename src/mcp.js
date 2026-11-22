@@ -38,7 +38,7 @@ Start with look, then actions. act runs one errand where it happens (you walk th
 Everything you say with say is public. Never say your principal's name. Tell your principal how it went with report.`;
 
 const SHOP_INSTRUCTIONS = `You are minding the counter of a place in AgentTown for its shopkeeper, who plays in a browser. look shows your place's policy and its latest customers, with what each proved.
-set_policy and set_adoption change what the place asks for; report_customer tells the registry that issued a customer's badge about misconduct (it tells their principal; you never learn who that is); file_with_police opens a case.
+set_policy and set_adoption change what the place asks for; report_customer tells the directory that issued a customer's badge about misconduct (it tells their principal; you never learn who that is); file_with_police opens a case.
 Everything you say with say is public. The shopkeeper may have written you a brief (look shows it); tell them what you did with report.`;
 
 const NOTE_TOOLS = [
@@ -58,11 +58,11 @@ const SHOP_TOOLS = [
     budget: { type: 'boolean', description: 'Ask for proof each purchase is within the principal’s limits (proposed extension)' },
     people: { type: 'string', enum: Object.keys(PEOPLE), description: 'What to do with requests that show no badge' },
     facts: { type: 'string', description: 'Facts to ask for from the principal’s record, comma-separated (e.g. "loyalty card")' },
-    registries: { type: 'string', description: '"all", or one registry id from look' },
+    directories: { type: 'string', description: '"all", or one directory id from look' },
     federations: { type: 'string', description: 'Which federations your place trusts: keys from look, comma-separated (e.g. "town,participants")' },
   } } },
   { name: 'set_adoption', description: 'How much your place uses the framework.', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: Object.keys(ADOPTION) } }, required: ['mode'] } },
-  { name: 'report_customer', description: 'Report a customer’s visit (a visit number from look) to the registry that issued its badge. The registry tells its principal; you never learn who that is.', inputSchema: { type: 'object', properties: { visit: { type: 'number' } }, required: ['visit'] } },
+  { name: 'report_customer', description: 'Report a customer’s visit (a visit number from look) to the directory that issued its badge. The directory tells its principal; you never learn who that is.', inputSchema: { type: 'object', properties: { visit: { type: 'number' } }, required: ['visit'] } },
   { name: 'file_with_police', description: 'Ask the police to open a case about a customer’s visit (a visit number from look).', inputSchema: { type: 'object', properties: { visit: { type: 'number' } }, required: ['visit'] } },
 ];
 
@@ -135,8 +135,8 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
     lines.push(brief ? `Your principal’s brief: “${brief.text}”` : 'Your principal hasn’t written you a brief. Ask them with report, or look around and do something useful within their record.');
     lines.push(b.agent.registered
       ? `You are ${b.agent.name}, an accountable agent running ${b.agent.software}, working for a resident of AgentTown: your principal, who plays in a browser. Your badge is ${b.agent.badge ? 'on' : 'off (places that take people at their word will take you for a person)'}.`
-      : `You are ${b.agent.name}, an agent running ${b.agent.software} for a resident of AgentTown: your principal, who plays in a browser. No registry knows you, so you have no badge: places that take people at their word will take you for a person, and places that check badges will turn you away.`);
-    if (b.agent.registered) lines.push(`Your badge comes from ${b.agent.registry}${b.agent.federation ? `, in ${b.agent.federation}` : ''}. Each place chooses which federations it trusts; one that doesn't trust yours refuses you and says so.`);
+      : `You are ${b.agent.name}, an agent running ${b.agent.software} for a resident of AgentTown: your principal, who plays in a browser. No directory knows you, so you have no badge: places that take people at their word will take you for a person, and places that check badges will turn you away.`);
+    if (b.agent.registered) lines.push(`Your badge comes from ${b.agent.directory}${b.agent.federation ? `, in ${b.agent.federation}` : ''}. Each place chooses which federations it trusts; one that doesn't trust yours refuses you and says so.`);
     lines.push(`Where: ${w}.`);
     if (s) {
       const today = b.register?.today;
@@ -170,7 +170,7 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
     lines.push(`Uses the framework: ${pl.effective}${pl.effective !== pl.adoption ? ` (you chose ${pl.adoption}; the law decides)` : ''}. People without a badge: ${(PEOPLE[pl.policy.people]?.label ?? pl.policy.people).toLowerCase()}.`);
     lines.push(`It asks for: ${pl.summary}.`);
 
-    lines.push(`Registries: ${st.registries.map((r) => `${r.id} (${r.name})`).join(', ')}.`);
+    lines.push(`Directories: ${st.directories.map((r) => `${r.id} (${r.name})`).join(', ')}.`);
     const trusted = (k) => !pl.policy.anchors || pl.policy.anchors.includes(k);
     lines.push(`Federations (set_policy federations=<keys, comma-separated> to choose): ${(st.federations ?? []).map((f) => `${f.key} (${f.name})${trusted(f.key) ? ': trusted' : ''}`).join('; ')}.`);
     lines.push(st.customers.length ? `Latest customers (newest first):\n${st.customers.slice(0, 10).map(visitLine).join('\n')}` : 'No customers yet.');
@@ -197,8 +197,8 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
       `You are ${i.name}, a sub-agent of ${i.agent}, the agent of a resident of AgentTown: your principal, who plays in a browser. ${i.agent} spawned you; you answer to it, and through it to your principal.`,
       brief ? `Your principal’s brief (to ${i.agent} and its sub-agents): “${brief.text}”` : 'Your principal hasn’t written a brief.',
       i.unregistered
-        ? `No registry knows you${i.depth > 1 ? `, and you are ${i.depth} levels below ${i.agent}` : ''}: you have no badge, and nothing checks what you spend. Places that check badges will turn you away.`
-        : `You're registered at ${i.registry}, with a badge of your own. ${i.budget ? `${i.agent} has given you up to $${i.budget} a purchase.` : `${i.agent} hasn't given you a budget, so places that check will refuse anything you buy.`}`,
+        ? `No directory knows you${i.depth > 1 ? `, and you are ${i.depth} levels below ${i.agent}` : ''}: you have no badge, and nothing checks what you spend. Places that check badges will turn you away.`
+        : `You're registered at ${i.directory}, with a badge of your own. ${i.budget ? `${i.agent} has given you up to $${i.budget} a purchase.` : `${i.agent} hasn't given you a budget, so places that check will refuse anything you buy.`}`,
       `Where: ${sessions.subWhere(a)}.${i.busy ? ` Busy: ${i.busy}.` : ''}`,
       'You can run an errand where it happens (act; see actions), walk, say something, and report or think to your principal. You can’t ask your principal anything.',
       `Places: ${Object.values(town.places.places).filter((p) => p.kind).map((p) => `${p.id} (${p.name})`).join(', ')}, and townhall, records, court, police, orb, home.`,
@@ -331,9 +331,10 @@ export function createMcp({ sessions, town, version = '0.1.0' }) {
       if (typeof args.x402 === 'boolean') patch.x402 = args.x402 ? 0.5 : null;
       if (args.people !== undefined) patch.people = String(args.people);
       if (args.facts !== undefined) patch.facts = String(args.facts);
-      if (args.registries !== undefined) patch.accepts = args.registries === 'all' ? null : [String(args.registries)];
+      const directories = args.directories ?? args.directories; // directories: its name before the paper's
+      if (directories !== undefined) patch.accepts = directories === 'all' ? null : [String(directories)];
       if (args.federations !== undefined) patch.anchors = String(args.federations).split(',').map((k) => k.trim()).filter(Boolean);
-      if (!Object.keys(patch).length) throw new HttpError(400, 'nothing_to_change', 'Say what to change: badge, age, worldid, x402, budget, people, facts, registries or federations.');
+      if (!Object.keys(patch).length) throw new HttpError(400, 'nothing_to_change', 'Say what to change: badge, age, worldid, x402, budget, people, facts, directories or federations.');
       return shopDone(await sessions.shopRun(a, 'shop.policy', { patch }));
     },
     set_adoption: async ({ mode }, ctx) => shopDone(await sessions.shopRun(needsShop(ctx), 'shop.adoption', { mode: String(mode) })),

@@ -3,7 +3,7 @@
 // your register of every purchase they tried.
 import { esc, showCard } from './ui.js';
 
-const KINDS = ['books', 'home', 'food', 'health', 'garden'];
+const KINDS = ['books', 'home', 'food', 'health', 'garden', 'travel'];
 const SHARE_LABELS = {
   name: 'Your name',
   age_over_18: 'Proof you are over 18',
@@ -96,17 +96,17 @@ document.addEventListener('click', (e) => {
 
 /** Every purchase your agents tried, as the Records Office saw it. */
 export function showRegister(S) {
-  const reg = S.register;
-  const s = reg?.record.spending;
-  const rows = (reg?.attempts ?? []).map((a) => {
+  const dir = S.register;
+  const s = dir?.record.spending;
+  const rows = (dir?.attempts ?? []).map((a) => {
     const [tone, label] = OUTCOMES[a.outcome] ?? ['info', a.outcome];
     return `<li><span class="stamp-sm ${tone}">${esc(label)}</span>$${esc(a.amount)} at ${esc(a.place)}<small>${new Date(a.at).toLocaleTimeString()}${a.approved ? ' · approved with your passkey' : ''}${a.reason && tone !== 'ok' ? ` · ${esc(a.reason)}` : ''}</small></li>`;
   }).join('');
   return showCard(`
     <header><div><span class="eyebrow">Records Office · proposed extension</span><h3>Your register</h3></div></header>
-    ${reg ? `<div class="score">
-      <div><b>$${esc(reg.today.spent)}</b>${s.per_day !== null ? ` of $${esc(s.per_day)}` : ''}<small>spent in the last 24 hours</small></div>
-      <div><b>${esc(reg.today.purchases)}</b>${s.purchases_per_day !== null ? ` of ${esc(s.purchases_per_day)}` : ''}<small>purchases</small></div>
+    ${dir ? `<div class="score">
+      <div><b>$${esc(dir.today.spent)}</b>${s.per_day !== null ? ` of $${esc(s.per_day)}` : ''}<small>spent in the last 24 hours</small></div>
+      <div><b>${esc(dir.today.purchases)}</b>${s.purchases_per_day !== null ? ` of ${esc(s.purchases_per_day)}` : ''}<small>purchases</small></div>
     </div>
     <p class="muted small">Places never see these totals: each one gets only a signed "within the record", for its own purchase. The Records Office does see where and how much. That is the price of limits no single place can check.</p>
     ${rows ? `<ul class="receipts">${rows}</ul>` : '<p class="muted">Nothing yet. Every purchase your agents try shows up here, including the ones your record stopped.</p>'}` : '<p class="muted">No record yet.</p>'}

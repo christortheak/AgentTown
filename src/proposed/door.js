@@ -1,5 +1,5 @@
-// The check at the door: what a registry or record keeper must answer to take
-// part, probed without changing anything (Reference Profile 0.2, Appendix A).
+// The check at the door: what a directory or records service must answer to take
+// part, probed without changing anything (the sample implementation’s profile 0.3, Appendix A).
 // A team learns at once what its implementation is missing, rather than when a
 // shop refuses a customer mid-game. Each result is passed, failed, or not yet
 // (something that comes later, like accreditation).
@@ -26,10 +26,10 @@ function signedBy(jwt, jwks, typ) {
 /**
  * Check a service at its address.
  *   anchors:     the entity ids of trust anchors the town knows
- *   registryKeys(id): the signing keys of a registry the town knows (to check a record keeper's trust marks)
+ *   directoryKeys(id): the signing keys of a directory the town knows (to check a records service's trust marks)
  *   guard:       which addresses the town may call (src/addresses.js); id: the entity the address is meant to be
  */
-export async function checkService(url, { anchors = [], registryKeys = () => null, guard = null, id } = {}) {
+export async function checkService(url, { anchors = [], directoryKeys = () => null, guard = null, id } = {}) {
   const base = String(url ?? '').trim().replace(/\/+$/, '');
   const results = [];
   const note = (check, ok, detail = '') => results.push({ check, ok, detail });
@@ -50,8 +50,8 @@ export async function checkService(url, { anchors = [], registryKeys = () => nul
     note('Describes itself (an Entity Configuration it signed)', false, err.message);
     return done();
   }
-  const [type, md = {}] = Object.entries(ec.metadata ?? {}).find(([k]) => k === 'aaf_registry' || k === 'aaf_record_keeper') ?? [];
-  note('Says what it is', Boolean(type), type === 'aaf_registry' ? 'a registry' : type === 'aaf_record_keeper' ? 'a record keeper' : 'no aaf_registry or aaf_record_keeper metadata');
+  const [type, md = {}] = Object.entries(ec.metadata ?? {}).find(([k]) => k === 'aaf_directory' || k === 'aaf_records_service') ?? [];
+  note('Says what it is', Boolean(type), type === 'aaf_directory' ? 'a directory' : type === 'aaf_records_service' ? 'a records service' : 'no aaf_directory or aaf_records_service metadata');
   if (!type) return done({ entity_id: ec.sub });
   const hints = ec.authority_hints ?? [];
   const known = hints.filter((h) => anchors.includes(h));
@@ -69,18 +69,23 @@ export async function checkService(url, { anchors = [], registryKeys = () => nul
   const sl = await get(`${at}/status-lists/1`);
   note('Publishes a status list (GET /status-lists/1)', sl?.ok ? signedBy(await sl.text(), jwks, STATUS_LIST_TYP) : false, sl ? (sl.ok ? 'a statuslist+jwt signed by its key' : `answered ${sl.status}`) : 'nothing answered');
 
-  if (type === 'aaf_registry') {
+  if (type === 'aaf_directory') {
     note('Has a signing key and an encryption key', Boolean(signingKey(jwks) && jwks.keys.some((k) => k.use === 'enc')), 'the encryption key seals what only a court may open');
-    const st = await get(`${at}/v1/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ppid: 'ppid:door-check:unknown' }) });
+    const st = await get(`${at}/v1/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aaf_id: 'aaf:door-check:u_unknown' }) });
     const stOk = Boolean(st && st.status < 500 && (st.headers.get('content-type') ?? '').includes('json'));
     note('Answers live status (POST /v1/status)', stOk, st ? `answered ${st.status}` : 'nothing answered');
+    // The paper's DR-1: a directory says how it verifies, issues, revokes, keeps records and discloses.
+    const pr = await get(`${at}/v1/practices`);
+    const practices = pr?.ok ? await pr.json().catch(() => null) : null;
+    const sections = practices ? ['identity_proofing', 'revocation', 'records', 'disclosure'].filter((k) => practices[k] ?? practices.practices?.[k]) : [];
+    note('Publishes its practices (GET /v1/practices)', sections.length === 4, practices ? (sections.length === 4 ? 'how it verifies, revokes, keeps records and discloses' : `missing ${['identity_proofing', 'revocation', 'records', 'disclosure'].filter((k) => !sections.includes(k)).join(', ')}`) : pr ? `answered ${pr.status}` : 'nothing answered');
     const sth = await get(`${at}/v1/transparency/sth`);
     const sthJwt = sth?.ok ? (await sth.json().catch(() => ({}))).sth : null;
     note('Keeps a transparency log (GET /v1/transparency/sth)', Boolean(sthJwt && signedBy(sthJwt, jwks, STH_TYP)), sthJwt ? 'a signed tree head' : sth ? `answered ${sth.status}` : 'nothing answered');
     const acc = await get(`${at}/v1/accreditations`);
     const list = acc?.ok ? await acc.json().catch(() => null) : null;
     const n = list ? (Array.isArray(list) ? list : list.accreditations ?? []).length : 0;
-    note('Accredits record keepers (GET /v1/accreditations)', acc?.ok ? (n ? true : null) : false, acc?.ok ? (n ? `${n} accredited` : 'none yet') : acc ? `answered ${acc.status}` : 'nothing answered');
+    note('Accredits records services (GET /v1/accreditations)', acc?.ok ? (n ? true : null) : false, acc?.ok ? (n ? `${n} accredited` : 'none yet') : acc ? `answered ${acc.status}` : 'nothing answered');
   } else {
     const roles = md.roles ?? [];
     note('Says which records it keeps', roles.length > 0 && roles.every((r) => ROLES.includes(r)), roles.length ? roles.join(', ') : 'no roles');
@@ -89,13 +94,13 @@ export async function checkService(url, { anchors = [], registryKeys = () => nul
       const jwt = m.trust_mark ?? m;
       try {
         const { payload } = decodeJws(jwt);
-        const keys = registryKeys(payload.iss);
+        const keys = directoryKeys(payload.iss);
         return keys && payload.sub === ec.sub && signedBy(jwt, keys, TRUST_MARK_TYP);
       } catch {
         return false;
       }
     });
-    note('Accredited by a registry the town knows (trust marks)', valid.length ? true : null, valid.length ? `${valid.length} valid trust mark${valid.length === 1 ? '' : 's'}` : marks.length ? 'trust marks from registries the town doesn’t know' : 'none yet: a registry has to accredit it');
+    note('Accredited by a directory the town knows (trust marks)', valid.length ? true : null, valid.length ? `${valid.length} valid trust mark${valid.length === 1 ? '' : 's'}` : marks.length ? 'trust marks from directories the town doesn’t know' : 'none yet: a directory has to accredit it');
     const sth = await get(`${at}/v1/log/sth`);
     const sthJwt = sth?.ok ? (await sth.json().catch(() => ({}))).sth : null;
     note('Keeps a tamper-evident log (GET /v1/log/sth)', Boolean(sthJwt && signedBy(sthJwt, jwks, STH_TYP)), sthJwt ? 'a signed tree head' : sth ? `answered ${sth.status}` : 'nothing answered');

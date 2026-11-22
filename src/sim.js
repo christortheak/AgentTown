@@ -18,11 +18,13 @@ export const LOOKS = {
   resident: (body) => ({ body, bulb: '#5fd38a', glow: true, badge: 'on' }),
   helper: { scale: 0.72, body: '#cdeed8', bulb: '#5fd38a', glow: true, badge: 'on' },
   swarm: { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050', scale: 0.85 },
+  // Ticket bots: one person's crew, each with a badge of its own.
+  tout: { body: '#3c6f8e', bulb: '#9fd8ff', glow: true, mask: true, badge: 'on', badgeColor: '#dff1ff', badgeMark: '#3c6f8e', feet: '#24435a', scale: 0.8 },
   bot: { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55', scale: 0.85 },
   // An honest agent that was never registered: most agents, today.
   clank: { body: '#c9a77c', hood: '#a3825a', eyes: '#fff6dd', feet: '#5a4632', scale: 0.9 },
   person: PEOPLE_LOOKS.townsfolk, // a person, not an agent: no light on top
-  // An agent that came with its own badge, from a registry in another federation.
+  // An agent that came with its own badge, from a directory in another federation.
   guest: { body: '#b8d8f0', bulb: '#5fb8d3', glow: true, badge: 'on', badgeColor: '#e8f4ff', badgeMark: '#3d7ea6' },
 };
 
@@ -43,18 +45,18 @@ const RESIDENTS = [
   },
   {
     id: 'oak', name: 'Oak-courier', body: '#e8c39e', home: 'bakery', disclose: true, budget: 200, wallet: 40,
-    principal: { type: 'legal_person', identity: { legal_name: 'Oakleaf Bakery LLC', jurisdiction: 'US-NY', registration_number: 'NY-4410982' }, assurance: 'high', method: 'KYB: registry extract' },
+    principal: { type: 'legal_person', identity: { legal_name: 'Oakleaf Bakery LLC', jurisdiction: 'US-NY', registration_number: 'NY-4410982' }, assurance: 'high', method: 'KYB: business register extract' },
     routine: ['supplies', 'bank', 'trade', 'base'],
   },
   {
     id: 'wren', name: 'Wren-runner', body: '#c9d7ff', home: 'lab', disclose: true, provenance: true, budget: 300, wallet: 40,
-    principal: { type: 'legal_person', identity: { legal_name: 'Wren Labs Inc.', jurisdiction: 'US-MA', registration_number: 'MA-0918842' }, assurance: 'high', method: 'KYB: registry extract' },
+    principal: { type: 'legal_person', identity: { legal_name: 'Wren Labs Inc.', jurisdiction: 'US-MA', registration_number: 'MA-0918842' }, assurance: 'high', method: 'KYB: business register extract' },
     routine: ['forge-small', 'trade', 'forge-large', 'base'],
   },
   {
-    id: 'rook', name: 'Rook-skiff', body: '#a8e6cf', home: 'rook', registry: 'harbor', budget: 80, wallet: 30,
+    id: 'rook', name: 'Rook-skiff', body: '#a8e6cf', home: 'rook', directory: 'harbor', budget: 80, wallet: 30,
     principal: { type: 'legal_person', identity: { legal_name: 'Rook & Daughters SARL', jurisdiction: 'FR', registration_number: 'FR-552100' }, assurance: 'high', method: 'KYB: registre du commerce' },
-    routine: ['cafe', 'toll', 'shop', 'toll', 'base'],
+    routine: ['cafe', 'ferry', 'fish', 'toll', 'base'],
   },
 ];
 
@@ -105,7 +107,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   /** A resident's agent answers a place's question from its principal's record: an allowance, the facts asked for. */
   const answerFor = (npc) => npc.answer ?? (keeper && npc.principal && npc.agent ? (ask, { action, params }) => {
     const pl = places.places[ask.placeId];
-    const got = fetchExtras({ keeper, principalId: npc.principal.id, agent: npc.agent, place: pl.name, aud: pl.rp.id, action, params, want: ask.want });
+    const got = fetchExtras({ keeper, principalId: npc.principal.id, agent: npc.agent, place: pl.name, aud: pl.counterparty.id, action, params, want: ask.want });
     return got.refused ? null : { extras: got };
   } : undefined);
 
@@ -125,11 +127,11 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   // ---- Residents ------------------------------------------------------------
 
   async function makeAccountable(def) {
-    // A registry by name (another federation's, for a visitor), or the town's: Registry A, or B in the Harbor.
-    const registry = def.registryId ? world.trust.registry(def.registryId) : def.registry === 'harbor' ? world.regB : world.regA;
-    if (!registry) return null;
-    const keeperOf = (role) => world.keeperFor(registry.id, role);
-    const principal = await world.verifiedPrincipal({ ...def.principal, registry });
+    // A directory by name (another federation's, for a visitor), or the town's: Directory A, or B in the Harbor.
+    const directory = def.directoryId ? world.trust.directory(def.directoryId) : def.directory === 'harbor' ? world.dirB : world.dirA;
+    if (!directory) return null;
+    const keeperOf = (role) => world.recordsServiceFor(directory.id, role);
+    const principal = await world.verifiedPrincipal({ ...def.principal, directory });
     const agent = world.agent(def.name);
     let provenanceId = null;
     if (def.provenance && keeperOf('provenance')) {
@@ -138,12 +140,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         incidentResponse: { contact: 'security@example.test' },
       }));
     }
-    await principal.registerAgent(agent, { label: def.name, records: world.recordsFor(registry.id, provenanceId) });
+    await principal.registerAgent(agent, { label: def.name, records: world.recordsFor(directory.id, provenanceId) });
     if (keeperOf('authorization')) {
       await principal.grant(agent, {
-        rk: keeperOf('authorization'),
+        rs: keeperOf('authorization'),
         permissions: [
-          { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden', 'health'] } },
+          { action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food', 'garden', 'health', 'travel'] } },
           { action: 'payments.authorize', constraints: { max_amount: money(def.budget) } },
           { action: 'compute.provision', constraints: { max_units: { value: 64, unit: 'gpu_hours' } } },
           { action: 'trading.order', constraints: { max_amount: money(def.budget) } },
@@ -153,7 +155,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       });
     }
     if (def.disclose) {
-      await principal.setDisclosurePolicy({ identity: { audiences: Object.values(places.places).map((p) => p.rp.id), claims: ['legal_name'] } });
+      await principal.setDisclosurePolicy({ identity: { audiences: Object.values(places.places).map((p) => p.counterparty.id), claims: ['legal_name'] } });
     }
     // Proposed: a record at the Records Office, so its agent can answer what places ask.
     keeper?.setRecord(principal.id, signRecord(principal, normalizeRecord({
@@ -165,7 +167,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   async function letIn(npc, account) {
     const auth = new SoftwareAuthenticator();
-    const accounts = places.hearth.rp.accounts;
+    const accounts = places.hearth.counterparty.accounts;
     if (!accounts.get(account)?.passkeys.size) {
       const o = accounts.passkeyRegistrationOptions(account);
       accounts.registerPasskey(account, auth.create(o.publicKey, origin));
@@ -225,6 +227,13 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         await walk(npc, 'cafe');
         return act(npc, 'cafe', 'commerce.purchase', places.purchase('cafe', pick(PLACE_DEFS.cafe.items.slice(0, 2))));
       }
+      case 'ferry': {
+        await walk(npc, 'ferry');
+        return act(npc, 'ferry', 'commerce.purchase', places.purchase('ferry', PLACE_DEFS.ferry.items.find((i) => !i.event)));
+      }
+      case 'fish':
+      case 'chandler':
+        return buyAt(task);
       case 'toll': {
         await walk(npc, 'toll');
         return act(npc, 'toll', 'payments.authorize', { payee: 'Bridge Toll', amount: money(0.5) });
@@ -282,37 +291,37 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   }
 
   /**
-   * A visitor from another federation: registered at its registry, its grant kept there. Places that don't trust
+   * A visitor from another federation: registered at its directory, its grant kept there. Places that don't trust
    * that federation turn it away, and say why.
    */
   async function visitorFrom(fed) {
-    const registry = fed.view.registries[0];
-    if (!registry || !world.kyc || !fed.view.authority(world.kyc.id, 'verifier') || npcs.has(`visitor-${fed.key}`)) return null;
+    const directory = fed.view.directories[0];
+    if (!directory || !world.kyc || !fed.view.authority(world.kyc.id, 'verifier') || npcs.has(`visitor-${fed.key}`)) return null;
     const npc = await addResident({
-      id: `visitor-${fed.key}`, name: `Fennel (from ${fed.name.replace(/ Federation$/, '')})`, body: '#c9e4c5', budget: 40, wallet: 20, registryId: registry.id,
+      id: `visitor-${fed.key}`, name: `Fennel (from ${fed.name.replace(/ Federation$/, '')})`, body: '#c9e4c5', budget: 40, wallet: 20, directoryId: directory.id,
       principal: { type: 'natural_person', identity: { legal_name: 'Fennel Ward', jurisdiction: 'US-OR' }, assurance: 'IAL2', method: 'government ID + liveness check' },
       routine: ['shop', 'grocer', 'square', 'apothecary', 'fair', 'shop'],
     }, { from: placeFront(map, 'eastGate') });
-    if (npc) emit({ kind: 'people', tone: 'info', text: `${npc.name} arrived: an agent registered at ${registry.name}, in ${fed.name}. Places that don't trust that federation will turn it away.` });
+    if (npc) emit({ kind: 'people', tone: 'info', text: `${npc.name} arrived: an agent registered at ${directory.name}, in ${fed.name}. Places that don't trust that federation will turn it away.` });
     return npc;
   }
 
   // ---- Agents that came with their own badge ------------------------------------
 
   /**
-   * Show an agent that came with its own badge at the place it went to. The town knows only the badge number
+   * Show an agent that came with its own badge at the place it went to. The town knows only the ID
    * that place saw, which no other place sees, so a body stands for one agent at one place. It leaves after
    * a while without a request.
    */
-  function guest({ placeId, ppid, from, decision }) {
+  function guest({ placeId, aaf_id, from, decision }) {
     const now = Date.now();
     const guests = [...npcs.values()].filter((n) => n.kind === 'guest');
     for (const n of guests) if (n.leaveAt < now) npcs.delete(n.id);
-    const id = `guest-${placeId}-${ppid.slice(-10)}`;
+    const id = `guest-${placeId}-${aaf_id.slice(-10)}`;
     let npc = npcs.get(id);
     if (!npc) {
       if (guests.filter((n) => npcs.has(n.id)).length >= MAX_GUESTS) npcs.delete(guests.find((n) => npcs.has(n.id)).id);
-      const name = `${from ? `Visitor from ${from.replace(/ Registry$/, '')}` : 'A visitor'} (…${ppid.slice(-6)})`;
+      const name = `${from ? `Visitor from ${from.replace(/ (Directory|Directory)$/, '')}` : 'A visitor'} (…${aaf_id.slice(-6)})`;
       npc = spawn({ id, name, kind: 'guest', look: LOOKS.guest, placeId, from });
       npc.pos = front(placeId, npc);
     }
@@ -360,7 +369,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       const where = rounds[i % rounds.length];
       await walk(npc, where, 65);
       if (where === 'bank') {
-        const accounts = places.places.bank.rp.accounts;
+        const accounts = places.places.bank.counterparty.accounts;
         const params = { payee: 'the water bill', amount: money(30), account: npc.account };
         const req = accounts.openRequest(npc.account, 'approve-action', { actor: 'human', action: 'payments.authorize', params_digest: digestOf(params), summary: 'Pay the water bill' });
         accounts.approve(req.request_id, auth.get(accounts.approvalOptions(req.request_id).publicKey, origin));
@@ -388,23 +397,23 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     const npc = spawn({ id: 'ivy', name: 'Ivy (new in town)', kind: 'newcomer', look: { body: '#f1e3ff', bulb: '#cfc6b8', badge: 'none' }, pos: placeFront(map, 'eastGate'), speed: 80 });
     (async () => {
       await walk(npc, 'townhall');
-      const principal = await world.enrolledPrincipal({ ...def.principal, registry: world.regA });
-      emit({ kind: 'registry', actor: 'Ivy Quinn', place: world.regA.name, placeId: 'townhall', tone: 'info', text: `Ivy Quinn enrolled at ${world.regA.name}; VerityCheck is checking her ID (the slow step, done once)` });
+      const principal = await world.enrolledPrincipal({ ...def.principal, directory: world.dirA });
+      emit({ kind: 'directory', actor: 'Ivy Quinn', place: world.dirA.name, placeId: 'townhall', tone: 'info', text: `Ivy Quinn enrolled at ${world.dirA.name}; VerityCheck is checking her ID (the slow step, done once)` });
       await sleep(4000);
       await world.verify(principal, { assurance: def.principal.assurance, method: def.principal.method });
       const agent = world.agent(def.name);
-      const reg = await principal.registerAgent(agent, { label: def.name, records: world.records() });
-      emit({ kind: 'registry', actor: 'Ivy Quinn', place: world.regA.name, placeId: 'townhall', tone: 'ok', text: `Ivy Quinn verified at IAL2; her agent Wisp registered in ${reg.issuance_ms} ms (the fast step)` });
+      const dir = await principal.registerAgent(agent, { label: def.name, records: world.records() });
+      emit({ kind: 'directory', actor: 'Ivy Quinn', place: world.dirA.name, placeId: 'townhall', tone: 'ok', text: `Ivy Quinn verified at IAL2; her agent Wisp registered in ${dir.issuance_ms} ms (the fast step)` });
       Object.assign(npc, { name: def.name, kind: 'resident', look: LOOKS.resident(def.body), agent, principal, budget: def.budget, home: def.home, account: def.account, worldIdentity: worldid.enroll('orb'), wallet: npc.id });
       x402.wallet(npc.id, def.wallet);
       await walk(npc, 'orb');
       emit({ kind: 'info', actor: 'Wisp', place: 'Orb Kiosk', placeId: 'orb', tone: 'info', text: 'Ivy got a World ID at the Orb (simulated): proof she is a unique human, without her name' });
       await walk(npc, 'records');
       await principal.grant(agent, {
-        rk: world.authRk,
+        rs: world.authRs,
         permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(def.budget), categories: ['books', 'home', 'food'] } }, { action: 'payments.authorize', constraints: { max_amount: money(def.budget) } }, { action: 'home.*' }],
       });
-      emit({ kind: 'records', actor: 'Wisp', place: 'Records Office', placeId: 'records', tone: 'ok', text: `Ivy signed a grant for Wisp at ${world.authRk.name.replace(/ \(.*\)/, '')}: purchases up to $${def.budget}` });
+      emit({ kind: 'records', actor: 'Wisp', place: 'Records Office', placeId: 'records', tone: 'ok', text: `Ivy signed a grant for Wisp at ${world.authRs.name.replace(/ \(.*\)/, '')}: purchases up to $${def.budget}` });
       await walk(npc, def.home);
       await letIn(npc, def.account);
       residentLife(npc, def.routine);
@@ -418,14 +427,14 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   let gloamReady = null; // prepared once, however many cues arrive while it's under way
   async function prepareSwarm() {
     const principal = await world.verifiedPrincipal({
-      type: 'legal_person', identity: { legal_name: 'Gloam Holdings Ltd', jurisdiction: 'US-DE', registration_number: 'DE-7710455' }, assurance: 'high', method: 'KYB: registry extract', registry: world.regA,
+      type: 'legal_person', identity: { legal_name: 'Gloam Holdings Ltd', jurisdiction: 'US-DE', registration_number: 'DE-7710455' }, assurance: 'high', method: 'KYB: business register extract', directory: world.dirA,
     });
-    const root = world.agent('runner-hub');
-    await principal.registerAgent(root, { label: 'runner-hub', records: world.records(), lineage: { max_depth: 1 } });
-    await principal.grant(root, {
-      rk: world.authRk, permissions: [{ action: 'benchmark.run' }, { action: 'trading.order', constraints: { max_amount: money(400) } }], delegation: { allowed: true, max_depth: 1 },
+    const hub = world.agent('runner-hub');
+    await principal.registerAgent(hub, { label: 'runner-hub', records: world.records(), lineage: { max_depth: 1 } });
+    await principal.grant(hub, {
+      rs: world.authRs, permissions: [{ action: 'benchmark.run' }, { action: 'trading.order', constraints: { max_amount: money(400) } }], delegation: { allowed: true, max_depth: 1 },
     });
-    gloam = { principal, root, running: false };
+    gloam = { principal, hub, running: false };
   }
 
   async function swarm() {
@@ -433,23 +442,23 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     if (gloam.running) return { ok: false, text: 'The swarm is already loose.' };
     gloam.running = true;
     const mill = placeFront(map, 'millGate');
-    const rootNpc = spawn({ id: `runner-hub-${Date.now()}`, name: 'runner-hub', kind: 'swarm', look: { ...LOOKS.swarm, scale: 1 }, agent: gloam.root, pos: mill, speed: 0 });
+    const hubNpc = spawn({ id: `runner-hub-${Date.now()}`, name: 'runner-hub', kind: 'swarm', look: { ...LOOKS.swarm, scale: 1 }, agent: gloam.hub, pos: mill, speed: 0 });
     const children = [];
     for (let i = 1; i <= 8; i++) {
       const child = world.agent(`runner-${i}`);
       try {
-        await gloam.root.registerSubagent(child, { label: `runner-${i}`, records: world.records() });
+        await gloam.hub.registerSubagent(child, { label: `runner-${i}`, records: world.records() });
       } catch (err) {
-        emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'townhall', tone: 'bad', text: `${world.regA.name} refused a sub-agent: ${err.message}` });
+        emit({ kind: 'directory', actor: 'runner-hub', place: world.dirA.name, placeId: 'townhall', tone: 'bad', text: `${world.dirA.name} refused a sub-agent: ${err.message}` });
         continue;
       }
       // Each one may trade a little: together they can move a market.
-      await gloam.root.delegate(child, { permissions: [{ action: 'trading.order', constraints: { max_amount: money(150) } }], validForDays: 1 }).catch(() => {});
+      await gloam.hub.delegate(child, { permissions: [{ action: 'trading.order', constraints: { max_amount: money(150) } }], validForDays: 1 }).catch(() => {});
       const npc = spawn({ id: `runner-${i}-${Date.now()}`, name: `runner-${i}`, kind: 'swarm', look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `runner-${i}` });
       x402.wallet(npc.wallet, 20);
       children.push(npc);
     }
-    emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'warn', text: `runner-hub registered ${children.length} sub-agents at the Old Mill. Breadth is not limited, and each one answers to the same verified principal, whose name the town doesn't know` });
+    emit({ kind: 'directory', actor: 'runner-hub', place: world.dirA.name, placeId: 'mill', tone: 'warn', text: `runner-hub registered ${children.length} sub-agents at the Old Mill. Breadth is not limited, and each one answers to the same verified principal, whose name the town doesn't know` });
     let refusedDeeper = 0;
     for (const c of children) {
       try {
@@ -458,7 +467,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
         if (err.code === 'lineage_depth_exceeded') refusedDeeper++;
       }
     }
-    if (refusedDeeper) emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `${world.regA.name} refused ${refusedDeeper} attempts to spawn a level deeper: runner-hub's lineage depth budget is 1` });
+    if (refusedDeeper) emit({ kind: 'directory', actor: 'runner-hub', place: world.dirA.name, placeId: 'mill', tone: 'ok', text: `${world.dirA.name} refused ${refusedDeeper} attempts to spawn a level deeper: runner-hub's lineage depth budget is 1` });
 
     const bots = [];
     for (let i = 1; i <= 6; i++) {
@@ -489,16 +498,16 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       }
     };
 
-    // Gloam Holdings is told about each incident; after three, it revokes the root.
+    // Gloam Holdings is told about each incident; after three, it revokes the hub.
     const watch = (async () => {
       const seen = (await gloam.principal.notifications()).length;
       while (gloam.running && !stopped) {
         await sleep(1500);
         const incidents = (await gloam.principal.notifications()).slice(seen).filter((n) => n.kind === 'incident');
         if (incidents.length >= 3) {
-          const res = await gloam.principal.revokeAgent(gloam.root, 'compromised');
-          emit({ kind: 'registry', actor: 'runner-hub', place: world.regA.name, placeId: 'mill', tone: 'ok', text: `Whoever answers for runner-hub got ${incidents.length} incident reports, relayed by ${world.regA.name}, and revoked runner-hub. The revocation cascaded to ${res.cascades_to} sub-agents at once. The town still doesn't know who they are` });
-          for (const n of [rootNpc, ...children]) n.status = 'revoked';
+          const res = await gloam.principal.revokeAgent(gloam.hub, 'compromised');
+          emit({ kind: 'directory', actor: 'runner-hub', place: world.dirA.name, placeId: 'mill', tone: 'ok', text: `Whoever answers for runner-hub got ${incidents.length} incident reports, relayed by ${world.dirA.name}, and revoked runner-hub. The revocation cascaded to ${res.cascades_to} sub-agents at once. The town still doesn't know who they are` });
+          for (const n of [hubNpc, ...children]) n.status = 'revoked';
           return;
         }
       }
@@ -506,7 +515,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
     await Promise.all([...children.map((c) => raid(c, 6)), ...bots.map((b) => raid(b, 4)), watch.catch(() => {})]);
     // Revoked swarm agents, and bots that have done their rounds, slink back to the mill.
-    await Promise.all([...children, ...bots, rootNpc].map(async (n) => {
+    await Promise.all([...children, ...bots, hubNpc].map(async (n) => {
       n.status = n.status === 'revoked' ? 'revoked' : 'leaving';
       if (n.speed) await walk(n, 'millGate', 80);
       n.status = 'gone';
@@ -517,13 +526,87 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
     emit({ kind: 'director', tone: 'info', text: 'The swarm has gone back to the Old Mill' });
   }
 
+  // ---- Ticket bots at the ferry ---------------------------------------------------
+  // One person in the Harbor registers a crew of sub-agents at Directory B and sends them to buy up the Lantern
+  // Regatta, two seats each: within the limit for every badge, far over it for her. Each shows the ferry a badge of
+  // its own, so the ferry sees strangers; a court sees one principal. Then they resell the seats at a markup, which
+  // is what the Harbor's law forbids. In the Harbor a published judgment leaves out an individual's name.
+
+  let tout = null;
+  async function scalpers() {
+    tout ??= {
+      principal: await world.verifiedPrincipal({
+        type: 'natural_person', identity: { legal_name: 'Pim Brouwer', jurisdiction: 'NL' }, assurance: 'IAL2', method: 'government ID + liveness check', directory: world.dirB,
+      }),
+      runs: 0,
+      running: false,
+    };
+    if (tout.running) return { ok: false, text: 'The ticket bots are already at work.' };
+    tout.running = true;
+    try {
+      const dir = world.dirB;
+      const keeper = world.recordsServiceFor(dir.id, 'authorization');
+      // A fresh hub each time: a court may have revoked the last one. A banned principal can't register one at all.
+      const hub = world.agent(`seat-hub-${++tout.runs}`);
+      try {
+        await tout.principal.registerAgent(hub, { label: 'seat-hub', records: world.recordsFor(dir.id), lineage: { max_depth: 1 } });
+        await tout.principal.grant(hub, { rs: keeper, permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(60), categories: ['travel'] } }], delegation: { allowed: true, max_depth: 1 } });
+      } catch (err) {
+        emit({ kind: 'directory', actor: 'seat-hub', place: dir.name, placeId: 'harbor', tone: 'ok', text: `${dir.name} refused to register seat-hub: ${err.message}` });
+        return { ok: false, text: err.message };
+      }
+      const quay = placeFront(map, 'quayEnd');
+      const crew = [];
+      for (let i = 1; i <= 6; i++) {
+        const child = world.agent(`seat-${i}-${tout.runs}`);
+        try {
+          await hub.registerSubagent(child, { label: `seat-${i}`, records: world.recordsFor(dir.id) });
+        } catch (err) {
+          continue;
+        }
+        await hub.delegate(child, { permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(12), categories: ['travel'] } }], validForDays: 1 }).catch(() => {});
+        const npc = spawn({ id: `seat-${i}-${Date.now()}`, name: `seat-${i}`, kind: 'tout', rogue: true, look: LOOKS.tout, agent: child, pos: { x: quay.x + between(-24, 24), y: quay.y + between(-6, 10) }, speed: 115, wallet: `seat-${i}` });
+        x402.wallet(npc.wallet, 30);
+        crew.push(npc);
+      }
+      emit({ kind: 'directory', actor: 'seat-hub', place: dir.name, placeId: 'harbor', tone: 'warn', text: `seat-hub registered ${crew.length} sub-agents at the end of the quay. Each will show the ferry a badge of its own; all of them answer to one verified person, whose name the town doesn't know` });
+      const seat = PLACE_DEFS.ferry.items.find((i) => i.event);
+      const bought = [];
+      await Promise.all(crew.map(async (npc) => {
+        await walk(npc, 'ferry');
+        for (let k = 0; k < PLACE_DEFS.ferry.perPerson && alive(npc); k++) {
+          const card = await act(npc, 'ferry', 'commerce.purchase', places.purchase('ferry', seat));
+          if (card.decision === 'allow' && card.result?.item && card.aaf_id && !bought.some((b) => b.aaf_id === card.aaf_id)) bought.push({ aaf_id: card.aaf_id, directory: card.directory, sealed_ref: card.sealed_ref });
+          await sleep(between(300, 900));
+        }
+      }));
+      // Then they sell the seats again, outside the office, at three times the price.
+      if (bought.length) {
+        for (const npc of crew) if (alive(npc)) npc.say = { text: `Regatta seats, $${seat.price * 3}!`, at: Date.now() };
+        places.reportResale({ by: 'seat-hub’s agents', price: seat.price * 3, evidence: bought });
+      }
+      await sleep(6000);
+      await Promise.all(crew.map(async (n) => {
+        n.status = n.status === 'revoked' ? 'revoked' : 'leaving';
+        await walk(n, 'quayEnd', 80);
+        n.status = 'gone';
+        await sleep(2500);
+        npcs.delete(n.id);
+      }));
+      emit({ kind: 'director', tone: 'info', text: 'The ticket bots have gone back to the end of the quay' });
+      return { ok: true };
+    } finally {
+      tout.running = false;
+    }
+  }
+
   // ---- The player's sub-agents ---------------------------------------------------
 
   /** A player's sub-agent. It starts where it was spawned (beside the agent that spawned it) and stays there until it's sent somewhere. */
-  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, registry, owner, unregistered = false, pos = { x: 0, y: 0 } }) {
+  function addHelper({ id, name, agent, worldIdentity, wallet, ephemeralUntil, directory, owner, unregistered = false, pos = { x: 0, y: 0 } }) {
     // Unregistered, it has no badge and its light is dim: nobody vouches for it.
     const look = unregistered ? { ...LOOKS.helper, bulb: '#cfc6b8', glow: false, badge: 'none' } : LOOKS.helper;
-    const npc = spawn({ id, name, kind: 'helper', look, agent, worldIdentity, wallet, follow: false, owner, ephemeralUntil, registry, speed: 120, pos: { ...pos } });
+    const npc = spawn({ id, name, kind: 'helper', look, agent, worldIdentity, wallet, follow: false, owner, ephemeralUntil, directory, speed: 120, pos: { ...pos } });
     x402.wallet(wallet, 5);
     return npc;
   }
@@ -558,7 +641,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
   }
 
   return {
-    map, npcs, snapshot, swarm, newcomer, addHelper, errand, act, byFor, visitorFrom, guest,
+    map, npcs, snapshot, swarm, scalpers, newcomer, addHelper, errand, act, byFor, visitorFrom, guest,
     /** Walk someone to a place (by id) or a point, on the shared routes; they stay there. */
     walkTo: (npc, target) => {
       npc.follow = false;
@@ -582,7 +665,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       x402.wallet('tom', 60);
       const auth = new SoftwareAuthenticator();
       places.signup('bank', 'tom-bank', 'Tom Ashby');
-      places.places.bank.rp.accounts.registerPasskey('tom-bank', auth.create(places.places.bank.rp.accounts.passkeyRegistrationOptions('tom-bank').publicKey, origin));
+      places.places.bank.counterparty.accounts.registerPasskey('tom-bank', auth.create(places.places.bank.counterparty.accounts.passkeyRegistrationOptions('tom-bank').publicKey, origin));
       personLife(tom, auth);
       (gloamReady ??= prepareSwarm()).catch((err) => emit({ kind: 'info', tone: 'warn', text: `The swarm could not be prepared: ${err.message}` }));
     },

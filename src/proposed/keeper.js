@@ -1,7 +1,7 @@
 // PROPOSED EXTENSION to the Reference Profile, prototyped in AgentTown.
 // Nothing here is part of aaf-reference; see docs/PROPOSED.md.
 //
-// The principal's record at the authorization record keeper (in town, the
+// The principal's record at the authorization records service (in town, the
 // Records Office). The framework's grant says what an agent may do in one
 // request; the record says the rest, and is extensible:
 //   spending  per purchase, per day in total, purchases per day, kinds of
@@ -25,11 +25,11 @@
 // limits no single place can enforce.
 import { generateSigningKey, signJws, verifyJws, decodeJws, digestOf, randomId, thumbprint, publicOf, nowSeconds } from 'aaf-reference/src/lib/crypto.js';
 import { MerkleLog } from 'aaf-reference/src/lib/log.js';
-import { createAccounts } from 'aaf-reference/src/rp/accounts.js';
+import { createAccounts } from 'aaf-reference/src/counterparty/accounts.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 
 export const TYP = { record: 'aaf-principal-record+jwt', allowance: 'aaf-allowance+jwt', statement: 'aaf-statement+jwt', request: 'aaf-allowance-request+jwt' };
-export const CATEGORIES = ['books', 'home', 'food', 'health', 'garden'];
+export const CATEGORIES = ['books', 'home', 'food', 'health', 'garden', 'travel'];
 export const SHARABLE = {
   name: 'your name',
   age_over_18: 'proof you are over 18',
@@ -43,7 +43,7 @@ const REGISTER_SHOWN = 40;
 
 export function defaultRecord({ perPurchase = 50 } = {}) {
   return {
-    spending: { per_purchase: perPurchase, per_day: perPurchase * 3, purchases_per_day: 8, categories: ['books', 'home', 'food', 'health'], approve_above: null },
+    spending: { per_purchase: perPurchase, per_day: perPurchase * 3, purchases_per_day: 8, categories: ['books', 'home', 'food', 'health', 'travel'], approve_above: null },
     sharing: {
       name: { always: [], otherwise: 'ask' },
       age_over_18: { always: [], otherwise: 'ask' },

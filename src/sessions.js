@@ -47,11 +47,11 @@ const named = (table, key) => typeof key === 'string' && Object.hasOwn(table, ke
 
 export const ROLES = {
   agent: { icon: '🧍', label: 'A resident', blurb: 'You walk the town yourself. Start an agent, registered or not, and play yourself, it, or its sub-agents. Shop, trade, send it on errands. Play it straight, or try to get away with something.' },
-  shopkeeper: { icon: '🏪', label: 'A shopkeeper', blurb: 'Run a shop, the bank, the exchange or the toll: decide which registries you trust and what you ask for, and see exactly what each customer proves.' },
+  shopkeeper: { icon: '🏪', label: 'A shopkeeper', blurb: 'Run a shop, the bank, the exchange or the toll: decide which directories you trust and what you ask for, and see exactly what each customer proves.' },
   homeowner: { icon: '🏡', label: 'A homeowner', blurb: 'Put a passkey on your door and decide, on your phone, which agents come in.' },
   police: { icon: '👮', label: 'Police', blurb: 'Investigate fraud and rogue agents from the cases places report, and take them to court.' },
-  judge: { icon: '⚖️', label: 'The judge', blurb: 'Rule on petitions: order a registry to identify a principal, delete rogue agents, ban a principal.' },
-  council: { icon: '🏛️', label: 'Town council', blurb: 'Make the law for the town or the Harbor: anti-money-laundering, consumer protection, privacy. See what places must ask for change, while the registries stay exactly as they are.' },
+  judge: { icon: '⚖️', label: 'The judge', blurb: 'Rule on petitions: order a directory to identify a principal, delete rogue agents, ban a principal.' },
+  council: { icon: '🏛️', label: 'Town council', blurb: 'Make the law for the town or the Harbor: anti-money-laundering, consumer protection, privacy. See what places must ask for change, while the directories stay exactly as they are.' },
 };
 
 
@@ -61,9 +61,9 @@ export const ROLES = {
  */
 export function createSessions({ world, places, sim, worldid, x402, emit, keys, justice, ledger, origin, timeScale = 1, limits = null, restWhenEmpty = false }) {
   const sessions = new Map(); // token -> session
-  const starting = new Set(); // sessions still being set up (an agent is enrolled at its registry)
+  const starting = new Set(); // sessions still being set up (an agent is enrolled at its directory)
   const byId = new Map(); // public id -> session
-  const accounts = places.hearth.rp.accounts;
+  const accounts = places.hearth.counterparty.accounts;
   const challenges = createChallenges({ emit });
 
   const holder = (claim) => [...sessions.values()].find((s) => s.claim === claim) ?? null;
@@ -139,7 +139,12 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
    */
   async function join({ role, name, claim, headless = false }, { from = 'unknown', director = true } = {}) {
     if (!named(ROLES, role)) throw new HttpError(400, 'bad_role', 'Pick a role.');
-    const display = String(name ?? '').trim().slice(0, 30) || 'A Resident';
+    // A directory keeps one record per verified identity, and here a name is the identity: residents who give
+    // none get one of their own, so they don't collide at Town Hall.
+    const given = String(name ?? '').trim().slice(0, 30);
+    const inUse = new Set([...sessions.values()].map((x) => x.name));
+    let display = given || 'A Resident';
+    for (let i = 2; !given && inUse.has(display); i++) display = `A Resident ${i}`;
     if (role === 'shopkeeper' && (!named(PLACE_DEFS, claim) || holder(claim))) throw new HttpError(409, 'taken', 'Pick a place nobody else is running.');
     if (role === 'homeowner' && (!named(HOUSES, claim) || holder(claim))) throw new HttpError(409, 'taken', 'Pick a house nobody else owns.');
     if (role === 'judge' && ofRole('judge').length) throw new HttpError(409, 'taken', 'The town already has a judge.');
@@ -593,9 +598,9 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   }
 
   const eventBySeq = (seq) => ledger.items.find((e) => e.seq === Number(seq));
-  /** A shopkeeper is the relying party, so sees its own customers' cards in full; everyone else sees what's public. */
+  /** A shopkeeper is the counterparty, so sees its own customers' cards in full; everyone else sees what's public. */
   const cardFor = (s, e) => (e.card && !(e.owner === s?.id) && !(s?.role === 'shopkeeper' && s.claim === e.placeId) ? places.publicCard(e.card) : e.card);
-  const evidenceOf = (card) => ({ ppid: card.ppid, registry: card.registry, sealed_ref: card.sealed_ref, rp: places.places[card.placeId]?.rp.id, place: card.place });
+  const evidenceOf = (card) => ({ aaf_id: card.aaf_id, directory: card.directory, sealed_ref: card.sealed_ref, counterparty: places.places[card.placeId]?.counterparty.id, place: card.place });
   const summarize = (e, s) => ({ seq: e.seq, at: e.at, text: e.text, tone: e.tone, decision: e.decision, classification: e.classification, badge: e.badge ?? null, card: cardFor(s, e) });
   const lawView = () => ({
     ...places.law(),
@@ -631,7 +636,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         adoptions: Object.entries(ADOPTION).map(([id, a]) => ({ id, ...a })),
         federations: places.federations(),
         peoples: Object.entries(PEOPLE).map(([id, a]) => ({ id, ...a })),
-        registries: world.registries.map((r) => ({ id: r.id, name: r.name })),
+        directories: world.directories.map((r) => ({ id: r.id, name: r.name })),
         customers: ledger.items.filter((e) => e.kind === 'check' && e.placeId === s.claim).slice(-25).reverse().map((e) => summarize(e, s)),
         stats: places.scoreboard().rows.find((r) => r.id === s.claim) ?? null,
         market: s.claim === 'exchange' ? places.market() : null,
@@ -653,7 +658,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   /** Tell the town what a change did: the rails stay the same, places' questions change. */
   const announce = (s, what, changed, placeId) => emit({
     kind: 'policy', tone: 'info', owner: s?.id ?? null, placeId: placeId ?? null,
-    text: `${what}. Registries and record keepers unchanged; ${changed.length ? `${changed.length} place${changed.length === 1 ? '' : 's'} now ask${changed.length === 1 ? 's' : ''} for something different: ${changed.join(', ')}` : 'no place asks for anything different'}`,
+    text: `${what}. Directories and records services unchanged; ${changed.length ? `${changed.length} place${changed.length === 1 ? '' : 's'} now ask${changed.length === 1 ? 's' : ''} for something different: ${changed.join(', ')}` : 'no place asks for anything different'}`,
   });
 
   // ---- What each role can do ------------------------------------------------------
@@ -674,8 +679,8 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         const e = eventBySeq(seq);
         if (!e?.card || e.placeId !== s.claim) throw new HttpError(404, 'no_visit', 'That was not a visit to your place.');
         await places.report(s.claim, e.card, `${PLACE_DEFS[s.claim].name} reports misconduct by this agent`);
-        emit({ kind: 'incident', place: e.card.place, placeId: s.claim, tone: 'warn', owner: s.id, text: `${s.name} reported ${e.card.actor} to the registry that issued its badge; the registry tells its principal` });
-        return { type: 'service', place: e.card.place, title: 'Reported', decision: 'allow', story: `The registry that issued ${e.card.actor}'s badge will tell whoever stands behind it. You still don't learn who that is.` };
+        emit({ kind: 'incident', place: e.card.place, placeId: s.claim, tone: 'warn', owner: s.id, text: `${s.name} reported ${e.card.actor} to the directory that issued its badge; the directory tells its principal` });
+        return { type: 'service', place: e.card.place, title: 'Reported', decision: 'allow', story: `The directory that issued ${e.card.actor}'s badge will tell whoever stands behind it. You still don't learn who that is.` };
       },
     },
     homeowner: {
@@ -689,13 +694,13 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         const e = eventBySeq(seq);
         if (!e?.card || e.card.account !== s.claim) throw new HttpError(404, 'no_visit', 'That was not a visit to your door.');
         await places.report('hearth', e.card, `A homeowner reports this agent's visit to ${HOUSES[s.claim]}`);
-        return { type: 'service', place: HOUSES[s.claim], title: 'Reported', decision: 'allow', story: `The registry that issued ${e.card.actor}'s badge will tell whoever stands behind it.` };
+        return { type: 'service', place: HOUSES[s.claim], title: 'Reported', decision: 'allow', story: `The directory that issued ${e.card.actor}'s badge will tell whoever stands behind it.` };
       },
     },
     police: {
       'case.open': (s, { seq }) => {
         const e = eventBySeq(seq);
-        if (!e?.card?.ppid) throw new HttpError(409, 'no_badge', 'There is no badge in that record to investigate.');
+        if (!e?.card?.aaf_id) throw new HttpError(409, 'no_badge', 'There is no badge in that record to investigate.');
         const c = justice.fileCase({ kind: 'investigation', placeId: e.card.placeId, title: `Investigation: ${e.card.actor} at ${e.card.place}`, evidence: [evidenceOf(e.card)], by: s.name, owner: s.id });
         return { type: 'service', place: 'Police Station', title: `Case ${c.id}`, decision: 'allow', story: `Case **${c.id}** is open. Ask the court to identify who stands behind the badge.` };
       },
@@ -709,7 +714,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
         if (!REGIMES[regime]) throw new HttpError(404, 'unknown_regime', `no regime ${regime}`);
         const res = places.setLaw(jurisdiction, regime, Boolean(on));
         announce(s, `${s.name} ${on ? 'switched on' : 'repealed'} ${REGIMES[regime].name} in ${res.jurisdiction}`, res.changed);
-        return { type: 'service', place: 'Town Council', keeper: { face: '🏛️', who: 'Town Council' }, title: on ? `${REGIMES[regime].name}: in force` : `${REGIMES[regime].name}: repealed`, decision: 'allow', story: `${REGIMES[regime].blurb}\n\n**Registries, record keepers and badges: unchanged.** ${res.changed.length ? `${res.changed.length} place${res.changed.length === 1 ? '' : 's'} now ask${res.changed.length === 1 ? 's' : ''} for something different: ${res.changed.join(', ')}.` : 'No place asks for anything different.'}`, changed: res.changed };
+        return { type: 'service', place: 'Town Council', keeper: { face: '🏛️', who: 'Town Council' }, title: on ? `${REGIMES[regime].name}: in force` : `${REGIMES[regime].name}: repealed`, decision: 'allow', story: `${REGIMES[regime].blurb}\n\n**Directories, records services and badges: unchanged.** ${res.changed.length ? `${res.changed.length} place${res.changed.length === 1 ? '' : 's'} now ask${res.changed.length === 1 ? 's' : ''} for something different: ${res.changed.join(', ')}.` : 'No place asks for anything different.'}`, changed: res.changed };
       },
       'adoption.preset': (s, { preset }) => {
         const res = places.presetAdoption(preset);
@@ -720,7 +725,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     judge: {
       'petition.rule': async (s, { petition, grant }) => {
         const p = await justice.rule(petition, { grant: Boolean(grant), by: `Judge ${s.name}`, owner: s.id });
-        return { type: 'service', place: 'Courthouse', title: grant ? 'Order issued' : 'Petition denied', decision: grant ? 'allow' : 'info', story: grant ? `Your order in case ${p.case} has been carried out.` : 'Denied.' };
+        return { type: 'service', place: 'Courthouse', title: grant ? 'Order issued' : 'Petition denied', decision: grant ? 'allow' : 'info', story: grant ? `Your order in case ${p.case} has been carried out.${p.kind === 'identify' ? ' Only you, the police and whoever brought the case learn the name.' : ' The judgment is public.'}` : 'Denied. Whoever asked hears that you said no.' };
       },
     },
   };
@@ -729,9 +734,10 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
   const COMMON = {
     'police.file': (s, { seq }) => {
       const e = eventBySeq(seq);
-      if (!e?.card?.ppid) throw new HttpError(409, 'no_badge', 'There is no badge in that record: nobody to trace.');
-      const c = justice.fileCase({ kind: 'complaint', placeId: e.card.placeId, title: `Complaint from ${s.name} about ${e.card.actor} at ${e.card.place}`, evidence: [evidenceOf(e.card)], by: s.name, owner: s.id });
-      return { type: 'service', place: 'Police Station', title: `Case ${c.id} opened`, decision: 'allow', story: `The police have opened case **${c.id}**. They can ask the court to say who stands behind that badge.` };
+      if (!e?.card?.aaf_id) throw new HttpError(409, 'no_badge', 'There is no badge in that record: nobody to trace.');
+      const publicBy = s.role === 'shopkeeper' ? PLACE_DEFS[s.claim]?.name ?? 'a shopkeeper' : s.role === 'homeowner' ? 'a homeowner' : 'a resident';
+      const c = justice.fileCase({ kind: 'complaint', placeId: e.card.placeId, title: `Complaint from ${s.name} about ${e.card.actor} at ${e.card.place}`, publicTitle: `a complaint about ${e.card.actor} at ${e.card.place}`, evidence: [evidenceOf(e.card)], by: s.name, publicBy, owner: s.id });
+      return { type: 'service', place: 'Police Station', title: `Case ${c.id} opened`, decision: 'allow', story: `The police have opened case **${c.id}**. A court orders a directory to say who stands behind a badge only when there's harm to answer for. To have its owner hear about this visit now, report it to the directory that issued the badge.` };
     },
     'id.ask': async (s, { npc }) => {
       const them = lookup(npc);
@@ -846,7 +852,7 @@ export function createSessions({ world, places, sim, worldid, x402, emit, keys, 
     subInfo(a) {
       const h = sim.npcs.get(a.helper);
       if (!h) return null;
-      return { name: h.name, status: h.status, busy: h.busy ?? null, budget: h.budget ?? null, registry: h.registry ?? null, unregistered: Boolean(h.unregistered), depth: h.depth ?? 1, agent: agentLabel(a.human) };
+      return { name: h.name, status: h.status, busy: h.busy ?? null, budget: h.budget ?? null, directory: h.directory ?? null, unregistered: Boolean(h.unregistered), depth: h.depth ?? 1, agent: agentLabel(a.human) };
     },
     subWalk(a, placeId) {
       if (!placeFront(sim.map, placeId)) throw new HttpError(404, 'unknown_place', `No place called ${placeId}.`);

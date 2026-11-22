@@ -1,12 +1,13 @@
 // AgentTown: the game loop, movement, the people in town, and how actions run.
 // Every decision shown comes from the town's real services (see src/).
 import {
-  TILE, COLS, ROWS, BOARD, KEY_SPOT, POND, FOUNTAIN, SPOTS,
-  buildTown, findPath, placeFront, drawGround, drawWater, drawTree, drawLamp, drawBoard, drawFountain, drawBuilding,
+  TILE, COLS, ROWS, BOARD, HARBOR_BOARD, KEY_SPOT, POND, FOUNTAIN, SPOTS,
+  buildTown, findPath, placeFront, drawGround, drawWater, drawTree, drawLamp, drawBoard, drawFountain, drawBuilding, drawDecor, jurisdictionAt,
   drawKey, drawAgent, drawBubble, drawNight, drawMinimap, minimapScale, PEOPLE_LOOKS,
 } from './map.js';
 import { route, routeLength, pointAlong, tileOf } from './route.js';
 import * as api from './api.js';
+import { LAWS, SAME_ON_BOTH_SIDES } from './laws.js';
 import { say, busy, closeDialog, dialogOpen, card, showCard, renderHud, renderPhone, renderLedger, toast, esc, DECISIONS, nextQuest } from './ui.js';
 import { openPalette, paletteOpen } from './palette.js';
 import { showJoin, renderRolePanel, caseCard, policeButtons, scoreboardHtml, lawHtml, presetsHtml } from './roles.js';
@@ -374,28 +375,31 @@ function updateSprites(dt) {
 const PLACES = [
   ...town.buildings.map((b) => ({ id: b.id, name: b.name, front: b.front, rect: { x: b.x * TILE, y: b.y * TILE, w: b.w * TILE, h: b.h * TILE } })),
   { id: 'board', name: 'Notice board', front: SPOTS.board, rect: { x: BOARD.x * TILE - 4, y: (BOARD.y - 0.4) * TILE, w: TILE + 8, h: 1.4 * TILE } },
+  { id: 'harborBoard', name: 'Notice board (the Harbor)', front: SPOTS.harborBoard, rect: { x: HARBOR_BOARD.x * TILE - 4, y: (HARBOR_BOARD.y - 0.4) * TILE, w: TILE + 8, h: 1.4 * TILE } },
   { id: 'pond', name: 'Pond', front: { x: (POND.x + POND.w / 2) * TILE, y: (POND.y + POND.h + 0.6) * TILE }, rect: { x: POND.x * TILE, y: POND.y * TILE, w: POND.w * TILE, h: POND.h * TILE } },
 ];
 const placeName = (id) => PLACES.find((p) => p.id === id)?.name ?? id;
 
 const KEEPERS = {
-  townhall: { face: '🦉', who: 'Registrar Juniper:', text: 'we verify people once, then register their agents in a blink.' },
-  records: { face: '🦔', who: 'Archivist Moss:', text: 'I keep what each agent may do, and a receipt for everything it does.' },
-  court: { face: '⚖️', who: 'The clerk:', text: 'bring a badge number, and a judge can order a registry to say who stands behind it.' },
-  harbor: { face: '🦭', who: 'The harbor clerk:', text: 'Registry B, for the EU side. Register a sub-agent here and its chain runs through two registries.' },
+  townhall: { face: '🦉', who: 'Registrar Juniper, of Directory A:', text: 'we verify people once, register their agents in a blink, and issue the IDs on their badges.' },
+  records: { face: '🦔', who: 'Archivist Moss:', text: 'I keep the directory’s records: what each agent may do, and a receipt for everything it does. Separate firms keep them, so no one firm holds everything.' },
+  court: { face: '⚖️', who: 'The clerk:', text: 'bring the ID from a badge that did you harm, and a judge can order its directory to say who stands behind it. Who it is stays with the people in the case; a judgment is public.' },
+  harbor: { face: '🦭', who: 'The harbor clerk:', text: 'Directory B, for the EU side. Register a sub-agent here and its chain runs through two directories.' },
   orb: { face: '🔮', who: 'The Orb:', text: 'proof that you are a unique human, without your name. (Simulated World ID.)' },
   home: { face: '🏡', who: 'Your front door,', text: 'with a Hearth & Key lock.' },
   maple: { face: '🐰', who: "Maple's cottage.", text: "A note says she's at the market." },
   hazel: { face: '🏠', who: "Hazel's house.", text: 'Her agent Fern runs her errands.' },
   ivy: { face: '📦', who: "Ivy's house.", text: 'Empty, until a newcomer moves in.' },
   lab: { face: '🧪', who: 'Wren Labs.', text: 'Their agent rents big jobs at the Forge: they disclose who they are, and publish a bill of materials.' },
-  rook: { face: '⛵', who: 'Rook & Daughters,', text: 'a French firm registered with the Harbor Registry.' },
+  rook: { face: '⛵', who: 'Rook & Daughters,', text: 'a French firm registered with the Harbor Directory.' },
+  chandler: { face: '🐦', who: 'Old Tern:', text: 'rope, lanterns and oilskins, for anyone with a badge.' },
   mill: { face: '🌫️', who: 'The Old Mill.', text: 'Something about this place feels wrong.' },
-  police: { face: '👮', who: 'The desk sergeant:', text: 'bring us a badge number, and we can ask the court who stands behind it.' },
+  police: { face: '👮', who: 'The desk sergeant:', text: 'bring us the ID from a badge, and if it did harm, we can ask the court who stands behind it.' },
 };
 const SHOPFOLK = {
   bramble: ['🐻', 'Bram'], kettle: ['🦊', 'Fennel'], bakery: ['🐭', 'Crumb'], apothecary: ['🐇', 'Sage'], cafe: ['🦢', 'Odile'], pawn: ['🦝', 'Old Rackham'], tavern: ['🐗', 'Barrow'], grocer: ['🐐', 'Saffi'],
   bank: ['🐢', 'Teller Shell'], forge: ['🦫', 'Forgemaster Bea'], fair: ['🐿️', 'Nutmeg'], toll: ['🦆', 'Dabble'], exchange: ['🐂', 'Bullock'],
+  ferry: ['🦦', 'Captain Otto'], fish: ['🦀', 'Marisol'], chandler: ['🐦', 'Old Tern'],
 };
 /** What a place says to you in person, by its rule for people. */
 const PEOPLE_GREET = {
@@ -674,7 +678,7 @@ async function run(action, params) {
     if (action.client === 'phone.passkey') return await addPasskey('phone');
     if (action.client === 'pair') return await connectAgent(params?.target ?? 'agent');
     if (action.client === 'brief') return await writeBrief();
-    if (action.client === 'hall') return await showHall(action.id === 'hall.records' ? 'records' : 'registries');
+    if (action.client === 'hall') return await showHall(action.id === 'hall.records' ? 'records' : 'directories');
     if (action.client === 'unpair') {
       const r = await api.post('/api/pair/end');
       return toast(r.ended ? 'Your outside agent is disconnected: its token no longer works' : 'No outside agent was connected', 'info');
@@ -808,26 +812,26 @@ async function connectAgent(target = 'agent') {
 }
 
 /**
- * The Hall of Registries (Town Hall) or of Record Keepers (the Records Office): every federation the town knows,
+ * The Hall of Directories (Town Hall) or of Records Services (the Records Office): every federation the town knows,
  * with its members, and two ways to add more. Places decide for themselves which federations to trust.
  */
-const FED_KIND = { town: 'The town’s federation', participants: 'Run by the town for participants: a registry or record keeper can be admitted', outside: 'Added by its trust anchor’s address' };
-async function showHall(which = 'registries') {
+const FED_KIND = { town: 'The town’s federation', participants: 'Run by the town for participants: a directory or records service can be admitted', outside: 'Added by its trust anchor’s address' };
+async function showHall(which = 'directories') {
   const { federations } = await api.get('/api/federations');
   const fedHtml = federations.map((f) => {
     const check = (id) => `<button class="small quiet" data-check="${esc(id)}" title="Probe what it must answer, without changing anything">Check</button><div class="check" data-for="${esc(id)}"></div>`;
-    const regs = f.registries.map((r) => `<li>🏛️ <b>${esc(r.name)}</b> <small class="muted">${esc(r.url ?? '')}${r.chain === 'verified' ? '' : ' · not answering yet'}</small> ${check(r.id)}</li>`).join('');
-    const rks = f.recordKeepers.map((k) => `<li>🗄️ <b>${esc(k.name)}</b> <small class="muted">${esc((k.roles ?? []).join(', '))}${k.accredited ? ' · accredited by a registry here' : ' · not accredited yet'}</small> ${check(k.id)}</li>`).join('');
+    const regs = f.directories.map((r) => `<li>🏛️ <b>${esc(r.name)}</b> <small class="muted">${esc(r.url ?? '')}${r.chain === 'verified' ? '' : ' · not answering yet'}</small> ${check(r.id)}</li>`).join('');
+    const rks = f.recordsServices.map((k) => `<li>🗄️ <b>${esc(k.name)}</b> <small class="muted">${esc((k.roles ?? []).join(', '))}${k.accreditedBy?.length ? ` · keeps records for ${esc(k.accreditedBy.join(' and '))}` : k.accredited ? ' · accredited by a directory here' : ' · not accredited yet'}</small> ${check(k.id)}</li>`).join('');
     return `<section class="fed"><h4>${esc(f.name)}</h4><small class="muted">${esc(FED_KIND[f.kind] ?? '')} · trust anchor <code>${esc(f.url)}</code>${f.acceptsTownVerifier ? '' : ' · doesn’t accept the town’s ID verifier'}</small>
-      <ul>${(which === 'records' ? rks + regs : regs + rks) || '<li class="muted">No registries or record keepers yet.</li>'}</ul></section>`;
+      <ul>${(which === 'records' ? rks + regs : regs + rks) || '<li class="muted">No directories or records services yet.</li>'}</ul></section>`;
   }).join('');
-  const mine = liveAgents().filter((a) => a.registered).map((a) => `<p class="why">${esc(a.name)} is registered at <b>${esc(a.registry)}</b>${a.federation ? `, in ${esc(a.federation)}` : ''}; its grant is kept at <b>${esc(a.keeper ?? '…')}</b>.</p>`).join('');
+  const mine = liveAgents().filter((a) => a.registered).map((a) => `<p class="why">${esc(a.name)} is registered at <b>${esc(a.directory)}</b>${a.federation ? `, in ${esc(a.federation)}` : ''}; its grant is kept at <b>${esc(a.keeper ?? '…')}</b>.</p>`).join('');
   const choice = await showCard(`
-    <header><div><span class="eyebrow">${which === 'records' ? 'Records Office' : 'Town Hall'}</span><h3>${which === 'records' ? 'The Hall of Record Keepers' : 'The Hall of Registries'}</h3></div><div class="stamp info">proposed</div></header>
-    <p class="why">Anyone can run a registry or a record keeper. Whether a place takes its word is up to the place: each one chooses which federations it trusts, and a federation is whoever its trust anchor vouches for. ${which === 'records' ? 'Your grant is kept by a record keeper in your registry’s own federation.' : 'Register your agent at any counter here: Actions → Start an agent (or Register).'}</p>
+    <header><div><span class="eyebrow">${which === 'records' ? 'Records Office' : 'Town Hall'}</span><h3>${which === 'records' ? 'The Hall of Records Services' : 'The Hall of Directories'}</h3></div><div class="stamp info">proposed</div></header>
+    <p class="why">A directory can be several firms working together: here Town Hall issues the IDs, VerityCheck verifies people, and the records services keep the directory’s records. Anyone can run a directory, or one of its parts. Whether a place takes its word is up to the place: each one chooses which federations it trusts, and a federation is whoever its trust anchor vouches for. ${which === 'records' ? 'Your grant is kept by a records service in your directory’s own federation.' : 'Register your agent at any counter here: Actions → Start an agent (or Register).'}</p>
     ${mine}${fedHtml}
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`, [
-    { label: 'Admit a registry or record keeper', value: 'admit' },
+    { label: 'Admit a directory or records service', value: 'admit' },
     { label: 'Add a federation by address', value: 'federation' },
   ]);
   if (choice === 'federation') return addFederation();
@@ -856,7 +860,7 @@ async function addFederation() {
   const sample = W.director?.sample;
   const known = sample && (W.director.federations ?? []).some((f) => f.url === sample.url);
   const r = await say({
-    face: '🏛️', who: 'Add a federation', where: 'Hall of Registries',
+    face: '🏛️', who: 'Add a federation', where: 'Hall of Directories',
     text: `Give its trust anchor's address, like http://192.168.1.20:4100. The town reads whom the anchor vouches for. To be sure it's the right anchor, put its key's thumbprint after the address; otherwise the town takes the key it's shown and tells you the thumbprint to check.${sample && !known ? `\n\n${sample.name} is running at ${sample.url}.` : ''}`,
     input: { label: 'Trust anchor', value: sample && !known ? sample.url : '', max: 300, placeholder: 'http://…' },
     choices: [{ label: 'Add it', value: true, primary: true }, { label: 'Cancel', value: false, cancel: true }],
@@ -868,7 +872,7 @@ async function addFederation() {
   try {
     const f = await api.post('/api/federations', { url, pin });
     closeDialog();
-    await say({ face: '🏛️', who: f.name, where: 'Added to the town', text: `${f.registries.length} registr${f.registries.length === 1 ? 'y' : 'ies'} and ${f.recordKeepers.length} record keeper${f.recordKeepers.length === 1 ? '' : 's'}. Its anchor's key has thumbprint **${f.thumbprint}**${f.pinned ? ', as you pinned' : ': check it with whoever runs it'}.\n\nNo place trusts it yet. Shopkeepers choose in their panel; the director can make every place trust it.${f.acceptsTownVerifier ? ' It accepts the town’s ID verifier, so you can register an agent at its counter.' : ''}` });
+    await say({ face: '🏛️', who: f.name, where: 'Added to the town', text: `${f.directories.length} director${f.directories.length === 1 ? 'y' : 'ies'} and ${f.recordsServices.length} records service${f.recordsServices.length === 1 ? '' : 's'}. Its anchor's key has thumbprint **${f.thumbprint}**${f.pinned ? ', as you pinned' : ': check it with whoever runs it'}.\n\nNo place trusts it yet. Shopkeepers choose in their panel; the director can make every place trust it.${f.acceptsTownVerifier ? ' It accepts the town’s ID verifier, so you can register an agent at its counter.' : ''}` });
     closeDialog();
   } catch (err) {
     closeDialog();
@@ -876,10 +880,10 @@ async function addFederation() {
   }
 }
 
-/** One registry or record keeper, into the participants' federation the town runs: by its address, or by its entity statement. */
+/** One directory or records service, into the participants' federation the town runs: by its address, or by its entity statement. */
 async function admitService() {
   const r = await say({
-    face: '🗄️', who: 'Admit a registry or record keeper', where: 'AgentTown Participants',
+    face: '🗄️', who: 'Admit a directory or records service', where: 'AgentTown Participants',
     text: 'Give its address. The town reads what it says about itself there (its OpenID Federation Entity Configuration) and admits it to AgentTown Participants, a federation the town runs for teams bringing their own implementations. Point your service at that federation’s trust anchor (it’s listed in the hall).\n\nIf your service can’t start until it’s a member, paste its entity statement (JSON: entity_id, entity_type, jwks, metadata) instead.',
     input: { label: 'Address or statement', value: '', max: 6000, placeholder: 'http://… or {"entity_id": …}' },
     choices: [{ label: 'Admit it', value: true, primary: true }, { label: 'Cancel', value: false, cancel: true }],
@@ -897,8 +901,8 @@ async function admitService() {
     const a = await api.post('/api/participants', body);
     closeDialog();
     await showCard(`
-      <header><div><span class="eyebrow">AgentTown Participants</span><h3>${esc(a.name)} is admitted</h3></div><div class="stamp ${a.check?.failed ? 'warn' : 'ok'}">${a.type === 'aaf_registry' ? 'registry' : 'record keeper'}</div></header>
-      <p class="why">${a.type === 'aaf_registry' ? 'It can now accredit record keepers in this federation. ' : 'A registry here has to accredit it before places rely on its records. '}No place trusts AgentTown Participants until it chooses to.${a.names_this_anchor || !a.check ? '' : ' It doesn’t name this federation’s trust anchor yet: point it at the bootstrap from /trust-anchor.json.'}</p>
+      <header><div><span class="eyebrow">AgentTown Participants</span><h3>${esc(a.name)} is admitted</h3></div><div class="stamp ${a.check?.failed ? 'warn' : 'ok'}">${a.type === 'aaf_directory' ? 'directory' : 'records service'}</div></header>
+      <p class="why">${a.type === 'aaf_directory' ? 'It can now accredit records services in this federation. ' : 'A directory here has to accredit it before places rely on its records. '}No place trusts AgentTown Participants until it chooses to.${a.names_this_anchor || !a.check ? '' : ' It doesn’t name this federation’s trust anchor yet: point it at the bootstrap from /trust-anchor.json.'}</p>
       ${a.check ? `<h5>The check at the door</h5>${checkHtml(a.check)}` : '<p class="muted small">Admitted by its statement: check it from the hall once it’s running.</p>'}
       <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Done</button></div>`);
   } catch (err) {
@@ -1042,7 +1046,7 @@ async function talkTo(s) {
   interacting = true;
   try {
     const n = s.npc;
-    const kinds = { person: n.role ? 'someone playing' : 'a person, in person', companion: 'an agent following its resident', resident: 'a resident’s agent', helper: 'a sub-agent', swarm: 'a masked agent from the Old Mill', bot: 'a hooded figure with no badge', newcomer: 'a newcomer', unbadged: 'an honest agent nobody ever registered', guest: 'an agent from outside the town, with its own badge' };
+    const kinds = { person: n.role ? 'someone playing' : 'a person, in person', companion: 'an agent following its resident', resident: 'a resident’s agent', helper: 'a sub-agent', swarm: 'a masked agent from the Old Mill', tout: 'a masked agent from the far end of the quay', bot: 'a hooded figure with no badge', newcomer: 'a newcomer', unbadged: 'an honest agent nobody ever registered', guest: 'an agent from outside the town, with its own badge' };
     const r = await say({ face: '🔍', who: n.name, where: kinds[n.kind] ?? '', text: n.busy ? `Out on an errand: ${n.busy}.` : n.status !== 'active' ? `Status: ${n.status}.` : 'Ask to see their badge?', choices: [{ label: 'Ask to see their badge', value: true, primary: true }, { label: 'Leave them be', value: false, cancel: true }] });
     closeDialog();
     if (!r.value) return;
@@ -1057,7 +1061,8 @@ async function talkTo(s) {
 }
 
 async function interact(place) {
-  if (place.id === 'board') return noticeBoard();
+  if (place.id === 'board') return noticeBoard('us');
+  if (place.id === 'harborBoard') return noticeBoard('eu');
   if (place.id === 'pond') return say({ face: '🪷', who: 'The pond', text: S?.agent ? `You see ${S.agent.name}, ${S.badge ? 'badge on' : 'badge tucked away'}.` : 'You see a small round creature with no badge.' }).then(closeDialog);
   if (!A.some((a) => a.place === place.id)) {
     const k = greetingFor(place.id);
@@ -1066,7 +1071,39 @@ async function interact(place) {
   return deck(place);
 }
 
-async function noticeBoard() {
+/**
+ * The law posted on a board, for one side of the river: what's against it, what an agent owes the people it deals
+ * with, what the council makes places ask for, and how a court works.
+ */
+function lawHere(side) {
+  const here = LAWS[side];
+  const other = LAWS[side === 'us' ? 'eu' : 'us'];
+  const law = W.director?.law;
+  const regimes = (law?.jurisdictions.find((j) => j.id === side)?.regimes ?? []).map((id) => law.regimes.find((r) => r.id === id)).filter(Boolean);
+  return `<li class="extras-title"><b>⚖️ The law here: ${esc(here.rules)}</b></li>
+      <li><b>Against the law:</b><ul>${here.against.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></li>
+      <li><b>Agents and people:</b> ${esc(here.agents)}</li>
+      <li><b>What places must ask for:</b> ${regimes.length ? regimes.map((r) => `<b>${esc(r.name)}</b>: ${esc(r.blurb)}`).join(' ') : 'nothing beyond what each place chooses. The council hasn’t set any rules for places here.'}</li>
+      <li><b>The court:</b> ${esc(here.court)}</li>
+      <li class="muted">${esc(SAME_ON_BOTH_SIDES)} Across the river, in ${esc(other.side)} (${esc(other.rules)}): ${esc(other.headline.replace(/^Here /, ''))}</li>`;
+}
+
+async function noticeBoard(side = 'us') {
+  if (side === 'eu') {
+    await say({
+      face: '📋', who: 'Notice board', where: 'The Harbor',
+      html: `<ul class="notices">
+      <li>You're in <b>the Harbor</b>, under EU rules. Three bridges lead back to the town.</li>
+      <li><b>The Harbor Directory</b> (Directory B): register an agent or a sub-agent on the EU side.</li>
+      <li><b>Café Lumière</b> takes badges from the Harbor Directory only. <b>Brine &amp; Barrel</b> sells fish; <b>Tern Chandlery</b>, rope and lanterns.</li>
+      <li><b>Gull Ferry</b>: rides across the bay, and seats for the <b>Lantern Regatta</b>: two per person.</li>
+      ${lawHere('eu')}
+    </ul>`,
+      choices: [{ label: 'Close', value: null, primary: true, cancel: true }],
+    });
+    closeDialog();
+    return;
+  }
   const [info, { board }] = await Promise.all([api.get('/api/info'), api.get('/api/board')]);
   const standing = (e, i) => `${i + 1}. ${esc(e.name)}${e.by ? ` · ${esc(e.by)}` : ''}: ${e.finished ? `${esc(e.finished.seconds)} s, $${esc(e.finished.left)} to spare` : `${esc(e.met)}/${esc(e.of)}`}`;
   const races = board.map((c) => `<li><b>🏁 ${esc(c.name)}</b> ($${esc(c.budget)}): ${esc(c.blurb)}${c.entries.length ? `<br><small>${c.entries.slice(0, 3).map(standing).join(' · ')}</small>` : ''}</li>`).join('');
@@ -1077,11 +1114,12 @@ async function noticeBoard() {
       <li><b>Civic Row</b> (north): Town Hall, the Records Office, the Courthouse, the Orb.</li>
       <li><b>Market Lane</b> (west): books, kettles, bread, the bank. <b>The Works</b> (north-east): the Compute Forge.</li>
       <li><b>Hearthside</b> (east): homes. Hearth &amp; Key reminds residents to put a passkey on their door.</li>
-      <li><b>The Harbor</b> (south, over the toll bridge): the EU registry and Café Lumière, under EU rules.</li>
+      <li><b>The Harbor</b> (south, across the river, over any of three bridges): under EU rules. The Harbor Directory, Café Lumière, Gull Ferry, fish and a chandlery.</li>
       <li><b>The Old Quarter</b> (far east): a pawn shop that checks nothing, a tavern that bans agents, a grocer trying badges out. Willow Apothecary sits on the way.</li>
-      <li>Press <b>X</b> for the <b>X-ray</b>: watch a request travel to the registry, the Records Office and back.</li>
+      <li>Press <b>X</b> for the <b>X-ray</b>: watch a request travel to the directory, the Records Office and back.</li>
       <li>Lost: one key tag, somewhere in Hearthside. —M. Avoid the Old Mill after dark.</li>
-      <li class="muted">This town's federation: ${esc(info.federation)}, trust anchor ${esc(info.trust_anchor)}; registries: ${info.registries.map((r) => esc(r.name)).join(', ')}.</li>
+      <li class="muted">This town's federation: ${esc(info.federation)}, trust anchor ${esc(info.trust_anchor)}; directories: ${info.directories.map((r) => esc(r.name)).join(', ')}.</li>
+      ${lawHere('us')}
       <li class="extras-title"><b>Errand races</b>: your agent against everyone else's. Only what it buys with its badge on counts.</li>
       ${races}
     </ul>`,
@@ -1124,8 +1162,8 @@ async function nightfall() {
     const start = SPOTS.burglarStart;
     visitors = res.results.map((r, i) => ({
       x: start.x + i * 6, y: start.y + (i % 2) * 8, facing: { x: -1, y: 0 }, walking: false, phase: i, seed: i,
-      look: r.ppid ? { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050' } : { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55' },
-      label: r.ppid ? `badge …${r.ppid.split(':').pop().slice(-6)}` : 'no badge', result: r,
+      look: r.aaf_id ? { body: '#6b5a8e', bulb: '#b18cff', glow: true, mask: true, badge: 'on', badgeColor: '#d9d2ff', badgeMark: '#6b5a8e', feet: '#3b3050' } : { body: '#8d939c', hood: '#6f757f', eyes: '#f2f2f2', feet: '#4a4e55' },
+      label: r.aaf_id ? `badge …${r.aaf_id.split(':').pop().slice(-6)}` : 'no badge', result: r,
     }));
     await Promise.all(visitors.map((v, i) => wait(i * 500).then(() => goTo(v, home.front.x + (2 + i * 1.3) * TILE, home.front.y + (i % 2 ? 1.2 : 0.2) * TILE))));
     for (const v of visitors) {
@@ -1151,14 +1189,14 @@ function nightHtml(res) {
   const rows = res.results.map((r) => {
     const d = DECISIONS[r.decision] ?? { tone: 'info', label: r.decision };
     const who = r.learned.find((l) => l.includes('stands behind')) ?? r.learned[0];
-    const label = r.ppid ? `A visitor with badge …${r.ppid.split(':').pop().slice(-6)}` : 'A visitor with no badge';
+    const label = r.aaf_id ? `A visitor with badge …${r.aaf_id.split(':').pop().slice(-6)}` : 'A visitor with no badge';
     return `<li><span class="stamp-sm ${d.tone}">${esc(d.label)}</span><b>${esc(label)}</b> brought ${esc(r.presented)}.<small>${esc(r.reasons[0] ?? '')}${who ? ` · Hearth & Key learned: ${esc(who)}` : ''}</small></li>`;
   }).join('');
   return `
     <header><div><span class="eyebrow">While you slept</span><h3>Last night at your door</h3></div><div class="stamp ${res.got_in ? 'bad' : 'ok'}">${res.got_in ? 'Someone got in' : 'Nobody got in'}</div></header>
     <p>Four visitors came with a copy of your house key.</p>
     <ul class="receipts">${rows}</ul>
-    <p class="note">Hearth & Key reported each visitor who wore a badge to the registry that issued it, and the registry passed ${esc(res.incidents_relayed)} reports on to whoever stands behind them. You didn't learn who that is, and neither did Hearth & Key. A court can find out: visit the Courthouse.</p>
+    <p class="note">Hearth & Key reported each visitor who wore a badge to the directory that issued it, and the directory passed ${esc(res.incidents_relayed)} reports on to whoever stands behind them. You didn't learn who that is, and neither did Hearth & Key. A court can find out: visit the Courthouse.</p>
     <p class="note">The visitor with no badge was refused too, but there was nobody to report it to.</p>
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Good morning</button></div>`;
 }
@@ -1176,37 +1214,38 @@ function toggleDirector(show = document.getElementById('director').hidden) {
 function renderDirector() {
   const d = W.director;
   if (!d) return;
-  const regOpts = (accepts) => {
+  const dirOpts = (accepts) => {
     const all = !accepts;
-    return [`<option value="*" ${all ? 'selected' : ''}>Any registry</option>`, ...d.registries.map((r) => `<option value="${esc(r.id)}" ${!all && accepts.length === 1 && accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`)].join('');
+    return [`<option value="*" ${all ? 'selected' : ''}>Any directory</option>`, ...d.directories.map((r) => `<option value="${esc(r.id)}" ${!all && accepts.length === 1 && accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`)].join('');
   };
   const adopt = (p) => d.adoptions.map((a) => `<option value="${esc(a.id)}" ${a.id === p.adoption ? 'selected' : ''}>${esc(a.label)}</option>`).join('');
   document.getElementById('directorBody').innerHTML = `
     <div class="cues">
       <button data-cue="swarm" ${d.swarm ? 'disabled' : ''}>🌫️ Rogue swarm from the Old Mill</button>
-      <button data-cue="outage" ${d.outage_until ? 'disabled' : ''}>📡 Registry A outage (45 s)</button>
+      <button data-cue="scalpers" ${d.scalpers ? 'disabled' : ''}>🎟️ Ticket bots at the ferry (the Harbor)</button>
+      <button data-cue="outage" ${d.outage_until ? 'disabled' : ''}>📡 Directory A outage (45 s)</button>
       <button data-cue="newcomer">🧳 A newcomer arrives</button>
       <button data-cue="night">🌙 Night at your house</button>
       <button data-cue="residents" data-on="${d.residents ? '0' : '1'}">${d.residents ? '⏸ Pause residents' : '▶️ Resume residents'}</button>
       <button data-cue="presenter">${document.body.classList.contains('presenter') ? '🖥 Leave presenter view' : '🖥 Presenter view'}</button>
     </div>
     <h5>Federations <span class="muted">(each place chooses which to trust)</span></h5>
-    <ul class="feds">${(d.federations ?? []).map((f) => `<li><b>${esc(f.name)}</b> <small class="muted">${esc(FED_KIND[f.kind] ?? '')} · ${f.registries.length} registr${f.registries.length === 1 ? 'y' : 'ies'}, ${f.recordKeepers.length} record keeper${f.recordKeepers.length === 1 ? '' : 's'} · ${d.places.filter((p) => !p.anchors || p.anchors.includes(f.key)).length} of ${d.places.length} places trust it</small>
+    <ul class="feds">${(d.federations ?? []).map((f) => `<li><b>${esc(f.name)}</b> <small class="muted">${esc(FED_KIND[f.kind] ?? '')} · ${f.directories.length} director${f.directories.length === 1 ? 'y' : 'ies'}, ${f.recordsServices.length} records service${f.recordsServices.length === 1 ? '' : 's'} · ${d.places.filter((p) => !p.anchors || p.anchors.includes(f.key)).length} of ${d.places.length} places trust it</small>
       <span class="btns"><button class="small" data-trust="${esc(f.key)}" data-on="1">Every place trusts it</button><button class="small quiet" data-trust="${esc(f.key)}" data-on="0">None does</button></span></li>`).join('')}</ul>
     <div class="cues"><button data-cue="sample" ${d.sample ? 'disabled' : ''}>🏘️ ${d.sample ? `Riverside Co-op runs at ${esc(d.sample.url)}` : 'Start a sample outside federation (Riverside Co-op)'}</button></div>
-    <h5>The law <span class="muted">(registries and record keepers never change)</span></h5>
+    <h5>The law <span class="muted">(directories and records services never change)</span></h5>
     ${lawHtml(d.law, { compact: true })}
     <h5>How much of town uses the framework</h5>
     ${presetsHtml(d.law)}
     ${scoreboardHtml(d.law.scoreboard, { table: false })}
     <h5>Each place</h5>
     <table class="policies">
-      <thead><tr><th>Place</th><th>Uses the framework?</th><th>People without a badge</th><th>Registries</th><th title="An accountable agent with authority">Badge</th><th title="Simulated World ID: one per person">World ID</th><th title="Simulated x402 payment">x402</th></tr></thead>
+      <thead><tr><th>Place</th><th>Uses the framework?</th><th>People without a badge</th><th>Directories</th><th title="An accountable agent with authority">Badge</th><th title="Simulated World ID: one per person">World ID</th><th title="Simulated x402 payment">x402</th></tr></thead>
       <tbody>${d.places.map((p) => `<tr data-place="${p.id}" class="${p.keeper ? 'claimed' : ''}" title="${esc(p.summary)}">
         <td>${esc(p.name)}${p.keeper ? `<small class="muted"> · run by ${esc(p.keeper)}</small>` : ''}</td>
         <td><select data-k="adoption" ${p.keeper ? 'disabled' : ''}>${adopt(p)}</select>${p.effective !== p.adoption ? ' <small class="muted">by law</small>' : ''}</td>
         <td><select data-k="people" ${p.keeper ? 'disabled' : ''}>${d.peoples.map((x) => `<option value="${esc(x.id)}" ${x.id === p.people ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></td>
-        <td><select data-k="accepts" ${p.keeper ? 'disabled' : ''}>${regOpts(p.accepts)}</select></td>
+        <td><select data-k="accepts" ${p.keeper ? 'disabled' : ''}>${dirOpts(p.accepts)}</select></td>
         <td><input type="checkbox" data-k="aaf" ${p.aaf === 'required' ? 'checked' : ''} ${p.keeper ? 'disabled' : ''}></td>
         <td><input type="checkbox" data-k="worldid" ${p.worldid ? 'checked' : ''} ${p.keeper ? 'disabled' : ''}></td>
         <td><input type="checkbox" data-k="x402" ${p.x402 ? 'checked' : ''} ${p.keeper ? 'disabled' : ''}></td>
@@ -1231,6 +1270,7 @@ document.getElementById('directorBody').addEventListener('click', async (e) => {
   if (cue === 'swarm') {
     camPeek(placeFront(town, 'millGate'));
   }
+  if (cue === 'scalpers') camPeek(placeFront(town, 'ferry'));
 });
 document.getElementById('directorBody').addEventListener('change', async (e) => {
   const law = e.target.dataset.law;
@@ -1343,7 +1383,7 @@ document.getElementById('recordBody').addEventListener('click', async (e) => {
   if (what === 'phone.passkey') return run({ id: 'phone.passkey', label: 'Put a passkey on your phone', client: 'phone.passkey' }, {});
   if (what === 'disclose') return run({ id: 'disclose', label: 'Sharing your name' }, {});
   if (what === 'badge') return run({ id: 'badge', label: 'badge' }, agent);
-  if (what === 'incognito') return run({ id: 'incognito', label: 'Badge numbers' }, agent);
+  if (what === 'incognito') return run({ id: 'incognito', label: 'Unlinkable IDs' }, agent);
   if (what === 'pair') return connectAgent(id ?? 'agent');
   if (what === 'unpair') {
     const out = await api.post('/api/pair/end', id ? { target: id } : {});
@@ -1352,7 +1392,7 @@ document.getElementById('recordBody').addEventListener('click', async (e) => {
   }
   if (what === 'brief') return writeBrief();
   if (what === 'stop') return stopEverything();
-  if (what === 'agent.revoke' && (await sure('⛔', `Revoke ${name}`, `${name}'s registry revokes it, and its sub-agents with it. Places that check will turn it away from now on.`, `Revoke ${name}`))) return run({ id: 'agent.revoke', label: `Revoking ${name}` }, agent);
+  if (what === 'agent.revoke' && (await sure('⛔', `Revoke ${name}`, `${name}'s directory revokes it, and its sub-agents with it. Places that check will turn it away from now on.`, `Revoke ${name}`))) return run({ id: 'agent.revoke', label: `Revoking ${name}` }, agent);
   if (what === 'record') return editRecord();
   if (what === 'grant.revoke' && (await sure('📜', `Revoke ${name}'s grant`, `${name} stays registered, but has no authority: places will refuse anything that needs it, and every budget it delegated goes too.`, 'Revoke the grant'))) return run({ id: 'grant.revoke', label: 'Revoking the grant' }, agent);
   if (what === 'play') return run({ id: 'play', label: 'Who you play' }, { as: id });
@@ -1366,7 +1406,7 @@ document.getElementById('recordBody').addEventListener('click', async (e) => {
 document.getElementById('townScore').addEventListener('click', () => {
   if (busyNow() || !W.director) return;
   showCard(`<header><div><span class="eyebrow">The town</span><h3>How much of town uses the framework</h3></div></header>
-    <p>Places choose whether to check badges, and the law can make them. The registries and record keepers are the same either way.</p>
+    <p>Places choose whether to check badges, and the law can make them. The directories and records services are the same either way.</p>
     ${scoreboardHtml(W.director.law.scoreboard)}
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`);
 });
@@ -1439,7 +1479,7 @@ function drawMinimapBase() {
   g.scale(dpr, dpr);
   drawMinimap(g, town, w, h);
 }
-const MINI_DOTS = { helper: '#5fd38a', resident: '#f2a541', swarm: '#9b6cff', bot: '#7d8590', newcomer: '#ff8fab', unbadged: '#c9a77c', person: '#e07a5f', companion: '#9fbbe0', guest: '#5fb8d3' };
+const MINI_DOTS = { helper: '#5fd38a', resident: '#f2a541', swarm: '#9b6cff', tout: '#3c8fbf', bot: '#7d8590', newcomer: '#ff8fab', unbadged: '#c9a77c', person: '#e07a5f', companion: '#9fbbe0', guest: '#5fb8d3' };
 function renderMinimap() {
   if (!miniBase) return;
   const w = mini.clientWidth || 220;
@@ -1604,15 +1644,31 @@ function reveal(text) {
 }
 document.getElementById('reveal').addEventListener('click', (e) => { e.currentTarget.hidden = true; });
 
+/**
+ * Crossing a bridge crosses the border. Badges, directories and records services work the same on both sides; the
+ * law is what changes: which regimes are in force, and what a court publishes.
+ */
+let borderSide = null;
+let borderTimer = null;
+function crossBorder(side) {
+  const here = LAWS[side];
+  const el = document.getElementById('border');
+  el.innerHTML = `<b>${here.flag} You've crossed the river into ${esc(here.side)}: ${esc(here.rules)}.</b> Your badge and your directories work the same; the law doesn't. ${esc(here.headline)} The law is posted on ${esc(here.board)}.`;
+  el.hidden = false;
+  clearTimeout(borderTimer);
+  borderTimer = setTimeout(() => { el.hidden = true; }, 11000);
+}
+document.getElementById('border').addEventListener('click', (e) => { e.currentTarget.hidden = true; });
+
 /** A visit's ID card, with what your role can do about it. */
 async function visitCard(ev) {
   const role = S?.me?.role;
   const c = ev.card;
   const buttons = [];
-  if (c.ppid && ((role === 'shopkeeper' && c.placeId === S.me.claim) || (role === 'homeowner' && c.account === S.me.claim))) {
-    buttons.push({ label: 'File with the police', value: 'police.file' }, { label: 'Report to its registry', value: role === 'shopkeeper' ? 'shop.report' : 'door.report' });
+  if (c.aaf_id && ((role === 'shopkeeper' && c.placeId === S.me.claim) || (role === 'homeowner' && c.account === S.me.claim))) {
+    buttons.push({ label: 'File with the police', value: 'police.file' }, { label: 'Report to its directory', value: role === 'shopkeeper' ? 'shop.report' : 'door.report' });
   }
-  if (c.ppid && role === 'police') buttons.push({ label: 'Open a case about this badge', value: 'case.open' });
+  if (c.aaf_id && role === 'police') buttons.push({ label: 'Open a case about this badge', value: 'case.open' });
   const choice = await card(c, { buttons, own: ev.mine });
   if (choice === 'xray') {
     const sp = ev.mine ? player : sprites.get(ev.who);
@@ -1789,12 +1845,12 @@ async function keyFound() {
 }
 
 const INTROS = {
-  agent: "You're a **resident** of AgentTown: a person. Walk with **WASD** or the **arrow keys**, or click where you want to go, and shop in person: some places take you at your word, some ask you to sign in with a passkey, the tavern's doorman guesses.\n\nWhen you're ready, start an **agent**: register it at **Town Hall** (get verified there first), or don't, like most agents today. It stays where you leave it. Ask it to run errands while you carry on, or press **T** to play it yourself: whoever you play walks and acts. You answer for what it does. Your **record** at the Records Office says what it may spend and what places may learn; when a place asks for more, your **phone** asks you.\n\nPress **Q** for the **action deck**: what you can do now, where you are first. Some actions are refused; that's the point, and each refusal says how to fix it. Your settings are in the **You** panel. Press **X** for the **X-ray**. Play it straight, or try to get away with something: the police and the courts are watching.",
-  shopkeeper: "You run this place. Your panel (top left) is your counter: choose which registries you trust and what you ask for, and watch every customer's ID check as it happens.\n\nClick a customer to see exactly what they proved. If one misbehaves, report it to its registry (its principal hears about it) or file it with the police.",
+  agent: "You're a **resident** of AgentTown: a person. Walk with **WASD** or the **arrow keys**, or click where you want to go, and shop in person: some places take you at your word, some ask you to sign in with a passkey, the tavern's doorman guesses.\n\nWhen you're ready, start an **agent**: register it at **Town Hall** (get verified there first), or don't, like most agents today. It stays where you leave it. Ask it to run errands while you carry on, or press **T** to play it yourself: whoever you play walks and acts. You answer for what it does. Your **record** at the Records Office says what it may spend and what places may learn; when a place asks for more, your **phone** asks you.\n\nPress **Q** for the **action deck**: what you can do now, where you are first. Some actions are refused; that's the point, and each refusal says how to fix it. Your settings are in the **You** panel. Press **X** for the **X-ray**. Play it straight, or try to get away with something: the police and the courts are watching. Across the river, the **Harbor** runs on EU rules: same badges, same directories, different law.\n\nIn the framework's own words, Town Hall is a **directory**, your agent's badge is its **presentation** (an **ID**, plus any claims it shows), and each place is a **counterparty**. **The framework's words**, in the deck, has the rest.",
+  shopkeeper: "You run this place. Your panel (top left) is your counter: choose which directories you trust and what you ask for, and watch every customer's ID check as it happens.\n\nClick a customer to see exactly what they proved. If one misbehaves, report it to its directory (its principal hears about it) or file it with the police.",
   homeowner: "This house is yours. Put a passkey on your door first. When an agent knocks, your **phone** (bottom right) shows who stands behind it, never who they are, and you decide with your passkey.\n\nYour door log shows every visit. Lost keys are dangerous: change the locks any time.",
-  police: "You investigate. Places send cases to your **case board**: suspicious payments, attempted break-ins, odd trading at the Exchange. You can open a case from any line in the town ledger.\n\nBadges don't say who anyone is. To find out, ask the court: it can order a registry to identify the principal, delete rogue agents, or ban a principal.",
-  council: "You make the law. Your panel (top left) has the rulebook for the town and for the Harbor: anti-money-laundering, consumer protection, rules for high-risk AI, privacy first.\n\nSwitch one on and watch what places must ask for change, while the registries and record keepers stay exactly the same. You can also set how much of town uses the framework at all: partial adoption is where most towns start.",
-  judge: "You rule. Petitions from the police arrive on your **docket**. Each one asks you to order a registry to identify who stands behind a badge, to delete a principal's agents, or to ban a principal outright.\n\nEvery order runs on the framework: identifying is logged in the registry's transparency log, deleting revokes a whole lineage, banning withdraws a verification.",
+  police: "You investigate. Places send cases to your **case board**: suspicious payments, attempted break-ins, odd trading at the Exchange. You can open a case from any line in the town ledger.\n\nBadges don't say who anyone is. To find out, ask the court: it can order a directory to identify the principal, delete rogue agents, or ban a principal.",
+  council: "You make the law. Your panel (top left) has the rulebook for the town and for the Harbor: anti-money-laundering, consumer protection, rules for high-risk AI, privacy first.\n\nSwitch one on and watch what places must ask for change, while the directories and records services stay exactly the same. You can also set how much of town uses the framework at all: partial adoption is where most towns start.",
+  judge: "You rule. Petitions from the police arrive on your **docket**. Each one asks you to order a directory to identify who stands behind a badge, to delete a principal's agents, or to ban a principal outright.\n\nEvery order runs on the framework: identifying is logged in the directory's transparency log, deleting revokes a whole lineage, banning withdraws a verification.",
 };
 
 /** What a newcomer needs to start; the rest is a click away. */
@@ -1873,6 +1929,11 @@ function update(dt) {
     trail.push({ x: player.x, y: player.y });
     if (trail.length > 120) trail.shift();
   }
+  const side = jurisdictionAt(player.y);
+  if (side !== borderSide) {
+    if (borderSide && ['agent', 'companion'].includes(S?.me?.role)) crossBorder(side);
+    borderSide = side;
+  }
   updateSprites(dt);
   updateCompanion(dt);
   if (Math.abs(view.zoom - view.zoomTarget) > 0.002) {
@@ -1912,7 +1973,9 @@ function render() {
   for (const tr of town.trees) if (inView((tr.x + 0.5) * TILE, (tr.y + 1) * TILE)) things.push({ y: (tr.y + 1) * TILE - 3, draw: () => drawTree(ctx, tr, t) });
   for (const b of town.buildings) if (inView((b.x + b.w / 2) * TILE, (b.y + b.h / 2) * TILE, b.w * TILE)) things.push({ y: (b.y + b.h) * TILE, draw: () => drawBuilding(ctx, b, t, night > 0.4) });
   for (const l of town.lamps) if (inView((l.x + 0.5) * TILE, (l.y + 1) * TILE)) things.push({ y: (l.y + 1) * TILE - 6, draw: () => drawLamp(ctx, l, night > 0.4) });
+  for (const d of town.decor) if (inView((d.x + 1) * TILE, d.depth, 8 * TILE)) things.push({ y: d.depth, draw: () => drawDecor(ctx, d, t) });
   things.push({ y: (BOARD.y + 1) * TILE - 4, draw: () => drawBoard(ctx, t) });
+  if (inView((HARBOR_BOARD.x + 0.5) * TILE, (HARBOR_BOARD.y + 1) * TILE)) things.push({ y: (HARBOR_BOARD.y + 1) * TILE - 4, draw: () => drawBoard(ctx, t, HARBOR_BOARD) });
   things.push({ y: (FOUNTAIN.y + 2) * TILE, draw: () => drawFountain(ctx, t) });
   for (const s of sprites.values()) if (s.id !== playing && inView(s.x, s.y)) things.push({ y: s.y, draw: () => drawAgent(ctx, s, t) });
   if (standIn.active) things.push({ y: standIn.y, draw: () => drawAgent(ctx, standIn, t) });

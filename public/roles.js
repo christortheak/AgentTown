@@ -5,7 +5,7 @@ import * as api from './api.js';
 import { esc, DECISIONS, CLASSIFICATIONS, showCard } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
-const tail = (ppid) => `…${String(ppid).split(':').pop().slice(-8)}`;
+const tail = (aaf_id) => `…${String(aaf_id).split(':').pop().slice(-8)}`;
 
 /** The join screen. Resolves with the join result once the server has a session for this tab. */
 export async function showJoin() {
@@ -29,7 +29,7 @@ export async function showJoin() {
         <div class="roles">${roles.roles.map((x) => `<button class="role ${x.id === role ? 'sel' : ''}" data-role="${x.id}" ${x.taken ? 'disabled' : ''}><span>${x.icon}</span><b>${esc(x.label)}</b>${x.taken ? '<small>taken</small>' : ''}</button>`).join('')}</div>
         <p class="blurb">${esc(r.blurb)}</p>
         ${claims ? `<h5>${role === 'shopkeeper' ? 'Which place will you run?' : 'Which house is yours?'}</h5><div class="claims">${claims.map((c) => `<button class="${c.id === claim ? 'sel' : ''}" data-claim="${c.id}" ${c.taken ? 'disabled' : ''}>${esc(c.name)}${c.taken ? ' · taken' : ''}</button>`).join('')}</div>` : ''}
-        <label class="input"><span>${role === 'agent' ? 'Your name (only the registry keeps it)' : 'Your name'}</span><input id="joinName" maxlength="30" placeholder="e.g. Robin Ash" value="${esc(name)}" autocomplete="off" spellcheck="false"></label>
+        <label class="input"><span>${role === 'agent' ? 'Your name (only the directory keeps it)' : 'Your name'}</span><input id="joinName" maxlength="30" placeholder="e.g. Robin Ash" value="${esc(name)}" autocomplete="off" spellcheck="false"></label>
         ${error ? `<p class="err">${esc(error)}</p>` : ''}
         <div class="actions"><button class="primary" id="joinGo">Join the town</button></div>
         <p class="muted small">To play another role at the same time, open the town in another tab or on another device. Anyone can leave and join again, under any name.</p>
@@ -109,7 +109,7 @@ export function renderRolePanel(S) {
   let html = '';
   if (me.role === 'shopkeeper') {
     const p = S.place;
-    const regs = `<option value="*" ${!p.policy.accepts ? 'selected' : ''}>Any registry</option>${S.registries.map((r) => `<option value="${esc(r.id)}" ${p.policy.accepts?.length === 1 && p.policy.accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`).join('')}`;
+    const regs = `<option value="*" ${!p.policy.accepts ? 'selected' : ''}>Any directory</option>${S.directories.map((r) => `<option value="${esc(r.id)}" ${p.policy.accepts?.length === 1 && p.policy.accepts[0] === r.id ? 'selected' : ''}>${esc(r.name)} only</option>`).join('')}`;
     const checking = p.effective === 'full' || p.effective === 'pilot';
     const st = S.stats ?? {};
     html = `
@@ -125,7 +125,7 @@ export function renderRolePanel(S) {
       <label class="adopt">People without a badge: <select data-k="people">${S.peoples.map((a) => `<option value="${esc(a.id)}" ${a.id === p.policy.people ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>
       <p class="muted small">${esc(S.peoples.find((a) => a.id === p.policy.people)?.blurb ?? '')}</p>
       ${checking ? `<div class="policy-row">
-        <label>Registries <select data-k="accepts">${regs}</select></label>
+        <label>Directories <select data-k="accepts">${regs}</select></label>
         <label><input type="checkbox" data-k="aaf" ${p.policy.aaf === 'required' ? 'checked' : ''}> Badge</label>
         ${p.kind === 'shop' ? `<label><input type="checkbox" data-k="age" ${p.policy.age ? 'checked' : ''}> Proof of age (18+)</label>` : ''}
         <label><input type="checkbox" data-k="worldid" ${p.policy.worldid ? 'checked' : ''}> World ID</label>
@@ -133,7 +133,7 @@ export function renderRolePanel(S) {
         <label title="Proposed extension"><input type="checkbox" data-k="budget" ${p.policy.budget ? 'checked' : ''}> Within its owner's budget</label>
         <label title="Proposed extension: facts from the owner's record, labelled not verified">Also ask for <input data-k="facts" value="${esc((p.policy.facts ?? []).join(', ').replace(/_/g, ' '))}" placeholder="e.g. loyalty card" size="12"></label>
       </div>` : ''}
-      ${checking && S.federations?.length > 1 ? `<div class="policy-row feds-row"><span>Federations you trust:</span>${S.federations.map((f) => `<label title="${esc(f.kind === 'town' ? 'The town’s own federation' : f.kind === 'participants' ? 'Run by the town for teams bringing their own registries and record keepers' : 'Added by its trust anchor’s address')}"><input type="checkbox" data-anchor="${esc(f.key)}" ${!p.policy.anchors || p.policy.anchors.includes(f.key) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>` : ''}
+      ${checking && S.federations?.length > 1 ? `<div class="policy-row feds-row"><span>Federations you trust:</span>${S.federations.map((f) => `<label title="${esc(f.kind === 'town' ? 'The town’s own federation' : f.kind === 'participants' ? 'Run by the town for teams bringing their own directories and records services' : 'Added by its trust anchor’s address')}"><input type="checkbox" data-anchor="${esc(f.key)}" ${!p.policy.anchors || p.policy.anchors.includes(f.key) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}</div>` : ''}
       <h5>What you ask for, and why</h5>
       <ul class="lines">${p.lines.map((l) => `<li><span class="tag ${esc(l.from)}">${esc(FROM[l.from] ?? l.from)}</span>${esc(l.text)}</li>`).join('')}</ul>
       ${S.market ? `<div class="ticker">${S.market.map((m) => `<span><b>${esc(m.id)}</b> $${esc(m.price)} <em class="${m.change >= 0 ? 'up' : 'down'}">${m.change >= 0 ? '▲' : '▼'}${Math.abs(m.change)}%</em></span>`).join('')}</div>` : ''}
@@ -150,12 +150,12 @@ export function renderRolePanel(S) {
   } else if (me.role === 'police') {
     html = `
       <header><div><h1>👮 Case board</h1><p>Officer ${esc(me.name)}</p></div></header>
-      <p class="muted small">Places send in cases. Click any line in the town ledger to open one yourself. Only a court order makes a registry say who stands behind a badge.</p>
+      <p class="muted small">Places send in cases. Click any line in the town ledger to open one yourself. Only a court order makes a directory say who stands behind a badge.</p>
       <ol class="rows">${S.cases.map((c) => `<li class="${c.findings ? 'ok' : 'warn'}" data-case="${c.id}"><i></i><span><b>${esc(c.id)}</b> ${esc(c.title)} · ${esc(c.status)} · ${c.evidence.length} badge${c.evidence.length === 1 ? '' : 's'}${c.findings ? ` · ${esc(c.findings.principal.identity.legal_name)}` : ''}</span></li>`).join('') || '<li class="muted">No cases yet. Quiet town.</li>'}</ol>`;
   } else if (me.role === 'council') {
     html = `
       <header><div><h1>🏛️ Town council</h1><p>Councillor ${esc(me.name)}</p></div></header>
-      <p class="small">Make the law. <b>Registries, record keepers and badges stay exactly the same</b>: only what places must ask for changes.</p>
+      <p class="small">Make the law. <b>Directories, records services and badges stay exactly the same</b>: only what places must ask for changes.</p>
       ${lawHtml(S.law)}
       <h5>How much of town uses the framework</h5>
       ${presetsHtml(S.law)}
@@ -163,7 +163,7 @@ export function renderRolePanel(S) {
   } else if (me.role === 'judge') {
     const pending = S.petitions.filter((p) => p.status === 'pending');
     const done = S.petitions.filter((p) => p.status !== 'pending');
-    const pet = (p) => `<li class="${p.status === 'pending' ? 'warn' : p.status === 'granted' ? 'ok' : 'bad'}" data-petition="${p.id}"><i></i><span><b>${esc(p.kind)}</b> in ${esc(p.case)} · asked by ${esc(p.by)}${p.status !== 'pending' ? ` · ${esc(p.status)}` : ''}</span></li>`;
+    const pet = (p) => `<li class="${p.status === 'pending' ? 'warn' : p.status === 'granted' ? 'ok' : 'bad'}" data-petition="${p.id}"><i></i><span><b>${esc(p.kind)}</b> in ${esc(p.case)} · asked by ${esc(p.by)}${p.status !== 'pending' ? ` · ${esc(p.status)}${p.reason ? `: ${esc(p.reason.split('.')[0].toLowerCase())}` : ''}` : ''}</span></li>`;
     html = `
       <header><div><h1>⚖️ Docket</h1><p>Judge ${esc(me.name)}</p></div></header>
       <h5>Waiting for you</h5>
@@ -179,15 +179,16 @@ export function caseCard(c, { petition, buttons = [] } = {}) {
   const f = c.findings;
   return showCard(`
     <header><div><span class="eyebrow">Case ${esc(c.id)} · ${esc(c.kind)}</span><h3>${esc(c.title)}</h3></div><div class="stamp ${f ? 'ok' : 'warn'}">${esc(c.status)}</div></header>
-    ${petition ? `<p class="note">The police ask the court to <b>${esc(petition.kind)}</b> (petition ${esc(petition.id)}, by ${esc(petition.by)}).</p>` : ''}
-    <p>Filed by ${esc(c.by)}.</p>
-    <section><h4>Evidence</h4><ul class="learned">${c.evidence.map((e) => `<li>${esc(e.place)}: badge <code>${esc(tail(e.ppid))}</code></li>`).join('')}</ul></section>
+    ${petition ? `<p class="note">${c.kind === 'suit' ? 'A resident asks' : 'The police ask'} the court to <b>${esc(petition.kind)}</b> (petition ${esc(petition.id)}, by ${esc(petition.by)}).${petition.kind !== 'identify' ? ' A judgment is public: it names whoever it rules against, except an individual in the Harbor.' : ' Only the people in the case will learn the name.'}</p>` : ''}
+    <p>Filed by ${esc(c.by)}. Where: ${c.jurisdiction === 'eu' ? 'the Harbor (EU rules)' : 'the town (US rules)'}.</p>
+    <p class="${c.harm ? 'note' : 'policy'}"><b>Grounds:</b> ${c.harm ? esc(c.harm) : 'no harm on record. A court makes a directory name someone only when there is harm to answer for.'}</p>
+    <section><h4>Evidence</h4><ul class="learned">${c.evidence.map((e) => `<li>${esc(e.place)}: badge <code>${esc(tail(e.aaf_id))}</code></li>`).join('')}</ul></section>
     ${f ? `<section><h4>What the court found</h4><dl class="facts">
         <dt>Principal</dt><dd>${esc(f.principal.identity.legal_name)} (${esc(f.principal.type.replace('_', ' '))}, ${esc(f.principal.identity.jurisdiction)})</dd>
         <dt>Chain</dt><dd>${f.chain.map((x) => `${esc(x.label)} (${esc(x.status)})`).join(' → ')}</dd>
         <dt>Its badges in the case</dt><dd>${esc(f.linked)} of ${c.evidence.length}; ${esc(f.related)} at that place in all</dd>
         ${f.others?.length ? `<dt>Not the same principal</dt><dd>${f.others.map((o) => `${esc(o.name)} (${o.badges} badge${o.badges === 1 ? '' : 's'})`).join(', ')}: likely bystanders</dd>` : ''}
-      </dl></section>` : '<p class="note">Nobody knows who stands behind these badges yet: each place saw a different number, and none of them can link the numbers. A court order can make the registry say.</p>'}
+      </dl></section>` : '<p class="note">Nobody knows who stands behind these badges yet: each place saw a different number, and none of them can link the numbers. A court order can make the directory say.</p>'}
     ${c.outcome.length ? `<p class="policy">${esc(c.outcome.join(' · '))}</p>` : ''}
     <div class="actions"><button class="primary" id="cardOk"><kbd>↵</kbd>Okay</button></div>`, buttons);
 }

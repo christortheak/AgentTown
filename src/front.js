@@ -1,5 +1,5 @@
 // The places' front doors: one address where an agent that holds its own badge,
-// registered in another federation, sends its requests. A place's relying party
+// registered in another federation, sends its requests. A place's counterparty
 // checks each request's signature against the address it was sent to, so the
 // town's own agents come through here too, marked so the place can tell them
 // apart. Only what an agent may ask of a place gets through: its description
@@ -7,7 +7,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { closeServer } from 'aaf-reference/src/lib/http.js';
-import { HEADERS, RP_METADATA_PATH } from 'aaf-reference/src/lib/protocol.js';
+import { HEADERS, COUNTERPARTY_METADATA_PATH } from 'aaf-reference/src/lib/protocol.js';
 
 /** The header the town's own requests carry, with a value only this town knows. */
 export const OWN_HEADER = 'x-agenttown-own';
@@ -47,25 +47,25 @@ function listen(handler, port, host) {
 
 /**
  * Start the front. `address` is where others reach it (this machine's address on the network), when it listens
- * on every interface. Mount each place's relying party with `mount`: its URL becomes its address here.
+ * on every interface. Mount each place's counterparty with `mount`: its URL becomes its address here.
  */
 export async function startFront({ port = 0, host = '127.0.0.1', address = null } = {}) {
   const secret = crypto.randomBytes(18).toString('base64url');
-  const mounts = new Map(); // slug -> { rp, visitor }
+  const mounts = new Map(); // slug -> { counterparty, visitor }
 
   async function handle(req, res) {
     const { pathname } = new URL(req.url, 'http://front');
-    const m = /^\/([a-z0-9-]+)(\/actions\/[\w.*-]+|\/\.well-known\/aaf-relying-party)$/.exec(pathname);
+    const m = /^\/([a-z0-9-]+)(\/actions\/[\w.*-]+|\/\.well-known\/aaf-counterparty)$/.exec(pathname);
     const mount = m && mounts.get(m[1]);
     const isAction = Boolean(m?.[2].startsWith('/actions/'));
     if (!mount || req.method !== (isAction ? 'POST' : 'GET')) {
-      return send(res, 404, { error: 'not_found', message: `Only a place's description (GET /<place>${RP_METADATA_PATH}) and its actions (POST /<place>/actions/<action>) are served here. GET /api/places on the town lists the places.` });
+      return send(res, 404, { error: 'not_found', message: `Only a place's description (GET /<place>${COUNTERPARTY_METADATA_PATH}) and its actions (POST /<place>/actions/<action>) are served here. GET /api/places on the town lists the places.` });
     }
     const body = isAction ? await readBody(req) : null;
     const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => !HOP_BY_HOP.has(k)));
     // The body goes on byte for byte: its digest is part of what the agent signed.
     const forward = async () => {
-      const r = await fetch(`${mount.rp.privateUrl}${m[2]}`, { method: req.method, headers, body, signal: AbortSignal.timeout(30000) });
+      const r = await fetch(`${mount.counterparty.privateUrl}${m[2]}`, { method: req.method, headers, body, signal: AbortSignal.timeout(30000) });
       return { status: r.status, type: r.headers.get('content-type') ?? 'application/json', text: await r.text() };
     };
     const pass = (r) => {
@@ -79,7 +79,7 @@ export async function startFront({ port = 0, host = '127.0.0.1', address = null 
     try {
       params = JSON.parse(body.toString('utf8') || '{}');
     } catch {
-      // The relying party refuses a body it can't read; the town still notes that someone came.
+      // The counterparty refuses a body it can't read; the town still notes that someone came.
     }
     const action = m[2].slice('/actions/'.length);
     const out = await mount.visitor({
@@ -107,14 +107,14 @@ export async function startFront({ port = 0, host = '127.0.0.1', address = null 
     url,
     /** Headers for the town's own requests. */
     mark: { [OWN_HEADER]: secret },
-    /** Put a relying party behind the front, at /<slug>. `visitor` handles requests from agents the town didn't make. */
-    mount(slug, rp, visitor = null) {
-      // Where it really listens (on this machine), whatever URL it was started with: the relying party checks
-      // signatures against rp.url, read on each request, so that becomes its address here.
-      rp.privateUrl = `http://127.0.0.1:${rp.server.address().port}`;
-      rp.url = `${url}/${slug}`;
-      mounts.set(slug, { rp, visitor });
-      return rp.url;
+    /** Put a counterparty behind the front, at /<slug>. `visitor` handles requests from agents the town didn't make. */
+    mount(slug, counterparty, visitor = null) {
+      // Where it really listens (on this machine), whatever URL it was started with: the counterparty checks
+      // signatures against counterparty.url, read on each request, so that becomes its address here.
+      counterparty.privateUrl = `http://127.0.0.1:${counterparty.server.address().port}`;
+      counterparty.url = `${url}/${slug}`;
+      mounts.set(slug, { counterparty, visitor });
+      return counterparty.url;
     },
     close: () => closeServer(server),
   };

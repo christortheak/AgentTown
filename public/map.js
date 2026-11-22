@@ -50,15 +50,18 @@ export const BUILDINGS = [
   // The Works
   { id: 'forge', name: 'Compute Forge', district: 'works', x: 60, y: 5, w: 7, h: 6, door: 63, roof: '#5b4b4b', wall: '#b5654a', kind: 'forge' },
   { id: 'lab', name: 'Wren Labs', district: 'works', x: 68, y: 6, w: 5, h: 5, door: 70, roof: '#2f8f7a', wall: '#eef3ee', kind: 'office' },
-  // The Harbor (EU)
-  { id: 'harbor', name: 'Harbor Registry', district: 'harbor', x: 29, y: 41, w: 7, h: 6, door: 32, roof: '#2f5fb3', wall: '#f4f1e8', kind: 'harbor' },
-  { id: 'cafe', name: 'Café Lumière', district: 'harbor', x: 40, y: 42, w: 6, h: 5, door: 42, roof: '#c45c48', wall: '#fbf0de', kind: 'cafe' },
-  { id: 'rook', name: 'Rook & Daughters', district: 'harbor', x: 48, y: 42, w: 5, h: 5, door: 50, roof: '#8b6f4e', wall: '#f5ead6', kind: 'house' },
+  // The Harbor, across the river: EU rules. Every bridge crosses the border.
+  { id: 'harbor', name: 'Harbor Directory', district: 'harbor', x: 29, y: 41, w: 7, h: 6, door: 32, roof: '#2f5fb3', wall: '#f4f1e8', kind: 'harbor' },
+  { id: 'cafe', name: 'Café Lumière', district: 'harbor', x: 42, y: 42, w: 6, h: 5, door: 44, roof: '#c45c48', wall: '#fbf0de', kind: 'cafe' },
+  { id: 'rook', name: 'Rook & Daughters', district: 'harbor', x: 50, y: 42, w: 5, h: 5, door: 52, roof: '#8b6f4e', wall: '#f5ead6', kind: 'house' },
+  { id: 'ferry', name: 'Gull Ferry', district: 'harbor', x: 57, y: 41, w: 7, h: 6, door: 60, doorW: 2, roof: '#3c7fa6', wall: '#f2efe6', kind: 'harbor' },
+  { id: 'fish', name: 'Brine & Barrel', district: 'harbor', x: 66, y: 42, w: 6, h: 5, door: 68, roof: '#5f8f8a', wall: '#f6efe0', kind: 'shop' },
+  { id: 'chandler', name: 'Tern Chandlery', district: 'harbor', x: 78, y: 42, w: 6, h: 5, door: 80, roof: '#9a6a3a', wall: '#f3e8d2', kind: 'shop' },
   // The Wilds
   { id: 'mill', name: 'The Old Mill', district: 'wilds', x: 4, y: 29, w: 6, h: 6, door: 6, roof: '#6d4f3a', wall: '#cfc6b5', kind: 'mill' },
   // Small structures
   { id: 'fair', name: 'Harvest Fair', district: 'square', x: 40, y: 26, w: 3, h: 2, door: 41, roof: '#d94f45', wall: '#fffaf0', kind: 'stall' },
-  { id: 'toll', name: 'Bridge Toll', district: 'harbor', x: 39, y: 34, w: 2, h: 2, door: 39, doorW: 2, roof: '#2f5fb3', wall: '#f4efe4', kind: 'toll' },
+  { id: 'toll', name: 'Bridge Toll', district: 'harbor', x: 39, y: 41, w: 2, h: 2, door: 39, doorW: 2, roof: '#2f5fb3', wall: '#f4efe4', kind: 'toll' },
   { id: 'orb', name: 'Orb Kiosk', district: 'civic', x: 30, y: 9, w: 2, h: 2, door: 30, doorW: 2, roof: '#c9d3dc', wall: '#eef2f6', kind: 'kiosk' },
 ];
 
@@ -68,13 +71,14 @@ export const DISTRICTS = [
   { id: 'market', name: 'Market Lane', x: 15, y: 15.6 },
   { id: 'residential', name: 'Hearthside', x: 59, y: 15.6 },
   { id: 'works', name: 'The Works', x: 66, y: 3.2 },
-  { id: 'harbor', name: 'The Harbor (EU)', x: 40, y: 49.4 },
+  { id: 'harbor', name: 'The Harbor (EU rules)', x: 56, y: 49.4 },
   { id: 'wilds', name: 'The Wilds', x: 10, y: 27 },
   { id: 'oldquarter', name: 'The Old Quarter', x: 91, y: 15.6 },
 ];
 
 export const FOUNTAIN = { x: 37, y: 23 };
 export const BOARD = { x: 34, y: 22 };
+export const HARBOR_BOARD = { x: 36, y: 44 }; // the Harbor's notice board, by the main bridge
 export const KEY_SPOT = { x: 60, y: 24 };
 export const POND = { x: 50, y: 28, w: 6, h: 4 };
 
@@ -84,15 +88,25 @@ export const SPOTS = {
   eastGate: tilePx(102, 24),
   millGate: tilePx(9, 35),
   bridge: { x: 38 * TILE, y: 38.6 * TILE },
+  quayEnd: tilePx(91, 47), // the far end of the harbor street, where boats tie up
   burglarStart: tilePx(58, 25),
   wildsEdge: tilePx(13, 28),
   board: { x: (BOARD.x + 0.5) * TILE, y: (BOARD.y + 1.6) * TILE }, // the notice board in Town Square
+  harborBoard: { x: (HARBOR_BOARD.x + 0.5) * TILE, y: (HARBOR_BOARD.y + 1.6) * TILE }, // and the one on the Harbor side
 };
 export const SPAWN = SPOTS.spawn;
 export const BURGLAR_START = SPOTS.burglarStart;
 
 const RIVER = { y: 37, h: 3 };
-const BRIDGES = [20, 37]; // left column of each two-tile bridge
+const BRIDGES = [20, 37, 74]; // left column of each two-tile bridge
+const HARBOR_EAST = 94; // where the quay and the harbor street end
+
+/** The border runs down the middle of the river: north of it the town (US rules), south of it the Harbor (EU rules). */
+export const BORDER_Y = (RIVER.y + RIVER.h / 2) * TILE;
+export const jurisdictionAt = (y) => (y > BORDER_Y ? 'eu' : 'us');
+/** A post at each end of every bridge, with the flag and the name of the side you're entering. */
+const BORDER_POSTS = BRIDGES.flatMap((bx) => [{ x: bx + 2, y: RIVER.y - 1, side: 'us' }, { x: bx + 2, y: RIVER.y + RIVER.h, side: 'eu' }]);
+const FERRY_BOAT = { x: 57, y: 38 };
 const WILDS = { x0: 2, y0: 26, x1: 19, y1: 36 };
 const PARK = { x0: 46, y0: 26, x1: 72, y1: 35 };
 const CARROTS = { x: 59, y: 20, w: 2, h: 2 };
@@ -116,7 +130,7 @@ const LAMPS = [
   // the square's corners
   [32, 20], [44, 20], [32, 28], [44, 28],
   // the harbor
-  [23, 49], [28, 49], [34, 49], [43, 49], [47, 49], [54, 49],
+  [23, 49], [28, 49], [34, 49], [43, 49], [47, 49], [54, 49], [61, 49], [67, 49], [73, 49], [79, 49], [85, 49], [91, 49],
   // the Old Quarter's lanterns on wooden posts
   [82, 26, 'old'], [87, 23, 'old'], [95, 23, 'old'], [84, 31, 'old'], [97, 31, 'old'],
 ];
@@ -143,10 +157,12 @@ export function buildTown() {
   fill(PATH, 45, 14, 45, 23); // lane to Hearthside
   fill(PATH, 37, 29, 38, RIVER.y - 1); // the avenue, south to the main bridge
   fill(PATH, 20, 26, 21, RIVER.y - 1); // the west lane to the old bridge
-  fill(QUAY, 22, RIVER.y + RIVER.h, 58, RIVER.y + RIVER.h);
+  fill(QUAY, 22, RIVER.y + RIVER.h, HARBOR_EAST, RIVER.y + RIVER.h);
   fill(PATH, 20, RIVER.y + RIVER.h, 21, 46);
   fill(PATH, 37, RIVER.y + RIVER.h + 1, 38, 46);
-  fill(PATH, 20, 47, 56, 48); // the harbor street
+  fill(PATH, 74, 26, 75, RIVER.y - 1); // the east lane, down to the east bridge
+  fill(PATH, 74, RIVER.y + RIVER.h + 1, 75, 46);
+  fill(PATH, 20, 47, HARBOR_EAST, 48); // the harbor street
   fill(PLAZA, 32, 20, 44, 28); // Town Square
   fill(DIRT, 13, 26, 13, 35); // the mill track
   fill(DIRT, 6, 35, 19, 35);
@@ -174,6 +190,7 @@ export function buildTown() {
   });
   for (let y = FOUNTAIN.y; y < FOUNTAIN.y + 2; y++) for (let x = FOUNTAIN.x; x < FOUNTAIN.x + 2; x++) solid[y][x] = true;
   solid[BOARD.y][BOARD.x] = true;
+  solid[HARBOR_BOARD.y][HARBOR_BOARD.x] = true;
   const lamps = LAMPS.map(([x, y, style]) => {
     solid[y][x] = true;
     return style === 'old' ? { x, y, old: true } : { x, y };
@@ -224,7 +241,9 @@ export function buildTown() {
 
   const walk = new Uint8Array(COLS * ROWS);
   for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) walk[y * COLS + x] = solid[y][x] ? 0 : 1;
-  return { ground, solid, walk, buildings, lamps, trees, flowers };
+  // Decor that isn't solid: the border posts and the ferry at the quay.
+  const decor = [...BORDER_POSTS.map((p) => ({ kind: 'border', ...p, depth: (p.y + 0.9) * TILE })), { kind: 'ferryboat', ...FERRY_BOAT, depth: (FERRY_BOAT.y + 2) * TILE }];
+  return { ground, solid, walk, buildings, lamps, trees, flowers, decor };
 }
 
 export const isWalkable = (town, tx, ty) => tx >= 0 && ty >= 0 && tx < COLS && ty < ROWS && !town.solid[ty][tx];
@@ -532,6 +551,16 @@ export function drawGround(ctx, town, tx0 = 0, ty0 = 0, tx1 = COLS, ty1 = ROWS) 
     ctx.beginPath(); ctx.moveTo(bx + 28, by + 2); ctx.quadraticCurveTo(bx + 30, by - 4, bx + 34, by - 8); ctx.stroke();
   }
 
+  // The border, painted across each bridge at the middle of the river.
+  for (const bx of BRIDGES) {
+    if (!intersects(bx, RIVER.y, bx + 2, RIVER.y + RIVER.h, tx0, ty0, tx1, ty1)) continue;
+    ctx.strokeStyle = '#2f4fa8';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath(); ctx.moveTo(bx * TILE + 3, BORDER_Y); ctx.lineTo((bx + 2) * TILE - 3, BORDER_Y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // The kitchen garden in the Old Quarter: a bed of cabbages and bean poles.
   if (intersects(GARDEN.x, GARDEN.y, GARDEN.x + GARDEN.w, GARDEN.y + GARDEN.h, tx0, ty0, tx1, ty1)) {
     const gx = GARDEN.x * TILE;
@@ -769,9 +798,9 @@ function drawOldLamp(ctx, lamp, cx, by, night) {
 }
 const oldLampLight = (l) => ({ x: (l.x + 0.5) * TILE + 6, y: (l.y + 1) * TILE - 27 });
 
-export function drawBoard(ctx, t) {
-  const cx = (BOARD.x + 0.5) * TILE;
-  const by = (BOARD.y + 1) * TILE - 4;
+export function drawBoard(ctx, t, at = BOARD) {
+  const cx = (at.x + 0.5) * TILE;
+  const by = (at.y + 1) * TILE - 4;
   ctx.fillStyle = 'rgba(0,0,0,0.18)';
   ctx.beginPath(); ctx.ellipse(cx, by, 15, 4, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#8a5a3c';
@@ -1290,6 +1319,74 @@ function flag(ctx, cx, top, t, color, eu = false) {
       const a = (i / 12) * Math.PI * 2;
       ctx.beginPath(); ctx.arc(fx + Math.cos(a) * 4.2, fy + Math.sin(a) * 4.2, 0.9, 0, Math.PI * 2); ctx.fill();
     }
+  }
+}
+
+/** The town's flag: red and white stripes, a blue corner. */
+function usFlag(ctx, cx, top, t) {
+  ctx.fillStyle = '#5a4636';
+  ctx.fillRect(cx - 1, top - 30, 2, 31);
+  const cloth = () => {
+    ctx.beginPath();
+    ctx.moveTo(cx + 1, top - 30);
+    for (let i = 0; i <= 6; i++) ctx.lineTo(cx + 1 + i * 3.6, top - 30 + Math.sin(t * 4 + i * 0.8) * 1.6);
+    for (let i = 6; i >= 0; i--) ctx.lineTo(cx + 1 + i * 3.6, top - 17 + Math.sin(t * 4 + i * 0.8) * 1.6);
+    ctx.closePath();
+  };
+  ctx.save();
+  cloth();
+  ctx.fillStyle = '#fffaf0';
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = '#c8524a';
+  for (let k = 0; k < 8; k += 2) ctx.fillRect(cx, top - 32 + k * 2, 26, 2);
+  ctx.fillStyle = '#2c3e66';
+  ctx.fillRect(cx, top - 32, 11, 9);
+  ctx.restore();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 2;
+  cloth();
+  ctx.stroke();
+}
+
+/** Things on the map that aren't buildings: a border post at each end of every bridge, and the ferry at the quay. */
+export function drawDecor(ctx, d, t) {
+  if (d.kind === 'ferryboat') return drawFerryBoat(ctx, d, t);
+  const cx = (d.x + 0.4) * TILE;
+  const base = d.depth;
+  ctx.fillStyle = 'rgba(40,60,30,0.22)';
+  ctx.beginPath(); ctx.ellipse(cx, base, 7, 3, 0, 0, Math.PI * 2); ctx.fill();
+  if (d.side === 'eu') flag(ctx, cx, base - 2, t, '#2f4fa8', true);
+  else usFlag(ctx, cx, base - 2, t);
+  smallSign(ctx, d.side === 'eu' ? 'The Harbor · EU rules' : 'The town · US rules', cx + 34, base - 40, d.side === 'eu' ? '#e8eeff' : '#fff6df');
+}
+
+/** The ferry, tied up at the quay by its office: a white hull, a cabin and a funnel. */
+function drawFerryBoat(ctx, d, t) {
+  const bx = d.x * TILE + 8;
+  const by = d.y * TILE + 14 + Math.sin(t * 1.2) * 1.2;
+  const w = 6 * TILE;
+  ctx.fillStyle = 'rgba(30,60,90,0.25)';
+  ctx.beginPath(); ctx.ellipse(bx + w / 2, by + 30, w / 2 + 6, 7, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 2;
+  ctx.fillStyle = '#f4f1e8';
+  ctx.beginPath();
+  ctx.moveTo(bx, by + 10); ctx.lineTo(bx + w + 12, by + 10); ctx.quadraticCurveTo(bx + w + 2, by + 30, bx + w - 14, by + 30);
+  ctx.lineTo(bx + 16, by + 30); ctx.quadraticCurveTo(bx + 2, by + 28, bx, by + 10);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#3c7fa6';
+  ctx.fillRect(bx + 4, by + 20, w + 2, 4);
+  ctx.fillStyle = '#fffaf0';
+  roundRect(ctx, bx + 30, by - 8, w - 74, 18, 4); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#bfe4f5';
+  for (let i = 0; i < 5; i++) { roundRect(ctx, bx + 38 + i * 22, by - 4, 14, 9, 2); ctx.fill(); ctx.stroke(); }
+  ctx.fillStyle = '#c45c48';
+  ctx.fillRect(bx + w - 32, by - 22, 12, 16); ctx.strokeRect(bx + w - 32, by - 22, 12, 16);
+  for (let i = 0; i < 3; i++) {
+    const p = (t * 0.3 + i / 3) % 1;
+    ctx.fillStyle = `rgba(150,150,150,${0.45 * (1 - p)})`;
+    ctx.beginPath(); ctx.arc(bx + w - 26 + p * 12, by - 26 - p * 30, 4 + p * 7, 0, Math.PI * 2); ctx.fill();
   }
 }
 

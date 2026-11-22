@@ -41,7 +41,7 @@ const ROLES = ['authorization', 'provenance', 'activity'];
  * A trust anchor (OpenID Federation): its Entity Configuration, the list of its members, and a Subordinate
  * Statement for each. Unlike the reference one, it can admit a member while it runs.
  *   members:   [{ entity_id, entity_type, jwks, metadata }]
- *   open:      a registry it admits may accredit record keepers in this federation, for every role
+ *   open:      a directory it admits may accredit records services in this federation, for every role
  *   publicUrl: where others reach it, when that isn't where it listens (a name of its own, behind a tunnel)
  */
 export async function startAnchor({ entityId, name, key, port = 0, host = '127.0.0.1', address = null, publicUrl = null, policies, members = [], trustMarkIssuers = {}, open = false }) {
@@ -68,13 +68,13 @@ export async function startAnchor({ entityId, name, key, port = 0, host = '127.0
     anchor: { entity_id: entityId, url: localUrl, jwks: jwksOf(key) },
     thumbprint: thumbprint(key.publicJwk),
     members: () => list,
-    /** Admit a member. A registry in an open federation may then accredit record keepers here. */
+    /** Admit a member. A directory in an open federation may then accredit records services here. */
     admit(m) {
       if (!ENTITY_TYPES.includes(m.entity_type)) throw new HttpError(400, 'bad_type', `entity_type must be one of ${ENTITY_TYPES.join(', ')}`);
       const at = list.findIndex((x) => x.entity_id === m.entity_id);
       if (at >= 0) list[at] = m;
       else list.push(m);
-      if (open && m.entity_type === 'aaf_registry') {
+      if (open && m.entity_type === 'aaf_directory') {
         for (const role of ROLES) {
           const type = trustMarkType(entityId, role);
           issuers[type] = [...new Set([...(issuers[type] ?? []), m.entity_id])];
@@ -102,7 +102,7 @@ export async function readEntity(url, { guard = null } = {}) {
   const claimed = decodeJws(jwt).payload;
   const ec = verifyEntityStatement(jwt, claimed.jwks, { iss: claimed.sub, sub: claimed.sub }); // self-signed: it holds the keys it names
   const [type, md] = Object.entries(ec.metadata ?? {}).find(([k]) => ENTITY_TYPES.includes(k)) ?? [];
-  if (!type) throw new HttpError(400, 'not_a_member_type', `${base} is not a registry or record keeper (no aaf_ metadata in its Entity Configuration)`);
+  if (!type) throw new HttpError(400, 'not_a_member_type', `${base} is not a directory or records service (no aaf_ metadata in its Entity Configuration)`);
   const sigKeys = (md.jwks ?? ec.jwks).keys.filter((k) => k.use !== 'enc');
   return {
     member: { entity_id: ec.sub, entity_type: type, jwks: { keys: ec.jwks.keys.filter((k) => k.use !== 'enc') }, metadata: { ...md, endpoint_base: md.endpoint_base ?? base, jwks: md.jwks ?? ec.jwks } },
@@ -144,19 +144,19 @@ export class MultiView {
       return this.feds().flatMap((f) => f.view.doc[k]).filter((e) => !seen.has(e.id) && seen.add(e.id));
     };
     const first = this.feds()[0].view.doc;
-    return { ...first, registries: all('registries'), record_keepers: all('record_keepers'), verifiers: all('verifiers'), resolution_authorities: all('resolution_authorities') };
+    return { ...first, directories: all('directories'), records_services: all('records_services'), verifiers: all('verifiers'), designated_authorities: all('designated_authorities') };
   }
-  get registries() {
-    return this.doc.registries;
+  get directories() {
+    return this.doc.directories;
   }
-  get recordKeepers() {
-    return this.doc.record_keepers;
+  get recordsServices() {
+    return this.doc.records_services;
   }
-  registry(id) {
-    return this.find((v, x) => v.registry(x), id);
+  directory(id) {
+    return this.find((v, x) => v.directory(x), id);
   }
-  recordKeeper(id) {
-    return this.find((v, x) => v.recordKeeper(x), id);
+  recordsService(id) {
+    return this.find((v, x) => v.recordsService(x), id);
   }
   authority(id, kind) {
     return this.find((v, x) => v.authority(x, kind), id);
@@ -174,7 +174,7 @@ export class MultiView {
     return this.feds().flatMap((f) => f.view.trustMarkIssuers(type));
   }
   signingKey(entity, kid) {
-    if (entity?.id) this.find((v, x) => v.registry(x) ?? v.recordKeeper(x) ?? v.authority(x, 'verifier') ?? v.authority(x, 'resolution'), entity.id);
+    if (entity?.id) this.find((v, x) => v.directory(x) ?? v.recordsService(x) ?? v.authority(x, 'verifier') ?? v.authority(x, 'designated'), entity.id);
     return Federation.prototype.signingKey.call(null, entity, kid);
   }
   encryptionKey(entity) {
@@ -214,7 +214,7 @@ export function createFederations({ guard = null, onDrop = () => {} } = {}) {
       return list.filter((e, i) => ok[i]);
     };
     const doc = { ...view.doc };
-    for (const k of ['registries', 'record_keepers', 'verifiers', 'resolution_authorities']) doc[k] = await keep(doc[k] ?? []);
+    for (const k of ['directories', 'records_services', 'verifiers', 'designated_authorities']) doc[k] = await keep(doc[k] ?? []);
     return { view: dropped.length ? new Federation(doc) : view, dropped };
   }
   /** Take a fresh view, and say which members are newly left out. */
@@ -253,7 +253,7 @@ export function createFederations({ guard = null, onDrop = () => {} } = {}) {
     },
     /** The federation that lists an entity. */
     of(entityId) {
-      return [...feds.values()].find((f) => f.view.registry(entityId) || f.view.recordKeeper(entityId)) ?? null;
+      return [...feds.values()].find((f) => f.view.directory(entityId) || f.view.recordsService(entityId)) ?? null;
     },
     /** A view over the federations with these keys (all, if none given), as they are at each call. */
     view(keys) {

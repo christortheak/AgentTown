@@ -1,9 +1,9 @@
-// Where the town's registries and record keepers live.
+// Where the town's directories and records services live.
 //
 //   local (default)  a fresh in-process federation from aaf-reference, in a temp folder
 //   external         a real federation reached over the network: give the trust
 //                    anchor's URL (an IP address is fine) and its public key; every
-//                    registry and record keeper is discovered from it.
+//                    directory and records service is discovered from it.
 //
 // Configure with a JSON file named by AGENTTOWN_CONFIG (see town.config.example.json):
 //   {
@@ -11,9 +11,9 @@
 //       "trustAnchor": "./trust-anchor.json"      // or { "entity_id", "url", "jwks" }
 //       "urlOverrides": { "<entity id>": "http://192.168.1.21:4101" },
 //       "authorityKeys": "./keys",                // optional: keys for the identity verifier and court this town operates
-//       "registryOperatorTokens": { "<registry id>": "<token>" }  // optional: lets court orders revoke registrations
+//       "directoryOperatorTokens": { "<directory id>": "<token>" }  // optional: lets court orders revoke registrations ("registryOperatorTokens" still works)
 //     },
-//     "places": { "cafe": { "accepts": ["https://registry-b.aaf.test"] } }
+//     "places": { "cafe": { "accepts": ["https://directory-b.aaf.test"] } }
 //   }
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,8 +21,8 @@ import path from 'node:path';
 import { setupFederation, accreditAll } from 'aaf-reference/src/lib/federation.js';
 import { discoverWithRetry, discoverFederation, loadFederationConfig, loadKeys, fileNameFor } from 'aaf-reference/src/lib/trust.js';
 import { startTrustAnchor } from 'aaf-reference/src/trustanchor/server.js';
-import { startRegistry } from 'aaf-reference/src/registry/server.js';
-import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
+import { startDirectory } from 'aaf-reference/src/directory/server.js';
+import { startRecordsService } from 'aaf-reference/src/records/server.js';
 import { isLoopback } from './addresses.js';
 
 export function loadConfig(file = process.env.AGENTTOWN_CONFIG) {
@@ -56,7 +56,7 @@ async function startLocalFederation({ dataDir, portOffset, address = null }) {
   const initial = await discoverFederation(trustAnchor);
   for (const svc of config.services) {
     const common = { id: svc.id, port: svc.port + portOffset, host: listen, trustList: initial, keys: loadKeys(svc.id, paths.keysDir), dataDir: path.join(dataDir, fileNameFor(svc.id)), quiet: true };
-    handles.push(svc.kind === 'registry' ? await startRegistry(common) : await startRecordKeeper({ ...common, allowTamperSimulation: Boolean(svc.allowTamperSimulation) }));
+    handles.push(svc.kind === 'directory' ? await startDirectory(common) : await startRecordsService({ ...common, allowTamperSimulation: Boolean(svc.allowTamperSimulation) }));
   }
   // Operator calls go to each service on this machine, at its offset port (the framework asks for it now).
   await accreditAll({ trustList: initial, paths, config, portOffset });
@@ -79,8 +79,8 @@ export async function connectFederation({ federation, portOffset = 7000, address
     };
   }
   const ta = federation.trustAnchor;
-  if (!ta?.url || !ta?.entity_id || !ta?.jwks) throw new Error('federation.trustAnchor needs entity_id, url and jwks (the trust anchor bootstrap, e.g. aaf-reference/data.nosync/trust-anchor.json)');
+  if (!ta?.url || !ta?.entity_id || !ta?.jwks) throw new Error('federation.trustAnchor needs entity_id, url and jwks (the trust anchor bootstrap, e.g. data.nosync/trust-anchor.json in a clone of the framework’s sample implementation)');
   let trust = await discoverWithRetry(ta, 15000);
   if (federation.urlOverrides) trust = trust.withUrlOverrides(federation.urlOverrides);
-  return { kind: 'external', trust, anchor: ta, overrides: federation.urlOverrides ?? null, keysDir: federation.authorityKeys, adminTokens: federation.registryOperatorTokens ?? {}, trustAnchorUrl: ta.url, close: async () => {} };
+  return { kind: 'external', trust, anchor: ta, overrides: federation.urlOverrides ?? null, keysDir: federation.authorityKeys, adminTokens: (federation.directoryOperatorTokens ?? federation.registryOperatorTokens) ?? {}, trustAnchorUrl: ta.url, close: async () => {} };
 }

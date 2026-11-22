@@ -407,6 +407,9 @@ ul.lines li { margin: 3px 0; line-height: 1.35; }
 #xray li.done { color: var(--ink); }
 #xray li.bad b { color: var(--bad); }
 .banner.reveal { top: auto; bottom: 74px; width: max-content; max-width: min(720px, calc(100vw - 24px)); border-color: #7a5aa6; background: #f3ecfd; cursor: pointer; text-align: center; border-radius: 16px; }
+/* Crossing the river: which side's law you're under now. */
+.banner.border { top: 64px; width: max-content; max-width: min(640px, calc(100vw - 24px)); border-color: #2f4fa8; background: #eef3ff; cursor: pointer; text-align: center; border-radius: 16px; font-weight: 500; line-height: 1.4; }
+.banner.border b { font-weight: 800; }
 body.presenter #quest, body.presenter #record, body.presenter #phone, body.presenter #rolePanel { display: none; }
 body.presenter #ledger { width: 440px; max-height: 46vh; font-size: 14px; }
 body.presenter #ledgerList { font-size: 14px; }
@@ -420,7 +423,8 @@ body.presenter #joinAt:not(:empty) { display: block; }
   kbd, #dock kbd, .panel .hint { display: none; }
   #dock { bottom: 10px; gap: 6px; }
   #dock button { padding: 7px 11px; font-size: 13px; white-space: nowrap; }
-  .banner.reveal { font-size: 12px; padding: 6px 10px; }
+  .banner.reveal, .banner.border { font-size: 12px; padding: 6px 10px; }
+  .banner.border { top: auto; bottom: 150px; }
   #quest { top: 10px; left: 10px; right: 10px; padding: 8px 12px; }
   #quest h1 { font-size: 15px; }
   #backBtn { top: auto; bottom: 104px; }
@@ -498,6 +502,7 @@ ul.answers small { display: block; color: var(--muted); }
 .assistant ul.notes { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
 .assistant ul.notes li { padding: 2px 0; }
 .notices li.extras-title { margin-top: 8px; list-style: none; }
+.notices ul { margin: 2px 0 4px; padding-left: 16px; }
 
 /* The halls: every federation the town knows, and its members */
 #card section.fed { margin: 10px 0; padding: 8px 10px; border-radius: 12px; background: var(--paper-2); }

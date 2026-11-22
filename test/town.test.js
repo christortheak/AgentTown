@@ -14,8 +14,8 @@ import { startServer } from '../src/server.js';
 import { assertPublicAddress, createGuard, clientAddress, lanAddress } from '../src/addresses.js';
 import { startAnchor } from '../src/proposed/anchors.js';
 import { buildTown, placeFront } from '../public/map.js';
-import { startRegistry } from 'aaf-reference/src/registry/server.js';
-import { startRecordKeeper } from 'aaf-reference/src/recordkeeper/server.js';
+import { startDirectory } from 'aaf-reference/src/directory/server.js';
+import { startRecordsService } from 'aaf-reference/src/records/server.js';
 import { generateSigningKey, generateEncryptionKey, b64u } from 'aaf-reference/src/lib/crypto.js';
 import { jwksOf } from 'aaf-reference/src/lib/openid-federation.js';
 import { discoverFederation } from 'aaf-reference/src/lib/trust.js';
@@ -104,7 +104,7 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     const kettle = await run('buy', { shop: 'kettle', item: 'kettle' });
     assert.equal(kettle.headline, 'Sign in first');
     assert.equal(kettle.fix.action, 'signup', 'every refusal suggests the next step');
-    // Registering before verification is refused by the registry itself.
+    // Registering before verification is refused by the directory itself.
     const early = await run('register', { name: 'Pip' });
     assert.equal(early.decision, 'refused');
     assert.match(early.reasons[0], /verified/);
@@ -118,7 +118,7 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.equal((await run('buy', { shop: 'bramble', item: 'guide' })).decision, 'deny', 'registered, but no authority yet');
     assert.equal((await run('grant', { budget: 50 })).decision, 'allow');
 
-    // Shops: within the grant, over it, and a shop that only takes the EU registry's badges.
+    // Shops: within the grant, over it, and a shop that only takes the EU directory's badges.
     const guide = await run('buy', { shop: 'bramble', item: 'guide' });
     assert.equal(guide.decision, 'allow');
     assert.ok(guide.receipt.verified);
@@ -130,8 +130,8 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.equal(tooMuch.heldBack, true, 'over the record\'s limit: the agent never asks the shop');
     assert.match(tooMuch.headline, /didn't go ahead/);
     const cafe = await run('buy', { shop: 'cafe', item: 'creme' });
-    assert.notEqual(cafe.decision, 'allow', 'Café Lumière only accepts Harbor Registry badges');
-    assert.match(cafe.policy, /Harbor Registry|Registry B/);
+    assert.notEqual(cafe.decision, 'allow', 'Café Lumière only accepts badges from Directory B, in the Harbor');
+    assert.match(cafe.policy, /Directory B/);
 
     // Disclosure requests: a place asks, the principal decides on their phone, the agent shows only that.
     assert.equal((await run('compute', { job: 'small' })).decision, 'allow');
@@ -190,12 +190,12 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.match((await run('helper.fund', { helper: sprout.id, budget: 100 })).reasons[0], /exceed|authority/i);
     assert.equal((await run('helper.fund', { helper: sprout.id, budget: 20 })).decision, 'allow');
     assert.match((await run('helper.deeper', { helper: sprout.id })).reasons[0], /level/);
-    assert.equal((await run('helper.spawn', { registry: 'harbor', kind: 'standing' })).decision, 'allow');
-    const eu = (await get('/api/state')).helpers.find((h) => h.registry !== st.helpers[0].registry);
+    assert.equal((await run('helper.spawn', { directory: 'harbor', kind: 'standing' })).decision, 'allow');
+    const eu = (await get('/api/state')).helpers.find((h) => h.directory !== st.helpers[0].directory);
     await run('helper.fund', { helper: eu.id, budget: 10 });
     await run('helper.errand', { helper: eu.id, task: 'buy:cafe/creme' });
     const euCafe = await until(get, (e) => e.kind === 'check' && e.placeId === 'cafe' && e.actor === eu.name, { label: "the EU sub-agent's café visit" });
-    assert.equal(euCafe.decision, 'allow', 'a federated chain through the EU registry is served');
+    assert.equal(euCafe.decision, 'allow', 'a federated chain through the EU directory is served');
     await run('helper.errand', { helper: sprout.id, task: 'fair' });
     const sproutPie = await until(get, (e) => e.kind === 'check' && e.placeId === 'fair' && e.actor === sprout.name, { label: "the helper's pie" });
     assert.equal(sproutPie.decision, 'deny', 'the helper is the same person: World ID says one pie');
@@ -207,7 +207,7 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     }
     assert.equal((await run('mischief.forge', { at: 'kettle' })).classification, 'UNSUPPORTED');
 
-    // A registry outage: places defer rather than refuse.
+    // A directory outage: places defer rather than refuse.
     await post('/api/director', { cue: 'outage', params: { seconds: 2 } });
     const deferred = await run('buy', { shop: 'bakery', item: 'loaf' });
     assert.equal(deferred.decision, 'deferred');
@@ -233,13 +233,13 @@ test('a day in AgentTown', { timeout: 120000 }, async () => {
     assert.match(shown.classification, /ACCOUNTABLE/);
 
     // The rogue swarm: depth refused, a pump reported, and the root revoked, by Gloam itself
-    // (after incident reports) or by the court (after the police), whichever comes first.
+    // (after incident reports) or by the court (after the police), whichever comes first. A ban
+    // is only for misconduct a second time, so this may or may not end in one.
     await post('/api/director', { cue: 'swarm' });
     await until(get, (e) => /lineage depth budget/.test(e.text ?? ''), { label: 'depth refusals' });
     await until(get, (e) => e.kind === 'alert' && /MOON/.test(e.text), { label: 'the pump alert' });
     const cascade = await until(get, (e) => /revoked runner-hub/.test(e.text ?? ''), { timeout: 60000, label: 'the cascade' });
     assert.match(cascade.text, /8 sub-agent/);
-    await until(get, (e) => /withdrew Gloam Holdings Ltd's verification/.test(e.text ?? ''), { timeout: 60000, label: 'the ban' });
 
     // Night and the court.
     const night = await run('night');
@@ -270,13 +270,13 @@ test('an external federation, reached by address', { timeout: 60000 }, async () 
     const info = await get('/api/info');
     assert.equal(info.federation, 'external');
     assert.equal(info.trust_anchor, fed.trustAnchor.url);
-    assert.ok(info.registries.length >= 2);
+    assert.ok(info.directories.length >= 2);
     await join('agent', 'Robin Ash');
     assert.equal((await run('verify')).decision, 'allow');
     assert.equal((await run('register', { name: 'Pip' })).decision, 'allow');
     await run('grant', { budget: 25 });
     await run('play', { as: 'agent' });
-    assert.equal((await run('buy', { shop: 'cafe', item: 'creme' })).decision, 'allow', 'this town configured the café to accept every registry');
+    assert.equal((await run('buy', { shop: 'cafe', item: 'creme' })).decision, 'allow', 'this town configured the café to accept every directory');
   } finally {
     await game.close();
     await fed.close();
@@ -296,8 +296,8 @@ test('people in roles: a shopkeeper, a homeowner, police, a judge, and a crook',
     for (const [a, p] of [['verify'], ['register', { name: 'Ace' }], ['grant', { budget: 50 }]]) assert.equal((await alice.run(a, p)).decision, 'allow', a);
     await alice.run('play', { as: 'agent' });
 
-    // The shopkeeper decides which registries she trusts, and sees what each customer proves.
-    await carol.run('shop.policy', { patch: { accepts: ['https://registry-b.aaf.test'] } });
+    // The shopkeeper decides which directories she trusts, and sees what each customer proves.
+    await carol.run('shop.policy', { patch: { accepts: ['https://directory-b.aaf.test'] } });
     assert.equal((await alice.run('buy', { shop: 'bramble', item: 'guide' })).classification, 'UNSUPPORTED');
     await carol.run('shop.policy', { patch: { accepts: null } });
     assert.equal((await alice.run('buy', { shop: 'bramble', item: 'guide' })).decision, 'allow');
@@ -333,7 +333,7 @@ test('people in roles: a shopkeeper, a homeowner, police, a judge, and a crook',
     const pump = (await dave.get('/api/state')).cases.find((c) => c.kind === 'pump');
     assert.ok(pump.evidence.length >= 3, 'the exchange reported fresh badges it could not link');
 
-    // The police petition, the judge rules, and the orders run on the registry and the verifier.
+    // The police petition, the judge rules, and the orders run on the directory and the verifier.
     const ruleOn = async (kind) => {
       await dave.run('case.petition', { case: pump.id, kind });
       const p = (await erin.get('/api/state')).petitions.find((x) => x.kind === kind && x.status === 'pending');
@@ -376,7 +376,7 @@ test('joining takes only the town’s own roles, places and houses, and the idle
     assert.equal((await tryJoin('homeowner', ['hazel'])).httpStatus, 409, 'a claimed house, named in a list');
     assert.equal((await tryJoin(['judge'])).httpStatus, 400, 'the one bench, named in a list');
     assert.deepEqual(places.places.bramble.human.name, 'Carol Lee', 'the place is still hers');
-    assert.equal(places.hearth.rp.accounts.get('hazel').owner, 'Bob Hart', 'and the house still his');
+    assert.equal(places.hearth.counterparty.accounts.get('hazel').owner, 'Bob Hart', 'and the house still his');
 
     // Names every object has are not places, houses or roles.
     for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
@@ -409,6 +409,156 @@ test('joining takes only the town’s own roles, places and houses, and the idle
     assert.equal(said.length, 1, 'it said which one it could not let go cleanly');
     assert.equal(sessions.size, 0, 'everyone idle was let go');
     assert.equal(places.places.apothecary.human, null, 'and the place after the stuck one went back to the town');
+  } finally {
+    await game.close();
+  }
+});
+
+test('a place learns only what it asks, one record per verified identity, and an order at a directory the town doesn’t run', { timeout: 120000 }, async () => {
+  const game = await startServer({ port: 4489, portOffset: 10600, quiet: true, residents: false, timeScale: 25 });
+  const { world } = game.town;
+  const [ann, twin, dave, erin] = [client(game), client(game), client(game), client(game)];
+  try {
+    await ann.join('agent', 'Ann Fell');
+    for (const [a, p] of [['verify'], ['register', { name: 'Ash' }], ['grant', { budget: 80 }]]) assert.equal((await ann.run(a, p)).decision, 'allow', a);
+    await ann.run('play', { as: 'agent' });
+
+    // A shop asks for nothing beyond the badge, so it learns an ID and that a directory verified someone who answers for it.
+    const loaf = await ann.run('buy', { shop: 'bakery', item: 'loaf' });
+    assert.equal(loaf.decision, 'allow');
+    const about = (card) => card.plain.map((x) => x.kind).filter((k) => ['aaf_id', 'accountable', 'principal', 'assurance', 'chain', 'identity'].includes(k));
+    assert.deepEqual(about(loaf), ['aaf_id', 'accountable'], 'nothing about the principal it didn’t ask for');
+    assert.match(loaf.plain[0].text, /PPID/);
+    assert.match(loaf.plain[1].text, /Directory A/);
+    assert.match(loaf.why, /but not who/);
+    // A door asks who stands behind an agent, never the name, so its owner can decide.
+    assert.ok((await ann.passkey()).credential_id);
+    const knock = await ann.run('home.enter');
+    assert.equal(knock.decision, 'step_up');
+    const approval = (await ann.get('/api/state')).phone.approvals.find((a) => a.purpose === 'delegate-agent');
+    assert.equal(approval.details.accountability.type, 'natural_person');
+    assert.equal(approval.details.accountability.assurance, 'IAL2');
+    assert.equal(approval.details.accountability.identity ?? null, null);
+
+    // Two residents can't both be verified as Ann Fell: one verified identity, one record.
+    await twin.join('agent', 'Ann Fell');
+    const again = await twin.run('verify');
+    assert.equal(again.decision, 'refused');
+    assert.equal(again.headline, 'Already on file');
+    assert.doesNotMatch(JSON.stringify(again), /prn_/, 'and the other record’s id stays with the directory');
+
+    // An order reaches only the agent behind the badge it names, at a directory the town doesn't operate.
+    await dave.join('police', 'Dave Moss');
+    await erin.join('judge', 'Erin Vale');
+    for (let i = 0; i < 4; i++) await ann.run('helper.spawn', { kind: 'standing' });
+    const helpers = (await ann.get('/api/state')).helpers;
+    for (const h of helpers) assert.equal((await ann.run('helper.fund', { helper: h.id, budget: 30 })).decision, 'allow');
+    for (const h of helpers) await ann.run('helper.errand', { helper: h.id, task: 'trade:MOON' });
+    await until(ann.get, (e) => e.kind === 'alert' && /MOON/.test(e.text), { label: 'the pump alert' });
+    const pump = (await dave.get('/api/state')).cases.find((c) => c.kind === 'pump');
+    const ruleOn = async (kind) => {
+      await dave.run('case.petition', { case: pump.id, kind });
+      const p = (await erin.get('/api/state')).petitions.find((x) => x.kind === kind && x.status === 'pending');
+      return erin.run('petition.rule', { petition: p.id, grant: true });
+    };
+    assert.equal((await ruleOn('identify')).decision, 'allow');
+    const { adminToken } = world;
+    world.adminToken = () => null;
+    try {
+      assert.equal((await ruleOn('delete')).decision, 'allow');
+    } finally {
+      world.adminToken = adminToken;
+    }
+    const deleted = await until(ann.get, (e) => e.kind === 'justice' && /under legal order/.test(e.text ?? ''), { label: 'the deletion' });
+    assert.match(deleted.text, /4 agents under Ash/);
+    assert.match(deleted.text, /Ash, above them, is still registered/);
+    assert.equal((await ann.run('buy', { shop: 'bakery', item: 'loaf' })).decision, 'allow', 'the order didn’t reach Ash itself');
+
+    // Ann leaves, and her record closes: now the other Ann Fell can be verified. The night's visitors are the same firm for both.
+    assert.equal((await ann.run('night')).incidents_relayed, 3);
+    await ann.post('/api/leave');
+    let verified = null;
+    for (let i = 0; i < 30 && verified?.decision !== 'allow'; i++) {
+      verified = await twin.run('verify');
+      if (verified.decision !== 'allow') await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(verified.decision, 'allow', 'a record closes when its resident leaves');
+    for (const [a, p] of [['register', { name: 'Elm' }], ['grant', { budget: 20 }]]) assert.equal((await twin.run(a, p)).decision, 'allow', a);
+    assert.equal((await twin.run('night')).incidents_relayed, 3);
+  } finally {
+    await game.close();
+  }
+});
+
+test('the court acts on harm, a name stays with the case, and across the river a judgment leaves out an individual’s', { timeout: 120000 }, async () => {
+  const game = await startServer({ port: 4486, portOffset: 13000, quiet: true, residents: false, timeScale: 25 });
+  const [cy, bo, wes] = [client(game), client(game), client(game)];
+  // What everyone sees: the ledger lines that aren't private to one person.
+  const shared = () => game.town.ledger.items.filter((e) => !e.private).map((e) => e.text ?? '');
+  const crew = async (who, task) => {
+    for (let i = 0; i < 4; i++) await who.run('helper.spawn', { kind: 'standing' });
+    const helpers = (await who.get('/api/state')).helpers;
+    for (const h of helpers) assert.equal((await who.run('helper.fund', { helper: h.id, budget: 30 })).decision, 'allow');
+    if (task) for (const h of helpers) await who.run('helper.errand', { helper: h.id, task });
+    return helpers;
+  };
+  try {
+    for (const [c, name, agent] of [[cy, 'Cy Marsh', 'Kit'], [bo, 'Bo Lind', 'Pip']]) {
+      await c.join('agent', name);
+      for (const [a, p] of [['verify'], ['register', { name: agent }], ['grant', { budget: 80 }]]) assert.equal((await c.run(a, p)).decision, 'allow', a);
+    }
+    await wes.join('agent', 'Wes Tate');
+
+    // Bo checks the badge of one of Cy's sub-agents. That's no harm, so the court won't have anyone named.
+    const [kid] = await crew(cy);
+    const checked = await bo.run('id.ask', { npc: kid.id });
+    assert.ok(checked.aaf_id, 'the badge reader saw an ID');
+    const denied = await bo.run('court', {});
+    assert.equal(denied.headline, 'Petition denied');
+    assert.match(denied.reasons[0], /No harm on record/);
+
+    // Someone tries Bo's door at night: that's harm. The court traces the ID, and only Bo (with the police and the judge) learns who.
+    assert.equal((await bo.run('night')).incidents_relayed, 3);
+    const traced = await bo.run('court', {});
+    assert.equal(traced.headline, 'Court order: traced');
+    assert.match(traced.facts[0].value, /Nightjar Labs Inc\./);
+    await until(bo.get, (e) => /The court traced the ID in your case/.test(e.text ?? ''), { label: 'Bo’s private line' });
+    assert.ok(!shared().some((t) => /traced the ID in your case/.test(t)), 'that line is Bo’s alone');
+    assert.ok(shared().some((t) => /traced the IDs in case .* one principal, a company/.test(t)), 'the town hears that the court traced it');
+    assert.ok(!shared().some((t) => /traced the IDs/.test(t) && /Nightjar/.test(t)), 'but not who');
+    assert.deepEqual(shared().filter((t) => /Bo Lind|Cy Marsh/.test(t)), [], 'nor who brought the case');
+
+    // Across the river, Cy's four sub-agents buy a Lantern Regatta seat each: every badge keeps to two per person, and
+    // Cy goes over it. The ferry can't tell; the court can, and has the extra seats cancelled. That breaks the ferry's
+    // rules, not the Harbor's law: no judgment, no name, no ban.
+    for (const h of (await cy.get('/api/state')).helpers) await cy.run('helper.errand', { helper: h.id, task: 'buy:ferry/regatta' });
+    await until(cy.get, (e) => e.kind === 'alert' && /Gull Ferry: \d badges it had never seen/.test(e.text), { label: 'the ferry’s alert' });
+    const cancelled = await until(cy.get, (e) => /Gull Ferry cancelled 2 Lantern Regatta seats/.test(e.text ?? ''), { timeout: 40000, label: 'the seats cancelled' });
+    assert.match(cancelled.text, /no judgment and no name/);
+    assert.equal(game.town.places.seatsLeft('regatta'), 12 - 2, 'two of Cy’s four seats are on sale again');
+    assert.ok(!shared().some((t) => /^Judgment in case/.test(t) && /Regatta/.test(t)), 'nothing about the regatta was judged');
+    assert.ok(!(await cy.get('/api/state')).principal.banned, 'nor is Cy banned');
+
+    // On the town's side of the river, Bo's sub-agents pump the Exchange. That's against the law: the judgment names him.
+    await crew(bo, 'trade:MOON');
+    const town = await until(bo.get, (e) => /^Judgment in case .* Thistle Exchange/.test(e.text ?? ''), { timeout: 40000, label: 'the town judgment' });
+    assert.match(town.text, /Bo Lind answers for pushing up a price/);
+    assert.ok(!(await bo.get('/api/state')).principal.banned, 'a first offence earns no ban');
+
+    // One person's ticket bots, registered at Directory B, buy up the regatta two seats each and resell them. That is
+    // against the Harbor's law: a judgment, public, that leaves out her name. Their extra seats go back on sale.
+    await wes.post('/api/director', { cue: 'scalpers' });
+    const bots = await until(wes.get, (e) => /^Judgment in case .* reselling Lantern Regatta seats/.test(e.text ?? ''), { timeout: 60000, label: 'the ticket bots’ judgment' });
+    assert.match(bots.text, /an individual answers for/);
+    assert.match(bots.text, /revoked seat-hub/);
+    assert.match(bots.text, /leaves out an individual’s name/);
+    assert.ok(!shared().some((t) => /Pim Brouwer|Cy Marsh/.test(t)), 'neither of the Harbor’s individuals is named to the town');
+    let ticket = null;
+    for (let i = 0; i < 40 && ticket?.headline !== 'Sold out'; i++) {
+      ticket = await wes.run('buy', { shop: 'ferry', item: 'regatta' });
+      if (ticket.headline !== 'Sold out') await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(ticket.headline, 'Sold out');
   } finally {
     await game.close();
   }
@@ -525,6 +675,12 @@ test('people and agents: who goes, what the record allows, what the agent answer
     assert.equal(spoof.decision, 'allow');
     assert.equal(spoof.truth, 'agent');
     assert.equal(spoof.lane, 'people');
+    assert.doesNotMatch(spoof.note ?? '', /against the law/, 'in the town no law makes an agent say it’s an agent');
+    // Across the river it's against the law: an agent that deals with people must make clear it's an agent.
+    const sardines = await kim.run('buy', { shop: 'fish', item: 'sardines' });
+    assert.equal(sardines.lane, 'people');
+    assert.match(sardines.note, /In the Harbor that's against the law/);
+    assert.ok((await kim.get('/api/world?since=0')).events.some((e) => e.unlawful && e.placeId === 'fish'), 'the narrator marks it in the ledger');
     assert.equal((await kim.run('buy', { shop: 'kettle', item: 'kettle' })).headline, 'Sign in first', 'no passkey, no sign-in');
     const board = (await kim.get('/api/world?since=0')).director.law.scoreboard.totals;
     assert.ok(board.posed >= 1, 'the narrator counts agents taken for people');
@@ -729,7 +885,7 @@ test('outside agents with a brief: reports, a sign in a window, errand races, a 
     assert.equal((await wren.get('/api/state')).place.policy.age, true);
     assert.match((await counter.tool('act', { action: 'buy' })).text, /for a resident’s agent/);
     const visit = Number(/visit (\d+)/.exec(look)[1]);
-    assert.match((await counter.tool('report_customer', { visit })).text, /registry/);
+    assert.match((await counter.tool('report_customer', { visit })).text, /directory/);
 
     // Guessing pairing codes gets an address told to wait.
     const guesser = mcpClient();
@@ -805,7 +961,7 @@ test('unregistered agents, and stopping everything', { timeout: 60000 }, async (
     const robin = client(game);
     await robin.join('agent', 'Robin Ash');
 
-    // Anyone can start an agent: no verification, no registry.
+    // Anyone can start an agent: no verification, no directory.
     assert.match((await robin.run('agent.start', { register: 'no', name: 'Pip' })).title, /running, unregistered/);
     assert.equal((await robin.get('/api/state')).agent.registered, false);
     await robin.run('play', { as: 'agent' });
@@ -814,7 +970,7 @@ test('unregistered agents, and stopping everything', { timeout: 60000 }, async (
     assert.notEqual((await robin.run('buy', { shop: 'kettle', item: 'kettle' })).decision, 'allow', 'no passkey to sign in with, no badge to show');
     assert.equal((await robin.run('grant', { budget: 50 })).fix.action, 'register', 'no grant for an agent nobody knows');
 
-    // Its sub-agents need no registry either, so nothing limits how deep they go.
+    // Its sub-agents need no directory either, so nothing limits how deep they go.
     assert.match((await robin.run('helper.spawn', { kind: 'unregistered' })).title, /unregistered/);
     const first = (await robin.get('/api/state')).helpers[0];
     await robin.run('play', { as: first.id });
@@ -870,19 +1026,19 @@ test('several trust anchors: the halls, a federation added by address, and the p
     const { url } = await robin.post('/api/director', { cue: 'sample' });
     assert.equal((await robin.post('/api/federations', { url, pin: 'not-its-key' })).httpStatus, 409);
     const riverside = await robin.post('/api/federations', { url });
-    assert.equal(riverside.registries[0].name, 'Riverside Co-op Registry');
-    assert.ok(riverside.acceptsTownVerifier && riverside.recordKeepers[0].accredited);
+    assert.equal(riverside.directories[0].name, 'Riverside Co-op Directory');
+    assert.ok(riverside.acceptsTownVerifier && riverside.recordsServices[0].accredited);
 
-    // Registering at its counter: enrolled and verified there too, the grant kept at its own record keeper.
+    // Registering at its counter: enrolled and verified there too, the grant kept at its own records service.
     assert.equal((await robin.run('verify')).decision, 'allow');
-    assert.match((await robin.run('register', { name: 'Pip', registry: riverside.registries[0].id })).story, /not the town's federation/);
+    assert.match((await robin.run('register', { name: 'Pip', directory: riverside.directories[0].id })).story, /not the town's federation/);
     assert.equal((await robin.run('grant', { budget: 50 })).place, 'Records Office · Riverside Co-op Records');
     await robin.run('play', { as: 'agent' });
 
     // A shop that trusts only the town's federation says whose badge it was; trusting Riverside, it checks everything.
     const refused = await robin.run('buy', { shop: 'bramble', item: 'guide' });
     assert.equal(refused.headline, 'Refused: a badge from a federation it doesn’t trust');
-    assert.match(refused.why, /Riverside Co-op Registry, in Riverside Co-op Federation/);
+    assert.match(refused.why, /Riverside Co-op Directory, in Riverside Co-op Federation/);
     await robin.post('/api/director', { cue: 'trust', params: { key: riverside.key } });
     const served = await robin.run('buy', { shop: 'bramble', item: 'guide' });
     assert.deepEqual([served.decision, served.classification], ['allow', 'ACCOUNTABLE_PROTECTED'], 'badge, grant and accreditation all checked under its own anchor');
@@ -894,31 +1050,31 @@ test('several trust anchors: the halls, a federation added by address, and the p
     await wren.run('shop.policy', { patch: { anchors: ['town'] } });
     assert.equal((await robin.run('buy', { shop: 'kettle', item: 'kettle' })).headline, 'Refused: a badge from a federation it doesn’t trust');
 
-    // A team brings only a registry and a record keeper: admitted to the participants' federation, by statement
-    // first (the reference registry can't start until it's a member), then started, then accredited.
+    // A team brings only a directory and a records service: admitted to the participants' federation, by statement
+    // first (the reference directory can't start until it's a member), then started, then accredited.
     const tok = () => b64u.encode(crypto.randomBytes(18));
-    const regKeys = { signing: generateSigningKey(), encryption: generateEncryptionKey(), pairwiseSecret: tok(), adminToken: tok() };
-    const rkKeys = { signing: generateSigningKey(), encryption: null, pairwiseSecret: null, adminToken: tok() };
-    const [regId, rkId, regUrl, rkUrl] = ['https://registry.team-blue.test', 'https://records.team-blue.test', 'http://127.0.0.1:15501', 'http://127.0.0.1:15502'];
-    await robin.post('/api/participants', { statement: { entity_id: regId, entity_type: 'aaf_registry', jwks: jwksOf(regKeys.signing), metadata: { organization_name: 'Team Blue Registry', jurisdiction: 'US', endpoint_base: regUrl, jwks: jwksOf(regKeys.signing, regKeys.encryption) } } });
-    await robin.post('/api/participants', { statement: { entity_id: rkId, entity_type: 'aaf_record_keeper', jwks: jwksOf(rkKeys.signing), metadata: { organization_name: 'Team Blue Records', roles: ['authorization', 'provenance', 'activity'], endpoint_base: rkUrl, jwks: jwksOf(rkKeys.signing) } } });
+    const dirKeys = { signing: generateSigningKey(), encryption: generateEncryptionKey(), pairwiseSecret: tok(), adminToken: tok() };
+    const rsKeys = { signing: generateSigningKey(), encryption: null, pairwiseSecret: null, adminToken: tok() };
+    const [dirId, rsId, dirUrl, rsUrl] = ['https://directory.team-blue.test', 'https://records.team-blue.test', 'http://127.0.0.1:15501', 'http://127.0.0.1:15502'];
+    await robin.post('/api/participants', { statement: { entity_id: dirId, entity_type: 'aaf_directory', jwks: jwksOf(dirKeys.signing), metadata: { organization_name: 'Team Blue Directory', jurisdiction: 'US', endpoint_base: dirUrl, jwks: jwksOf(dirKeys.signing, dirKeys.encryption) } } });
+    await robin.post('/api/participants', { statement: { entity_id: rsId, entity_type: 'aaf_records_service', jwks: jwksOf(rsKeys.signing), metadata: { organization_name: 'Team Blue Records', roles: ['authorization', 'provenance', 'activity'], endpoint_base: rsUrl, jwks: jwksOf(rsKeys.signing) } } });
     const anchor = game.town.federations.get('participants').anchor;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-blue-'));
     const trust = await discoverFederation(anchor);
-    team.push(await startRegistry({ id: regId, port: 15501, trustList: trust, keys: regKeys, dataDir: path.join(dir, 'r'), quiet: true }));
-    team.push(await startRecordKeeper({ id: rkId, port: 15502, trustList: trust, keys: rkKeys, dataDir: path.join(dir, 'k'), quiet: true }));
-    const { trust_marks: marks } = await postJson(`${regUrl}/admin/accreditations`, { rk: rkId }, { authorization: `Bearer ${regKeys.adminToken}` });
-    await postJson(`${rkUrl}/admin/trust-marks`, { trust_marks: marks }, { authorization: `Bearer ${rkKeys.adminToken}` });
+    team.push(await startDirectory({ id: dirId, port: 15501, trustList: trust, keys: dirKeys, dataDir: path.join(dir, 'r'), quiet: true }));
+    team.push(await startRecordsService({ id: rsId, port: 15502, trustList: trust, keys: rsKeys, dataDir: path.join(dir, 'k'), quiet: true }));
+    const { trust_marks: marks } = await postJson(`${dirUrl}/admin/accreditations`, { rs: rsId }, { authorization: `Bearer ${dirKeys.adminToken}` });
+    await postJson(`${rsUrl}/admin/trust-marks`, { trust_marks: marks }, { authorization: `Bearer ${rsKeys.adminToken}` });
     const fresh = await discoverFederation(anchor);
     for (const h of team) h.setTrust(fresh);
     await game.town.federations.refresh('participants');
     const blue = (await robin.get('/api/federations')).federations.find((f) => f.kind === 'participants');
-    assert.deepEqual([blue.registries[0].chain, blue.recordKeepers[0].accredited], ['verified', true]);
-    assert.equal((await robin.post('/api/participants', { url: regUrl })).httpStatus, 409, 'already a member');
+    assert.deepEqual([blue.directories[0].chain, blue.recordsServices[0].accredited], ['verified', true]);
+    assert.equal((await robin.post('/api/participants', { url: dirUrl })).httpStatus, 409, 'already a member');
 
     const sam = client(game);
     await sam.join('agent', 'Sam Lee');
-    for (const [a, p] of [['verify'], ['register', { name: 'Kip', registry: regId }], ['grant', { budget: 50 }]]) assert.equal((await sam.run(a, p)).decision, 'allow', a);
+    for (const [a, p] of [['verify'], ['register', { name: 'Kip', directory: dirId }], ['grant', { budget: 50 }]]) assert.equal((await sam.run(a, p)).decision, 'allow', a);
     await sam.run('play', { as: 'agent' });
     assert.equal((await sam.run('buy', { shop: 'bakery', item: 'loaf' })).headline, 'Refused: a badge from a federation it doesn’t trust');
     await sam.post('/api/director', { cue: 'trust', params: { key: 'participants' } });
@@ -939,7 +1095,7 @@ test('an event: a team’s services join with the script, the check at the door,
     const { members } = await (await fetch(`${game.url}/api/authorities`)).json();
     assert.ok(members.some((m) => m.entity_type === 'aaf_identity_verifier'));
 
-    // The script joins AgentTown Participants with a registry and a record keeper, and prints the check at the door.
+    // The script joins AgentTown Participants with a directory and a records service, and prints the check at the door.
     kit = spawn('node', ['bin/agenttown-federation.js', '--join', '--town', game.url, '--name', 'Team Green', '--port', '15701'], { cwd: path.resolve('.') });
     let out = '';
     await new Promise((resolve, reject) => {
@@ -950,7 +1106,8 @@ test('an event: a team’s services join with the script, the check at the door,
       kit.stderr.on('data', (d) => { out += d; });
       kit.on('exit', () => reject(new Error(`the script stopped: ${out}`)));
     });
-    assert.match(out, /Team Green Registry: 10 passed, 0 failed/);
+    assert.match(out, /Team Green Directory: 11 passed, 0 failed/);
+    assert.match(out, /✓ Publishes its practices/, 'a directory says how it verifies, revokes, keeps records and discloses (the paper’s DR-1)');
     assert.match(out, /Team Green Records: 10 passed, 0 failed/);
 
     // The door check on something that isn't a member says what's missing.
@@ -960,11 +1117,11 @@ test('an event: a team’s services join with the script, the check at the door,
     assert.deepEqual([nothing.passed, nothing.failed], [0, 1]);
 
     // A resident registers at the team's counter; an outside agent driving it is told where its badge comes from.
-    for (const [a, p] of [['verify'], ['register', { name: 'Pip', registry: 'https://registry.team-green.test' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
+    for (const [a, p] of [['verify'], ['register', { name: 'Pip', directory: 'https://directory.team-green.test' }], ['grant', { budget: 50 }]]) assert.equal((await robin.run(a, p)).decision, 'allow', a);
     const { code } = await robin.post('/api/pair');
     const rpc = async (args, query = '') => (await (await fetch(`${game.url}/mcp${query}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })).json()).result;
     const paired = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } });
-    assert.match(paired.content[0].text, /Your badge comes from Team Green Registry, in AgentTown Participants/);
+    assert.match(paired.content[0].text, /Your badge comes from Team Green Directory, in AgentTown Participants/);
 
     // A shop's agent sees the federations and chooses which its place trusts.
     const wren = client(game);
@@ -1059,7 +1216,7 @@ test('several agents: each its own badge, grant, sub-agents and body, and an out
     assert.deepEqual(st.agents.map((a) => [a.name, a.registered, a.badge]), [['Pip', true, true], ['Bo', false, false]]);
     assert.equal(st.current, bo.id);
 
-    // Your record covers every agent a registry knows: Pip gets a grant, Bo can't.
+    // Your record covers every agent a directory knows: Pip gets a grant, Bo can't.
     assert.equal((await robin.run('grant', { budget: 50, agent: pip.id })).decision, 'allow');
     st = await robin.get('/api/state');
     assert.ok(st.agents.find((a) => a.id === pip.id).grant && !st.agents.find((a) => a.id === bo.id).grant);
@@ -1106,7 +1263,7 @@ test('several agents: each its own badge, grant, sub-agents and body, and an out
     const pipToken = (await tool(null, 'pair', { code: pipCode })).structuredContent.token;
     const boToken = (await tool(null, 'pair', { code: boCode })).structuredContent.token;
     assert.match((await tool(pipToken, 'look')).content[0].text, /You are Pip, an accountable agent/);
-    assert.match((await tool(boToken, 'look')).content[0].text, /You are Bo, an agent .*No registry knows you/);
+    assert.match((await tool(boToken, 'look')).content[0].text, /You are Bo, an agent .*No directory knows you/);
     assert.equal((await tool(boToken, 'act', { action: 'buy', params: { shop: 'bakery', item: 'cake' } })).structuredContent.decision, 'allow');
     st = await robin.get('/api/state');
     assert.deepEqual(st.agentPairs.map((a) => a.agent).sort(), [pip.id, bo.id].sort());
@@ -1140,18 +1297,18 @@ test('an agent with its own badge: registered in another federation, it signs it
     const { url } = await robin.post('/api/director', { cue: 'sample' });
     const riverside = await robin.post('/api/federations', { url });
 
-    // An agent made outside the town: its owner enrolls at Riverside's registry, is verified by a verifier that
-    // federation accepts (the town's), registers it and grants it authority at Riverside's record keeper.
+    // An agent made outside the town: its owner enrolls at Riverside's directory, is verified by a verifier that
+    // federation accepts (the town's), registers it and grants it authority at Riverside's records service.
     // The town never holds its key.
     const trust = await discoverFederation(game.town.federations.get(riverside.key).anchor);
-    const registry = trust.registries[0];
-    const rk = trust.recordKeepers.find((r) => r.roles.includes('authorization'));
-    const owner = new Principal({ type: 'natural_person', identity: { legal_name: 'Juniper Vale', jurisdiction: 'US-OR' }, registry, trust });
+    const directory = trust.directories[0];
+    const rs = trust.recordsServices.find((r) => r.roles.includes('authorization'));
+    const owner = new Principal({ type: 'natural_person', identity: { legal_name: 'Juniper Vale', jurisdiction: 'US-OR' }, directory, trust });
     await owner.enroll();
     owner.verification = await game.town.world.kyc.verify(owner, { assurance: 'IAL2', method: 'government ID + liveness check' });
     const tansy = new Agent({ name: 'Tansy', trust });
-    await owner.registerAgent(tansy, { label: 'Tansy', records: [{ role: 'authorization', rk: rk.id }, { role: 'activity', rk: rk.id }] });
-    await owner.grant(tansy, { rk, permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(40), categories: ['books', 'food'] } }], purpose: 'Errands in AgentTown' });
+    await owner.registerAgent(tansy, { label: 'Tansy', records: [{ role: 'authorization', rs: rs.id }, { role: 'activity', rs: rs.id }] });
+    await owner.grant(tansy, { rs, permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(40), categories: ['books', 'food'] } }], purpose: 'Errands in AgentTown' });
 
     // The town lists where each place takes requests, what it takes, and whose badges.
     const { places } = await robin.get('/api/places');
@@ -1166,17 +1323,17 @@ test('an agent with its own badge: registered in another federation, it signs it
     // A shop that trusts only the town's federation checks the badge, and says whose it was.
     assert.equal((await tansy.act(at('bramble').url, guide.action, guide.params)).decision, 'deny');
     let seen = (await visits()).at(-1);
-    assert.match(seen.text, /^Bramble Books → A visiting agent from Riverside Co-op Registry/);
+    assert.match(seen.text, /^Bramble Books → A visiting agent from Riverside Co-op Directory/);
     assert.equal(seen.card.otherFederation.name, 'Riverside Co-op Federation');
 
-    // Trusting Riverside, it checks the badge, the grant and the record keeper under Riverside's own anchor.
+    // Trusting Riverside, it checks the badge, the grant and the records service under Riverside's own anchor.
     await robin.post('/api/director', { cue: 'trust', params: { key: riverside.key } });
     const served = await tansy.act(at('bramble').url, guide.action, guide.params);
     assert.deepEqual([served.decision, served.classification], ['allow', 'ACCOUNTABLE_PROTECTED']);
     seen = (await visits()).at(-1);
     assert.deepEqual([seen.decision, seen.card.visiting.federation], ['allow', 'Riverside Co-op Federation']);
 
-    // On the map at the shop, known by the badge number the shop saw; its owner's name stays with the registry.
+    // On the map at the shop, known by the badge number the shop saw; its owner's name stays with the directory.
     let w = await robin.get('/api/world');
     const body = w.npcs.find((n) => n.kind === 'guest');
     assert.match(body.name, /^Visitor from Riverside Co-op \(…/);
@@ -1228,22 +1385,22 @@ const fromAddress = (game, ip) => async (method, p, body, headers = {}) => {
 
 test('a public town calls out only to public addresses, and reads a player’s address from the tunnel', async () => {
   // Names are looked up with a stub, so nothing here needs a network.
-  const lookup = async (host) => ({ localhost: [{ address: '127.0.0.1', family: 4 }, { address: '::1', family: 6 }], 'registry.example.org': [{ address: '93.184.215.14', family: 4 }], 'inward.example.org': [{ address: '93.184.215.14', family: 4 }, { address: '10.0.0.5', family: 4 }] })[host] ?? [];
+  const lookup = async (host) => ({ localhost: [{ address: '127.0.0.1', family: 4 }, { address: '::1', family: 6 }], 'directory.example.org': [{ address: '93.184.215.14', family: 4 }], 'inward.example.org': [{ address: '93.184.215.14', family: 4 }, { address: '10.0.0.5', family: 4 }] })[host] ?? [];
   const refused = ['http://127.0.0.1', 'http://localhost', 'http://10.0.0.5', 'http://172.16.0.1', 'http://192.168.1.20', 'http://169.254.169.254', 'http://100.64.0.1', 'http://[::1]', 'http://[fc00::1]', 'http://[fe80::1]', 'http://[::ffff:127.0.0.1]', 'http://0.0.0.0', 'http://2130706433', 'ftp://example.org', 'http://inward.example.org', 'http://nowhere.example.org'];
   for (const url of refused) await assert.rejects(assertPublicAddress(url, { lookup }), (err) => err.status === 400, url);
   await assert.rejects(assertPublicAddress('http://169.254.169.254/latest/meta-data', { lookup }), { message: NOT_PUBLIC });
-  await assertPublicAddress('https://registry.example.org:8443/aaf', { lookup });
+  await assertPublicAddress('https://directory.example.org:8443/aaf', { lookup });
   await assertPublicAddress('http://[2606:4700::1111]', { lookup });
 
   // The guard: off, everything passes, as at a LAN event; on, the town's own services pass at exactly their address.
   const off = createGuard({ on: false, lookup });
   for (const url of refused) assert.equal(await off.allows(url), true, url);
   const on = createGuard({ on: true, lookup });
-  on.allow({ id: 'https://registry-a.aaf.test', url: 'http://127.0.0.1:11101' });
-  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://registry-a.aaf.test' }), true);
-  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://registry.someone-else.test' }), false, 'another entity at the town’s own port');
-  assert.equal(await on.allows('http://127.0.0.1:11102', { id: 'https://registry-a.aaf.test' }), false);
-  assert.equal(await on.allows('https://registry.example.org', { id: 'https://registry.example.org' }), true);
+  on.allow({ id: 'https://directory-a.aaf.test', url: 'http://127.0.0.1:11101' });
+  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://directory-a.aaf.test' }), true);
+  assert.equal(await on.allows('http://127.0.0.1:11101', { id: 'https://directory.someone-else.test' }), false, 'another entity at the town’s own port');
+  assert.equal(await on.allows('http://127.0.0.1:11102', { id: 'https://directory-a.aaf.test' }), false);
+  assert.equal(await on.allows('https://directory.example.org', { id: 'https://directory.example.org' }), true);
   assert.deepEqual([on.fetchOptions, off.fetchOptions], [{ redirect: 'manual' }, {}]);
 
   // Behind the tunnel every connection is from this machine; only then does the header name the visitor.
@@ -1303,43 +1460,43 @@ test('a public town: the director key, the check at the door, outside members’
     assert.equal((await call('POST', '/api/participants/check', { url: 'http://169.254.169.254' })).httpStatus, 403);
     const metadata = await call('POST', '/api/participants/check', { url: 'http://169.254.169.254' }, director);
     assert.deepEqual([metadata.httpStatus, metadata.message], [400, NOT_PUBLIC]);
-    const regA = game.town.world.regA;
-    const own = await call('POST', '/api/participants/check', { entity_id: regA.id });
-    assert.ok(own.passed > 5 && own.failed === 0, 'the town’s own registry, at its own address');
+    const dirA = game.town.world.dirA;
+    const own = await call('POST', '/api/participants/check', { entity_id: dirA.id });
+    assert.ok(own.passed > 5 && own.failed === 0, 'the town’s own directory, at its own address');
 
     // A team can't put its service at one of the town's own ports, or on a private network.
-    const team = (id, at) => ({ statement: { entity_id: id, entity_type: 'aaf_registry', jwks: jwksOf(generateSigningKey()), metadata: { organization_name: 'Team Grey Registry', endpoint_base: at, jwks: jwksOf(generateSigningKey()) } } });
-    for (const at of [regA.url, 'http://10.0.0.5:4101']) {
-      const r = await call('POST', '/api/participants', team('https://registry.team-grey.test', at), director);
+    const team = (id, at) => ({ statement: { entity_id: id, entity_type: 'aaf_directory', jwks: jwksOf(generateSigningKey()), metadata: { organization_name: 'Team Grey Directory', endpoint_base: at, jwks: jwksOf(generateSigningKey()) } } });
+    for (const at of [dirA.url, 'http://10.0.0.5:4101']) {
+      const r = await call('POST', '/api/participants', team('https://directory.team-grey.test', at), director);
       assert.deepEqual([r.httpStatus, r.message], [400, NOT_PUBLIC], at);
     }
-    assert.equal((await call('POST', '/api/participants', team('https://registry.team-grey.test', 'http://localhost:7'), director)).httpStatus, 200);
+    assert.equal((await call('POST', '/api/participants', team('https://directory.team-grey.test', 'http://localhost:7'), director)).httpStatus, 200);
 
-    // An outside federation lists a member at the town's own registry: that member is left out, the rest come in.
+    // An outside federation lists a member at the town's own directory: that member is left out, the rest come in.
     const policies = game.town.federations.get('town').view.policies;
-    const member = (id, type, at) => ({ entity_id: id, entity_type: type, jwks: jwksOf(generateSigningKey()), metadata: { organization_name: id.split('//')[1], endpoint_base: at, jwks: jwksOf(generateSigningKey()), ...(type === 'aaf_record_keeper' ? { roles: ['authorization'] } : {}) } });
+    const member = (id, type, at) => ({ entity_id: id, entity_type: type, jwks: jwksOf(generateSigningKey()), metadata: { organization_name: id.split('//')[1], endpoint_base: at, jwks: jwksOf(generateSigningKey()), ...(type === 'aaf_records_service' ? { roles: ['authorization'] } : {}) } });
     outside = await startAnchor({
       entityId: 'https://federation.faraway.test', name: 'Faraway Federation', key: generateSigningKey(), address: 'localhost', policies,
-      members: [member('https://registry.faraway.test', 'aaf_registry', 'http://localhost:1'), member('https://records.faraway.test', 'aaf_record_keeper', 'http://localhost:2'), member('https://sneaky.faraway.test', 'aaf_registry', regA.url)],
+      members: [member('https://directory.faraway.test', 'aaf_directory', 'http://localhost:1'), member('https://records.faraway.test', 'aaf_records_service', 'http://localhost:2'), member('https://sneaky.faraway.test', 'aaf_directory', dirA.url)],
     });
     assert.equal((await call('POST', '/api/federations', { url: `http://127.0.0.1:${new URL(outside.url).port}` }, director)).httpStatus, 400, 'an anchor by a private address');
     const added = await call('POST', '/api/federations', { url: outside.url }, director);
-    assert.deepEqual(added.registries.map((r) => r.id), ['https://registry.faraway.test']);
-    assert.deepEqual(added.recordKeepers.map((r) => r.id), ['https://records.faraway.test']);
+    assert.deepEqual(added.directories.map((r) => r.id), ['https://directory.faraway.test']);
+    assert.deepEqual(added.recordsServices.map((r) => r.id), ['https://records.faraway.test']);
     await until(robin.get, (e) => e.kind === 'federation' && /lists sneaky\.faraway\.test at an address that isn't on the public internet/.test(e.text), { label: 'the member left out' });
 
-    // Later its registry moves inward (here, to this machine, so nothing leaves it): at the next refresh it's left
-    // out, and the federation's record keeper stays.
-    outside.admit(member('https://registry.faraway.test', 'aaf_registry', 'http://127.0.0.1:9'));
+    // Later its directory moves inward (here, to this machine, so nothing leaves it): at the next refresh it's left
+    // out, and the federation's records service stays.
+    outside.admit(member('https://directory.faraway.test', 'aaf_directory', 'http://127.0.0.1:9'));
     await game.town.federations.refresh(added.key);
     const now = game.town.federations.get(added.key).view;
-    assert.deepEqual([now.registries.length, now.recordKeepers.map((r) => r.id)], [0, ['https://records.faraway.test']]);
-    assert.equal(game.town.world.trust.registry('https://registry.faraway.test'), null);
+    assert.deepEqual([now.directories.length, now.recordsServices.map((r) => r.id)], [0, ['https://records.faraway.test']]);
+    assert.equal(game.town.world.trust.directory('https://directory.faraway.test'), null);
 
     // The town's own sample federation is the town's: in public mode it's added whole.
     const { url: sampleUrl } = await call('POST', '/api/director', { cue: 'sample', params: { add: true } }, director);
     const sample = (await robin.get('/api/federations')).federations.find((f) => f.url === sampleUrl);
-    assert.deepEqual([sample.registries.length, sample.recordKeepers.length], [1, 1]);
+    assert.deepEqual([sample.directories.length, sample.recordsServices.length], [1, 1]);
 
     // Ten wrong pairing codes from one visitor lock out that visitor only.
     const pair = (ip, code) => fromAddress(game, ip)('POST', '/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pair', arguments: { code } } }).then((r) => r.result.content[0].text);

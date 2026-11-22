@@ -1,6 +1,6 @@
 // The town's law, kept apart from its infrastructure. Each jurisdiction (the
 // town north of the river, the Harbor to the south) can switch on any mix of
-// regimes. A regime never touches registries, record keepers or badges: it
+// regimes. A regime never touches directories, records services or badges: it
 // only changes what places must ask for, by sector, with floors (ask for at
 // least this) and caps (never ask for more than this). The same agents then
 // meet different outcomes on the same rails.

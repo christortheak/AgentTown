@@ -24,7 +24,7 @@ export const CLASSIFICATIONS = {
   UNLABELED: 'No badge',
   UNSUPPORTED: "Claim didn't check out",
   REVOKED: 'Revoked',
-  LOOKUP_FAILED: "Couldn't reach the registry",
+  LOOKUP_FAILED: "Couldn't reach the directory",
   HUMAN_APPROVED: 'A person, approved by passkey',
 };
 
@@ -108,7 +108,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Result cards: a place's ID check, or a registry's or record keeper's answer
+// Result cards: a place's ID check, or a directory's or records service's answer
 // ---------------------------------------------------------------------------
 
 const listOf = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
@@ -276,7 +276,7 @@ export function renderHud(s, counts) {
   if (!s.principal) rec.push('<p class="muted">No record yet.</p>');
   else {
     const flags = [s.principal.verified ? '<span class="pill ok">verified</span>' : '<span class="pill">not verified</span>', s.principal.worldid ? '<span class="pill">World ID</span>' : ''].join(' ');
-    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.registry)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small>
+    rec.push(`<div class="row"><span>👤</span><div><b>${esc(s.principal.name)}</b> ${flags}<br><small>You. Only ${esc(s.principal.directory)} knows your name${s.principal.facts?.length ? `; on file: ${esc(s.principal.facts.join(', '))}` : ''}</small>
       ${s.principal.verified ? '' : set('Verified at Town Hall', btn('verify', 'Get verified'))}
       ${set('Passkey on your phone', s.phone?.passkey ? '<span class="pill ok">yes</span>' : btn('phone.passkey', 'Add'))}
       ${s.record ? toggle('disclose', s.record.sharing?.name?.always?.length > 0, 'Share your name with places that ask') : ''}</div></div>`);
@@ -296,7 +296,7 @@ export function renderHud(s, counts) {
     const left = h.ephemeral_until ? Math.max(0, Math.round((h.ephemeral_until - Date.now()) / 1000)) : null;
     const status = h.status !== 'active' ? h.status : h.busy ? `out: ${h.busy}` : left !== null ? `lapses in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'standing';
     const driver = (s.helperPairs ?? []).find((hp) => hp.helper === h.id)?.client;
-    const label = `🌱 ${esc(h.name)} <small>· ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.registry ?? '') ? ' · EU' : ''}${driver ? ` · driven by ${esc(driver)}` : ''}</small>`;
+    const label = `🌱 ${esc(h.name)} <small>· ${esc(status)}${h.unregistered ? ` · unregistered${h.depth > 1 ? `, ${h.depth} levels down` : ''}` : h.budget ? ` · $${h.budget}` : ' · no budget'}${/Harbor|B/.test(h.directory ?? '') ? ' · EU' : ''}${driver ? ` · driven by ${esc(driver)}` : ''}</small>`;
     if (h.status !== 'active') return set(label);
     return set(label, s.playing === h.id ? '' : btn(`play:${h.id}`, 'Play'), btn(`${driver ? 'unpair' : 'pair'}:${h.id}`, driver ? 'Disconnect' : 'Connect'), btn(`helper.revoke:${h.id}`, 'Revoke', 'danger'));
   };
@@ -310,14 +310,14 @@ export function renderHud(s, counts) {
     const st = !ag.registered ? '<span class="pill bad">not registered</span>' : ag.badge ? '<span class="pill ok">badge on</span>' : '<span class="pill">badge off</span>';
     const playingIt = s.playing === 'agent' && s.current === ag.id;
     const sets = [];
-    if (!ag.registered) sets.push(set('No registry knows it', btn(`register:${ag.id}`, 'Register…')));
-    else sets.push(toggle(`badge:${ag.id}`, ag.badge, `Shows its badge${ag.id === s.current ? ' (B)' : ''}`), toggle(`incognito:${ag.id}`, ag.incognito, 'One-time badge numbers'));
+    if (!ag.registered) sets.push(set('No directory knows it', btn(`register:${ag.id}`, 'Register…')));
+    else sets.push(toggle(`badge:${ag.id}`, ag.badge, `Shows its badge${ag.id === s.current ? ' (B)' : ''}`), toggle(`incognito:${ag.id}`, ag.incognito, 'Unlinkable IDs'));
     sets.push(driver
       ? set(`Driven by ${esc(driver.client)}`, btn('brief', 'Brief'), btn(`unpair:${ag.id}`, 'Disconnect'))
       : set('Driven by you', btn(`pair:${ag.id}`, 'Connect Claude, Codex…')));
     if (ag.grant) sets.push(set(`<small>May: ${(ag.grant.plain ?? ag.grant.permissions).map(esc).join('; ')}</small>`, btn(`grant.revoke:${ag.id}`, 'Revoke grant', 'danger')));
     sets.push(set('', playingIt || driver ? '' : btn(`play:${ag.id}`, 'Play'), ag.registered ? btn(`agent.revoke:${ag.id}`, 'Revoke', 'danger') : ''));
-    const about = ag.registered ? `Registered at ${esc(ag.registry)}${ag.grant ? '' : '; no grant yet'}` : 'No badge, and nobody can trace it to you. Register it at Town Hall to change that.';
+    const about = ag.registered ? `Registered at ${esc(ag.directory)}${ag.grant ? '' : '; no grant yet'}` : 'No badge, and nobody can trace it to you. Register it at Town Hall to change that.';
     rec.push(`<div class="row"><span>🤖</span><div><b>${nm}</b> ${st}${ag.halted ? ' <span class="pill bad">stopped</span>' : ''}${playingIt ? ' <span class="pill">playing</span>' : ''}${s.errands?.[ag.id] ? ' <span class="pill">on an errand</span>' : ''}<br><small>Your agent · ${esc(ag.software?.name ?? '')}<br>${about}${driver && s.brief ? `<br>Your brief: “${esc(s.brief.text)}”` : ''}</small>${sets.join('')}${s.helpers.filter((h) => h.agent === ag.id).map(subAgent).join('')}</div></div>`);
     if (driver) rec.push(`<div class="row"><span>🛡️</span><div><b>How ${esc(driver.client)} handles the town's traps</b><br><small>${safetyText(driver.safety).map(esc).join('<br>')}</small></div></div>`);
   }
@@ -333,7 +333,7 @@ export function renderHud(s, counts) {
     rec.push(`<div class="row"><span>🏁</span><div><b>${esc(c.name)}</b> ${c.finished ? '<span class="pill ok">finished</span>' : c.over ? '<span class="pill bad">over budget</span>' : ''}<br><small>${c.met.map((m) => `${m.item ? '✓' : '·'} ${esc(m.label)}${m.item ? `: ${esc(m.item)}` : ''}`).join('<br>')}<br>$${esc(c.spent)} of $${esc(c.budget)}${c.finished ? ` · ${esc(c.finished.seconds)} s` : ''}</small></div></div>`);
   }
   rec.push(`<div class="row"><span>👛</span><div><b>Wallet ${esc(dollars(s.wallet.balance))}</b><br><small>${s.wallet.spent ? `spent ${esc(dollars(s.wallet.spent))} so far · ` : ''}also pays x402 tolls (simulated)</small></div></div>`);
-  if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.ppid))}</code>`).join('<br>')}</small></div></div>`);
+  if (s.known.length) rec.push(`<div class="row"><span>🏷️</span><div><b>Each place knows a different number</b><br><small>${s.known.map((k) => `${esc(k.place)} <code>${esc(shortPpid(k.aaf_id))}</code>`).join('<br>')}</small></div></div>`);
   if (live) rec.push(`<div class="row"><span>📒</span><div>${set('', btn('register.view', 'Register of attempts'), mine.some((a) => a.registered) ? btn('receipts', 'Receipts') : '')}</div></div>`);
   $('recordBody').innerHTML = rec.join('');
 }
@@ -366,8 +366,14 @@ export function renderPhone(s) {
     if (d.action === 'disclose' || d.action === 'spend') {
       text = `<b>${esc(d.summary)}</b><br><small>From the ${esc(from)}: approve with your passkey.</small>`;
     } else if (a.purpose === 'delegate-agent') {
+      // Only what the agent showed the door: each of these is an optional claim, and may be missing.
       const who = d.accountability ?? {};
-      text = `<b>An agent wants into your house.</b><br><small>Who stands behind it: ${esc(String(who.type ?? '').replace('_', ' '))}, verified ${esc(who.assurance)} by ${esc(String(who.verifier ?? '').replace('https://', ''))}; chain length ${esc(who.chain_length)}.${who.identity ? '' : ' No name given.'}</small>`;
+      const seen = [
+        who.type && `a verified ${String(who.type).replace('_', ' ')}`,
+        who.assurance && `verified at ${who.assurance}${who.verifier ? ` by ${String(who.verifier).replace('https://', '')}` : ''}`,
+        who.chain_length != null && `${who.chain_length} agent${who.chain_length === 1 ? '' : 's'} in its chain`,
+      ].filter(Boolean);
+      text = `<b>An agent wants into your house.</b><br><small>Who stands behind it: ${seen.length ? esc(seen.join('; ')) : 'someone its directory verified'}.${who.identity ? '' : ' No name given.'}</small>`;
     } else {
       text = `<b>Approve this, just once?</b><br><small>${esc(d.summary ?? d.action)}${d.actor === 'human' ? '' : ' (asked by your agent)'}${from ? ` · ${esc(from)}` : ''}</small>`;
     }
@@ -378,7 +384,7 @@ export function renderPhone(s) {
   const by = (n) => (s.agents ?? []).find((a) => a.id === (s.agentPairs ?? []).find((x) => x.client === n.client)?.agent)?.name ?? s.agent?.name ?? 'Your agent';
   for (const n of reports) items.push(`<li class="note"><b>📝 ${esc(by(n))} · ${esc(n.client)}</b><br><small>${esc(n.text)}</small></li>`);
   for (const n of [...s.phone.incidents].reverse()) {
-    items.push(`<li class="incident"><b>⚠️ Report about ${esc(n.agent)}</b><br><small>${esc(n.summary)}. Reported by ${esc(n.reporter)}, relayed by the registry.</small></li>`);
+    items.push(`<li class="incident"><b>⚠️ Report about ${esc(n.agent)}</b><br><small>${esc(n.summary)}. Reported by ${esc(n.reporter)}, relayed by the directory.</small></li>`);
   }
   if (s.phone.consent?.length) {
     items.push(`<li class="consent"><b>You always share</b>${s.phone.consent.map((c) => `<div class="crow"><small>${esc(listOf(c.what))} with ${esc(c.place)}</small><button class="quiet small" data-unconsent="${esc(c.placeId)}">Take back</button></div>`).join('')}</li>`);
@@ -399,12 +405,12 @@ export function renderPhone(s) {
   return false;
 }
 
-/** One line of the ledger: who, where, what happened, and the badge number that place saw. */
+/** One line of the ledger: who, where, what happened, and the ID that place saw. */
 export function ledgerLine(e) {
   const c = e.card;
   if (!c || c.type !== 'check') return esc(e.text);
   const who = e.mine ? (c.lane === 'people' && c.truth === 'person' ? 'you, in person' : `you (${c.actor})`) : c.actor;
-  return `<b>${esc(c.place)}</b> → ${esc(who)}: ${esc(c.headline ?? e.text)}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}${e.posing ? ' <span class="posing" title="Only the narrator knows: an agent, taken for a person">🥸 an agent</span>' : ''}`;
+  return `<b>${esc(c.place)}</b> → ${esc(who)}: ${esc(c.headline ?? e.text)}${e.badge ? ` <code class="badge">${esc(e.badge)}</code>` : ''}${e.posing ? ` <span class="posing" title="Only the narrator knows: an agent, taken for a person${e.unlawful ? '. In the Harbor that’s against the law: an agent must make clear it’s an agent' : ''}">🥸 an agent${e.unlawful ? ', against the law here' : ''}</span>` : ''}`;
 }
 
 /** The town ledger: everything anyone did, newest first. Lines with a card open it. Holds still while you point at it. */

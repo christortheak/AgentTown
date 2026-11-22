@@ -181,7 +181,7 @@ export async function startServer({
   // still decides whom to trust); with a director key, only the director may.
   const mayAdd = (headers) => directorOnly(headers, 'In this town only the director adds federations and admits services.');
   // For an agent that holds its own badge: where each place takes requests, what it takes, and whose badges.
-  app.get('/api/places', () => ({ places: town.places.directory() }));
+  app.get('/api/places', () => ({ places: town.places.addresses() }));
   app.get('/api/federations', () => ({ federations: town.federationsView() }));
   app.post('/api/federations', async ({ body, headers }) => {
     mayAdd(headers);
@@ -241,7 +241,7 @@ export async function startServer({
       console.log(`AgentTown is open at ${townOrigin}`);
       if (lanOrigin !== townOrigin) console.log(`Players on other machines open ${lanOrigin}`);
     }
-    console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; registries: ${info.registries.map((r) => `${r.name} (${r.url})`).join(', ')}`);
+    console.log(`Federation: ${info.federation}, trust anchor ${info.trust_anchor}; directories: ${info.directories.map((r) => `${r.name} (${r.url})`).join(', ')}`);
     const p = town.bootstrap('participants');
     console.log(`AgentTown Participants: trust anchor at ${p.url} (key thumbprint ${p.thumbprint}); teams fetch ${lanOrigin}/trust-anchor.json`);
     if (isPublic) {

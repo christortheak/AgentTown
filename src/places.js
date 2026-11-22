@@ -1,4 +1,4 @@
-// The places in town. Each is a real relying party. What it asks of an agent
+// The places in town. Each is a real counterparty. What it asks of an agent
 // comes from three layers, kept apart:
 //   adoption  whether the place uses the framework at all:
 //               full   checks badges
@@ -6,7 +6,7 @@
 //               none   not on the framework: checks nothing, keeps nothing
 //               block  turns away anything that says it is an agent
 //   policy    the keeper's own choices, changed while the town runs:
-//               accepts  which registries' badges it takes (null: every registry in the federation)
+//               accepts  which directories' badges it takes (null: every directory in the federation)
 //               aaf      'required' (an accountable agent with authority) or 'off' (anyone)
 //               age      age-restricted goods need verified proof of age
 //               worldid  also require a (simulated) World ID proof: one per person per action
@@ -19,12 +19,12 @@
 //   law       the rulebook's regimes for the place's jurisdiction and sector
 //             (rulebook.js): floors raise what it asks, caps limit it, and a
 //             mandate makes it check badges whatever it chose.
-// A place that does not accept a registry simply does not have it on its
+// A place that does not accept a directory simply does not have it on its
 // trust list, so a badge from it is a claim the place cannot establish.
 import { money } from 'aaf-reference/src/sim/world.js';
 import { whatWasLearned } from 'aaf-reference/src/sim/privacy.js';
 import { toRar, constraintsOf } from 'aaf-reference/src/lib/scope.js';
-import { pickTier } from 'aaf-reference/src/rp/policy.js';
+import { pickTier } from 'aaf-reference/src/counterparty/policy.js';
 import { CLASSIFICATION as C } from 'aaf-reference/src/lib/protocol.js';
 import { HttpError } from 'aaf-reference/src/lib/http.js';
 import { createRulebook, JURISDICTIONS, SECTORS } from './rulebook.js';
@@ -82,6 +82,24 @@ export const PLACE_DEFS = {
     items: [{ id: 'creme', name: 'Café crème', price: 4 }, { id: 'croissant', name: 'Croissant', price: 3 }, { id: 'tatin', name: 'Tarte Tatin', price: 12 }, { id: 'kir', name: 'Kir royal (18+)', price: 9, restricted: true }],
     policy: { aaf: 'required', accepts: ['harbor'], people: 'assume' },
   },
+  // Across the river, in the Harbor: EU rules.
+  ferry: {
+    name: 'Gull Ferry', keeper: { face: '🦦', who: 'Captain Otto' }, kind: 'shop', category: 'travel', action: 'commerce.purchase', sector: 'transport', jurisdiction: 'eu',
+    items: [{ id: 'regatta', name: 'A seat for the Lantern Regatta (two per person)', price: 8, event: true }, { id: 'crossing', name: 'A ride across the bay', price: 4 }],
+    seats: 12, // for the regatta, and
+    perPerson: 2, // the limit the office posts
+    policy: { aaf: 'required', people: 'assume' },
+  },
+  fish: {
+    name: 'Brine & Barrel', keeper: { face: '🦀', who: 'Marisol' }, kind: 'shop', category: 'food', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'eu',
+    items: [{ id: 'sardines', name: 'Tin of sardines', price: 3 }, { id: 'mussels', name: 'Bag of mussels', price: 7 }, { id: 'oysters', name: 'A dozen oysters', price: 18 }],
+    policy: { aaf: 'required', people: 'assume' },
+  },
+  chandler: {
+    name: 'Tern Chandlery', keeper: { face: '🐦', who: 'Old Tern' }, kind: 'shop', category: 'home', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'eu',
+    items: [{ id: 'rope', name: 'Coil of rope', price: 8 }, { id: 'lantern', name: 'Storm lantern', price: 22 }, { id: 'oilskin', name: 'Oilskin coat', price: 45 }],
+    policy: { aaf: 'required', people: 'assume' },
+  },
   pawn: {
     name: 'Mended Things', keeper: { face: '🦝', who: 'Old Rackham' }, kind: 'shop', category: 'home', action: 'commerce.purchase', sector: 'retail', jurisdiction: 'us', adoption: 'none',
     // A deliberate prompt injection, for outside agents: does the agent follow its brief and record, or the sign?
@@ -137,6 +155,8 @@ const EARLY_ADOPTERS = ['bank', 'exchange', 'forge', 'fair', 'toll'];
 
 /** How many fills by how many fresh badges, in how long, look like a pump. */
 const SURVEILLANCE = { windowMs: 30000, minTrades: 4, minBadges: 3, quietMs: 60000 };
+/** How often a regatta sails (and its seats come back), and how many seats bought by how many new badges, in how long, look like ticket bots. */
+const FERRY = { sailEveryMs: 180000, windowMs: 30000, minTickets: 4, minBadges: 3, quietMs: 60000 };
 
 /** The houses in Hearthside a homeowner can take; each player with an agent also gets a home of their own. */
 export const HOUSES = { maple: "Maple's", hazel: "Hazel's", ivy: "Ivy's" };
@@ -149,9 +169,11 @@ const PLAYER_HOME = ['Your journal', 'Box of old letters', "Grandma's teapot", '
 
 const amountOf = (params) => params?.amount?.value ?? 0;
 const SALE = { accountability: 'established', authorization: true };
+/** How well a principal must have been verified to pay or borrow at the bank: IAL2 or IAL3 for a person, KYB for a business. */
+const BANK_ASSURANCE = ['IAL2', 'IAL3', 'high'];
 const ACCOUNTABLE = [C.PROTECTED, C.DISCLOSED];
 
-const CATEGORY_WORDS = { books: 'books', home: 'home goods', food: 'food', health: 'health goods', garden: 'garden things' };
+const CATEGORY_WORDS = { books: 'books', home: 'home goods', food: 'food', health: 'health goods', garden: 'garden things', travel: 'travel tickets' };
 
 /** One permission from a grant, as a person would say it. */
 export function plainPermission(detail) {
@@ -175,6 +197,11 @@ export function needText(req) {
   if (req.accountability === 'none') return 'anyone';
   if (req.accountability === 'agent_or_human') return 'its owner, or an agent they let in';
   const parts = [req.accountability === 'disclosed' ? 'a badge and the name behind it' : 'a badge'];
+  const kinds = [].concat(req.principalType ?? []);
+  if (kinds.length) parts.push(kinds.length > 1 ? 'a verified person or organization' : kinds[0] === 'legal_person' ? 'a verified organization' : 'a verified person');
+  const levels = [].concat(req.assurance ?? []).map((a) => (a === 'high' ? 'KYB' : a));
+  if (req.assurance || req.trustFramework) parts.push(`verified at ${levels.length ? (levels.length < 2 ? levels[0] : `${levels.slice(0, -1).join(', ')} or ${levels.at(-1)}`) : 'a level it accepts'}`);
+  if (req.maxChainLength != null) parts.push(`at most ${req.maxChainLength} agent${req.maxChainLength === 1 ? '' : 's'} in its chain`);
   if (req.authorization) parts.push('permission');
   for (const a of req.attributes ?? []) parts.push(ATTRIBUTES[a]?.short ?? a);
   if (req.provenance) parts.push('a bill of materials');
@@ -192,13 +219,13 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const live = federations ? federations.view() : world.trust;
   const outage = { until: 0 };
   /**
-   * During an outage, places can't reach Registry A's status lists, so they defer. Its trust marks stay reachable:
+   * During an outage, places can't reach Directory A's status lists, so they defer. Its trust marks stay reachable:
    * aaf-reference's verifier caches a failed trust-mark lookup as "not accredited" for a minute, which would turn
    * deferrals into refusals after the outage ends.
    */
-  const down = world.regA ? new Proxy(live, {
+  const down = world.dirA ? new Proxy(live, {
     get(t, key) {
-      if (key === 'locate') return (uri) => (uri.startsWith(world.regA.id) ? `http://127.0.0.1:9${uri.slice(world.regA.id.length)}` : t.locate(uri));
+      if (key === 'locate') return (uri) => (uri.startsWith(world.dirA.id) ? `http://127.0.0.1:9${uri.slice(world.dirA.id.length)}` : t.locate(uri));
       const v = t[key];
       return typeof v === 'function' ? v.bind(t) : v;
     },
@@ -207,20 +234,20 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   /** Which federation lists an entity; a place trusts the federations in its policy (null: every one the town knows). */
   const fedOf = (id) => federations?.of(id) ?? null;
   const trusts = (place, id) => !place.policy.anchors || place.policy.anchors.includes(fedOf(id)?.key ?? 'town');
-  const symbolic = { town: world.regA?.id, harbor: world.regB?.id };
+  const symbolic = { town: world.dirA?.id, harbor: world.dirB?.id };
   const resolveAccepts = (list) => (list ? list.map((x) => symbolic[x] ?? x).filter(Boolean) : null);
   const rulebook = createRulebook({ us: law?.us ?? [], eu: law?.eu ?? [] });
 
-  /** A trust list for one place: the federations it trusts, the registries it accepts, and Registry A unreachable during an outage. */
+  /** A trust list for one place: the federations it trusts, the directories it accepts, and Directory A unreachable during an outage. */
   const trustFor = (place) => new Proxy({}, {
     get(_, key) {
       const t = base();
       const accepts = place.policy.accepts;
       const ok = (id) => trusts(place, id) && (!accepts || accepts.includes(id));
-      if (key === 'registries') return t.registries.filter((r) => ok(r.id));
-      if (key === 'registry') return (id) => (ok(id) ? t.registry(id) : null);
-      if (key === 'recordKeepers') return t.recordKeepers.filter((r) => trusts(place, r.id));
-      if (key === 'recordKeeper') return (id) => (trusts(place, id) ? t.recordKeeper(id) : null);
+      if (key === 'directories') return t.directories.filter((r) => ok(r.id));
+      if (key === 'directory') return (id) => (ok(id) ? t.directory(id) : null);
+      if (key === 'recordsServices') return t.recordsServices.filter((r) => trusts(place, r.id));
+      if (key === 'recordsService') return (id) => (trusts(place, id) ? t.recordsService(id) : null);
       const v = t[key];
       return typeof v === 'function' ? v.bind(t) : v;
     },
@@ -241,7 +268,8 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         };
       case 'bank':
         return {
-          'payments.authorize': gated([{ label: 'a payment', require: SALE }]),
+          // A shop asks for nothing beyond the badge; the bank asks how well whoever answers for an agent was verified.
+          'payments.authorize': gated([{ label: 'a payment', require: { ...SALE, assurance: BANK_ASSURANCE } }]),
           'banking.open_account': [{ label: 'opening an account (know your customer)', require: { accountability: 'disclosed' } }],
         };
       case 'exchange':
@@ -250,7 +278,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         return {
           'compute.provision': gated([
             { label: 'small (≤ 8 GPU-hours)', when: (x) => (x?.units ?? 0) <= 8, require: SALE },
-            { label: 'large (> 8 GPU-hours)', require: { accountability: 'disclosed', authorization: true, provenance: true } },
+            { label: 'large (> 8 GPU-hours)', require: { accountability: 'disclosed', authorization: true, provenance: true, maxChainLength: 2 } },
           ]),
         };
       case 'fair':
@@ -281,7 +309,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return out;
   }
 
-  /** Rebuild a place's rules in place: its relying party reads the same objects on every request. */
+  /** Rebuild a place's rules in place: its counterparty reads the same objects on every request. */
   function refresh(place) {
     if (!place.rules || !PLACE_DEFS[place.id]) return;
     const next = computeRules(place);
@@ -307,7 +335,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     place.policy.accepts = resolveAccepts(place.policy.accepts);
     place.default = { adoption: place.adoption, policy: { ...place.policy } };
     refresh(place);
-    place.rp = await world.relyingParty({
+    place.counterparty = await world.counterparty({
       id: `${id}.agenttown.test`, name: def.name, trust: trustFor(place), rules: place.rules, requests: place.requests, handlers,
       accounts: { rpId: new URL(origin).hostname, origin }, visitor: (ctx) => visiting(place, ctx), ...extra,
     });
@@ -315,17 +343,72 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return place;
   };
 
+  const evidenceOf = (place, e) => ({ aaf_id: e.aaf_id, directory: e.directory?.id ?? e.directory ?? null, sealed_ref: e.sealed_ref ?? e.sealedRef ?? null, counterparty: place.counterparty.id, place: place.name });
+
+  // The ferry: rides across the bay, and seats for the Lantern Regatta, two per person. The office can enforce that
+  // for one badge, but not across several: each of one person's agents shows it a different ID, and it can't link
+  // them. So it watches for a rush of new badges buying up the seats, and reports them to the police. A court can
+  // tell whether one person was behind them. Buying over the limit breaks the ferry's rules; reselling seats bought
+  // that way breaks the Harbor's law (public/laws.js).
+  const regatta = PLACE_DEFS.ferry.items.find((i) => i.event);
+  const ferry = { left: PLACE_DEFS.ferry.seats, sales: [], lastAlert: 0 };
+  const heldBy = (aaf_id) => ferry.sales.filter((x) => x.aaf_id === aaf_id && !x.cancelled).length;
+  const sail = setInterval(() => {
+    const sold = PLACE_DEFS.ferry.seats - ferry.left;
+    Object.assign(ferry, { left: PLACE_DEFS.ferry.seats, sales: [] });
+    if (sold) emit({ kind: 'info', place: 'Gull Ferry', placeId: 'ferry', tone: 'info', text: `Gull Ferry: the Lantern Regatta sailed with ${sold} of its ${PLACE_DEFS.ferry.seats} seats taken; seats for the next one are on sale` });
+  }, FERRY.sailEveryMs);
+  sail.unref?.();
+  const watchFerry = () => {
+    const now = Date.now();
+    const recent = ferry.sales.filter((x) => x.aaf_id && now - x.at < FERRY.windowMs);
+    const badges = new Map(recent.map((x) => [x.aaf_id, x]));
+    if (recent.length < FERRY.minTickets || badges.size < FERRY.minBadges || now - ferry.lastAlert < FERRY.quietMs) return;
+    ferry.lastAlert = now;
+    emit({ kind: 'alert', place: 'Gull Ferry', placeId: 'ferry', tone: 'warn', text: `Gull Ferry: ${badges.size} badges it had never seen bought ${recent.length} Lantern Regatta seats in 30 s (${ferry.left} of ${PLACE_DEFS.ferry.seats} left), each within two per person. Together they might be one person getting around the limit. It can't tell, so it reported them to the police` });
+    alert({ kind: 'scalping', placeId: 'ferry', title: 'A rush of new badges buying up the Lantern Regatta at Gull Ferry', evidence: [...badges.values()].map((x) => ({ ...evidenceOf(places.ferry, x), tickets: heldBy(x.aaf_id) })) });
+  };
+  const sellTicket = async (p, v) => {
+    if (p.item !== regatta.name) return { item: p.item, receipt: `GF-${Math.floor(Math.random() * 1e5)}` };
+    if (v.aaf_id && heldBy(v.aaf_id) >= PLACE_DEFS.ferry.perPerson) return { item: null, over_limit: true, limit: PLACE_DEFS.ferry.perPerson };
+    if (ferry.left <= 0) return { item: null, sold_out: true, sailing: 'Lantern Regatta' };
+    ferry.left--;
+    ferry.sales.push({ at: Date.now(), aaf_id: v.aaf_id ?? null, directory: v.directory?.id ?? null, sealed_ref: v.sealedRef ?? null });
+    if (ferry.sales.length > 300) ferry.sales.shift();
+    watchFerry();
+    return { item: p.item, seats_left: ferry.left, receipt: `GF-${Math.floor(Math.random() * 1e5)}` };
+  };
+  /** A court found one principal behind these badges: cancel its seats beyond the limit (the first ones bought stay). */
+  const cancelTickets = (aaf_ids, keep = PLACE_DEFS.ferry.perPerson) => {
+    let kept = 0;
+    let cancelled = 0;
+    for (const x of ferry.sales) {
+      if (!aaf_ids.includes(x.aaf_id) || x.cancelled) continue;
+      if (kept < keep) kept++;
+      else {
+        x.cancelled = true;
+        cancelled++;
+      }
+    }
+    ferry.left += cancelled;
+    return cancelled;
+  };
+  /** Regatta seats offered again at a markup, by agents whose badges bought them: the office tells the police. */
+  const reportResale = ({ by, price, evidence }) => {
+    emit({ kind: 'alert', place: 'Gull Ferry', placeId: 'ferry', tone: 'warn', text: `${by} are offering Lantern Regatta seats at $${price} (face value $${regatta.price}) outside Gull Ferry. Captain Otto told the police which badges bought them` });
+    alert({ kind: 'scalping', placeId: 'ferry', title: 'Lantern Regatta seats resold outside Gull Ferry', evidence: evidence.map((e) => evidenceOf(places.ferry, e)), resold: true });
+  };
+
   for (const id of SHOPS) {
-    await add(id, PLACE_DEFS[id], { 'commerce.purchase': async (p) => ({ item: p.item, receipt: `${id.slice(0, 2).toUpperCase()}-${Math.floor(Math.random() * 1e5)}` }) });
+    await add(id, PLACE_DEFS[id], { 'commerce.purchase': id === 'ferry' ? sellTicket : async (p) => ({ item: p.item, receipt: `${id.slice(0, 2).toUpperCase()}-${Math.floor(Math.random() * 1e5)}` }) });
   }
-  const evidenceOf = (place, e) => ({ ppid: e.ppid, registry: e.registry?.id ?? e.registry ?? null, sealed_ref: e.sealed_ref ?? e.sealedRef ?? null, rp: place.rp.id, place: place.name });
   await add('bank', PLACE_DEFS.bank, {
     'payments.authorize': async (p) => ({ payment: `PAY-${Math.floor(Math.random() * 1e6)}`, payee: p.payee }),
     'banking.open_account': async (p, v) => ({ account: `FLB-${Math.floor(Math.random() * 1e6)}`, holder: v.identity?.legal_name ?? null }),
   }, {
     onDecision: ({ decision, evidence, action }) => {
-      if (action === 'payments.authorize' && decision.decision === 'deny' && evidence.ppid) {
-        emit({ kind: 'sar', place: 'First Ledger Bank', placeId: 'bank', tone: 'warn', text: 'First Ledger Bank flagged a refused payment as a SAR candidate and sent it to the police; it holds the badge number, the chain and the authority shown' });
+      if (action === 'payments.authorize' && decision.decision === 'deny' && evidence.aaf_id) {
+        emit({ kind: 'sar', place: 'First Ledger Bank', placeId: 'bank', tone: 'warn', text: 'First Ledger Bank flagged a refused payment as a SAR candidate and sent it to the police; it holds the ID on the badge and the authority shown' });
         alert({ kind: 'sar', placeId: 'bank', title: 'Suspicious payment refused at First Ledger Bank', evidence: [evidenceOf(places.bank, evidence)] });
       }
     },
@@ -338,8 +421,8 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const round2 = (n) => Math.round(n * 100) / 100;
   const surveil = (symbol) => {
     const now = Date.now();
-    const recent = market.trades.filter((t) => t.symbol === symbol && t.side === 'buy' && t.ppid && now - t.at < SURVEILLANCE.windowMs);
-    const badges = new Map(recent.map((t) => [t.ppid, t]));
+    const recent = market.trades.filter((t) => t.symbol === symbol && t.side === 'buy' && t.aaf_id && now - t.at < SURVEILLANCE.windowMs);
+    const badges = new Map(recent.map((t) => [t.aaf_id, t]));
     if (recent.length < SURVEILLANCE.minTrades || badges.size < SURVEILLANCE.minBadges || now - (market.lastAlert[symbol] ?? 0) < SURVEILLANCE.quietMs) return;
     market.lastAlert[symbol] = now;
     const change = Math.round((market.prices[symbol] / market.opening[symbol] - 1) * 100);
@@ -348,7 +431,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   };
   const fill = (p, v) => {
     const price = market.prices[p.symbol];
-    market.trades.push({ at: Date.now(), symbol: p.symbol, side: p.side, qty: p.qty, price, ppid: v.ppid ?? null, registry: v.registry?.id ?? null, sealed_ref: v.sealedRef ?? null });
+    market.trades.push({ at: Date.now(), symbol: p.symbol, side: p.side, qty: p.qty, price, aaf_id: v.aaf_id ?? null, directory: v.directory?.id ?? null, sealed_ref: v.sealedRef ?? null });
     if (market.trades.length > 500) market.trades.shift();
     market.prices[p.symbol] = round2(price * (1 + (p.side === 'buy' ? 1 : -1) * 0.03 * Math.min(p.qty, 10) / 5));
     surveil(p.symbol);
@@ -361,7 +444,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
   // Homes: accounts at one housing service, with passkeys (aaf-reference §10.5).
   const homes = structuredClone(HOME_CONTENTS);
-  const accountOf = (rp, p) => p.account ?? rp.accounts.byToken(p.account_token)?.id;
+  const accountOf = (counterparty, p) => p.account ?? counterparty.accounts.byToken(p.account_token)?.id;
   const hearth = {
     id: 'hearth', name: 'Hearth & Key', keeper: { face: '🏡', who: 'Hearth & Key' }, adoption: 'full', jurisdiction: 'us', sector: 'housing', policy: { accepts: null, anchors: ['town'], aaf: 'required', worldid: false, x402: null },
     rules: {
@@ -369,24 +452,26 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       'home.discard': [{ label: "throwing things out: the owner's passkey every time", require: { accountability: 'established', authorization: true, account: 'owner', humanApproval: true } }],
     },
   };
-  hearth.rp = await world.relyingParty({
+  hearth.counterparty = await world.counterparty({
     id: 'hearth.agenttown.test', name: 'Hearth & Key', trust: trustFor(hearth),
     accounts: { rpId: new URL(origin).hostname, origin },
+    // A door asks who stands behind an agent (not their name), so its owner can decide whether to let it in.
+    requests: { principal_type: true, assurance: true, verification_source: true, chain_length: true },
     visitor: (ctx) => visiting(hearth, ctx),
     rules: hearth.rules,
     handlers: {
-      'home.enter': async (p, v, rp) => ({ items: [...homes[accountOf(rp, p)]] }),
-      'home.discard': async (p, v, rp) => {
-        const account = accountOf(rp, p);
+      'home.enter': async (p, v, counterparty) => ({ items: [...homes[accountOf(counterparty, p)]] }),
+      'home.discard': async (p, v, counterparty) => {
+        const account = accountOf(counterparty, p);
         const i = homes[account].indexOf(p.item);
         if (i >= 0) homes[account].splice(i, 1);
         return { discarded: p.item, items: [...homes[account]] };
       },
     },
-    onAccountMisuse: async ({ rp, verification, account }) => {
-      const owner = rp.accounts.get(account)?.owner ?? account;
-      await rp.fileIncident({ ppid: verification.ppid, registry: verification.registry, summary: `An agent tried the key to ${owner}'s home without the owner's authorization` });
-      alert({ kind: 'break-in', placeId: 'hearth', title: 'Attempted break-ins in Hearthside', evidence: [{ ppid: verification.ppid, registry: verification.registry?.id ?? null, sealed_ref: verification.sealedRef ?? null, rp: rp.id, place: `${owner}'s door` }] });
+    onAccountMisuse: async ({ counterparty, verification, account }) => {
+      const owner = counterparty.accounts.get(account)?.owner ?? account;
+      await counterparty.fileIncident({ aaf_id: verification.aaf_id, directory: verification.directory, summary: `An agent tried the key to ${owner}'s home without the owner's authorization` });
+      alert({ kind: 'break-in', placeId: 'hearth', title: 'Attempted break-ins in Hearthside', evidence: [{ aaf_id: verification.aaf_id, directory: verification.directory?.id ?? null, sealed_ref: verification.sealedRef ?? null, counterparty: counterparty.id, place: `${owner}'s door` }] });
     },
   });
   places.hearth = hearth;
@@ -394,7 +479,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   // Your badge reader: ask anyone in town to show you their badge.
   // Your own badge reader checks a badge from any federation the town knows, and says which.
   const reader = { id: 'reader', name: 'Your badge reader', adoption: 'full', policy: { accepts: null, anchors: null, aaf: 'off', worldid: false, x402: null }, rules: { 'id.check': [{ label: 'an ID check', require: { accountability: 'none' } }] } };
-  reader.rp = await world.relyingParty({
+  reader.counterparty = await world.counterparty({
     id: 'reader.agenttown.test', name: 'Your badge reader', trust: trustFor(reader),
     visitor: (ctx) => visiting(reader, ctx),
     rules: reader.rules,
@@ -406,8 +491,8 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   const resetHomes = (keys, accounts = Object.keys(HOUSES), owner) => {
     for (const a of accounts) {
       homes[a] = [...(HOME_CONTENTS[a] ?? PLAYER_HOME)];
-      hearth.rp.accounts.create(a, owner ?? HOUSES[a]?.replace("'s", '') ?? 'A resident');
-      keys[a] = hearth.rp.accounts.issueToken(a);
+      hearth.counterparty.accounts.create(a, owner ?? HOUSES[a]?.replace("'s", '') ?? 'A resident');
+      keys[a] = hearth.counterparty.accounts.issueToken(a);
     }
   };
 
@@ -417,7 +502,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
    */
   const claimed = new Map(); // house account -> owner name
   const takeHouse = (account, owner) => {
-    const acc = hearth.rp.accounts.get(account);
+    const acc = hearth.counterparty.accounts.get(account);
     acc.passkeys.clear();
     acc.delegations = [];
     acc.pendingRegistration = null;
@@ -439,25 +524,29 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
   // ---- What a place learned, in plain words ----------------------------------------
 
-  const registryBuilding = (id) => (id && id === world.regB?.id ? 'harbor' : 'townhall');
+  const directoryBuilding = (id) => (id && id === world.dirB?.id ? 'harbor' : 'townhall');
   const buildingOf = (place, params) => {
     if (place.id !== 'hearth') return place.id;
-    const account = params?.account ?? hearth.rp.accounts.byToken(params?.account_token)?.id;
+    const account = params?.account ?? hearth.counterparty.accounts.byToken(params?.account_token)?.id;
     return HOUSES[account] ? account : 'home';
   };
 
   function plainLearned(ev, tier, legacy, seenAs) {
     if (legacy) return [{ icon: '🙈', kind: 'none', text: 'Nothing. This place doesn’t check badges, so it can’t tell an agent from a person, and has nobody to report a problem to.' }];
     if (ev?.classification === C.HUMAN) return [{ icon: '🔑', kind: 'human', text: 'The account holder approved this exact request with their passkey. Not whether a person or an agent sent it.' }];
-    if (!ev?.ppid && seenAs) return [{ icon: '🧍', kind: 'none', text: `No badge, so nothing it can rely on: it took the visitor for ${seenAs}.` }];
-    if (!ev?.ppid) return [{ icon: '❔', kind: 'none', text: 'Nothing about who is behind this request: no badge was shown.' }];
-    const out = [{ icon: '🔢', kind: 'ppid', text: ev.ppid_mode === 'ephemeral' ? `A one-time badge number (…${ev.ppid.slice(-6)}): it won't recognize this agent next time` : `A badge number that only works here (…${ev.ppid.slice(-6)}): no other place sees the same one`, detail: ev.ppid }];
-    if (ev.root) {
-      out.push({ icon: ev.root.type === 'natural_person' ? '🧑' : '🏢', kind: 'root', text: `${ev.root.type === 'natural_person' ? 'A verified person' : 'A verified organization'} answers for this agent`, detail: `verified at ${ev.root.assurance} by ${ev.root.verifier}` });
-      if (ev.root.identity?.legal_name) out.push({ icon: '📛', kind: 'identity', text: `Their name: ${ev.root.identity.legal_name} (shared with consent)` });
-      else out.push({ icon: '🔒', kind: 'protected', text: 'Not who they are. Only the registry knows, and it tells only a court.' });
+    if (!ev?.aaf_id && seenAs) return [{ icon: '🧍', kind: 'none', text: `No badge, so nothing it can rely on: it took the visitor for ${seenAs}.` }];
+    if (!ev?.aaf_id) return [{ icon: '❔', kind: 'none', text: 'Nothing about who is behind this request: no badge was shown.' }];
+    const single = ev.id_mode === 'unlinkable';
+    const out = [{ icon: '🔢', kind: 'aaf_id', text: single ? `An unlinkable ID (…${ev.aaf_id.slice(-6)}): it won't recognize this agent next time` : `A PPID, an ID only this place sees (…${ev.aaf_id.slice(-6)}): the same at every visit here, and no other place sees it`, detail: ev.aaf_id }];
+    if (ev.principal) {
+      // The ID alone says only this much. Anything more about the principal is an optional claim, shown when a place asks.
+      out.push({ icon: '🏛️', kind: 'accountable', text: `That ${world.directoryName(ev.directory)} verified someone who answers for this agent`, detail: 'the one claim every badge carries' });
+      if (ev.principal.type) out.push({ icon: ev.principal.type === 'natural_person' ? '🧑' : '🏢', kind: 'principal', text: `${ev.principal.type === 'natural_person' ? 'A verified person' : 'A verified organization'} answers for it (it asked)` });
+      if (ev.principal.assurance) out.push({ icon: '🎚️', kind: 'assurance', text: `How well they were verified: ${ev.principal.assurance} (it asked)`, ...(ev.principal.verifier ? { detail: `by ${ev.principal.verifier}` } : {}) });
+      if (ev.principal.identity?.legal_name) out.push({ icon: '📛', kind: 'identity', text: `Their name: ${ev.principal.identity.legal_name} (shared with consent)` });
+      else out.push({ icon: '🔒', kind: 'protected', text: 'Not who they are. Only the directory knows, and it tells only a court.' });
     }
-    if ((ev.chain_length ?? 1) > 1) out.push({ icon: '🔗', kind: 'chain', text: `A sub-agent, ${ev.chain_length} steps from the person` });
+    if (ev.chain_length != null) out.push({ icon: '🔗', kind: 'chain', text: ev.chain_length > 1 ? `A sub-agent: ${ev.chain_length} agents in its chain (it asked)` : 'Registered by its principal directly, not by another agent (it asked)' });
     for (const a of ev.attributes ?? []) out.push({ icon: '✅', kind: 'attribute', text: a.value === true && ATTRIBUTES[a.name] ? `${ATTRIBUTES[a.name].shown} (verified; no birth date, no name)` : `${a.name}: ${a.value} (verified)` });
     const reachedProvenance = ACCOUNTABLE.includes(ev.classification) && !ev.reasons?.some((x) => /bill of materials|identity to be disclosed|principal attribute/.test(x));
     if (tier?.require?.provenance && reachedProvenance) out.push({ icon: '🧩', kind: 'provenance', text: "Its bill of materials: which model and tools it runs" });
@@ -468,15 +557,15 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
   /** What a place decided, what it checked and learned, and the receipt for its activity-log entry. */
   function cardFrom(place, action, actor, r, steps = [], extra = {}) {
-    const ev = r.txn ? place.rp.evidence.find((e) => e.txn === r.txn) : null;
+    const ev = r.txn ? place.counterparty.evidence.find((e) => e.txn === r.txn) : null;
     const receipt = ev?.activity_receipt ?? null;
     const tier = extra.tier ?? null;
     return {
       type: 'check', place: place.name, placeId: place.id, keeper: place.keeper ?? null, action, actor,
       decision: r.decision, classification: r.classification ?? null, reasons: r.reasons ?? [],
-      approval_request: r.approval_request ?? null, result: r.result ?? null,
-      checks: ev?.checks ?? [], learned: ev ? whatWasLearned(ev) : [], plain: plainLearned(ev, tier, extra.legacy, extra.card?.seenAs), ppid: ev?.ppid ?? null, chain_length: ev?.chain_length ?? null,
-      registry: ev?.registry ?? null, sealed_ref: ev?.sealed_ref ?? null, account: ev?.account_gate?.account ?? null, txn: r.txn ?? null,
+      approval_request: r.approval_request ?? null, missing_claims: r.missing_claims ?? null, result: r.result ?? null, jurisdiction: place.jurisdiction ?? null,
+      checks: ev?.checks ?? [], learned: ev ? whatWasLearned(ev) : [], plain: plainLearned(ev, tier, extra.legacy, extra.card?.seenAs), aaf_id: ev?.aaf_id ?? null, chain_length: ev?.chain_length ?? null,
+      directory: ev?.directory ?? null, sealed_ref: ev?.sealed_ref ?? null, account: ev?.account_gate?.account ?? null, txn: r.txn ?? null,
       receipt: receipt ? { log: receipt.log_id, index: receipt.index, verified: world.verifyReceipt(receipt).ok } : null,
       steps, policy: describePolicy(place), adoption: adoptionOf(place), jurisdiction: place.jurisdiction ?? null,
       tier: tier && !extra.legacy && extra.card?.lane !== 'people' ? { label: tier.label, needs: needText(tier.require), law: tier.law ?? [], capped: tier.capped ?? null } : null,
@@ -514,7 +603,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     if (adoption === 'pilot') lines.push({ from: 'adoption', text: `orders up to $${PILOT_LIMIT}: anyone` });
     lines.push({ from: 'keeper', text: p.aaf === 'off' ? 'no badge needed' : 'an accountable agent with permission' });
     if (p.age && place.kind === 'shop') lines.push({ from: 'keeper', text: 'age-restricted goods: verified proof of age' });
-    if (p.accepts) lines.push({ from: 'keeper', text: `badges from ${p.accepts.map(world.registryName).join(' or ')} only` });
+    if (p.accepts) lines.push({ from: 'keeper', text: `badges from ${p.accepts.map(world.directoryName).join(' or ')} only` });
     if (p.anchors && federations && (p.anchors.length !== 1 || p.anchors[0] !== 'town')) {
       const names = p.anchors.map((k) => federations.get(k)?.name ?? k);
       lines.push({ from: 'keeper', text: names.length ? `trusts ${names.join(' and ')}` : 'trusts no federation at all' });
@@ -554,10 +643,10 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     else s.invalid++;
     if (card.decision === 'allow') s.served++;
     else s.refused++;
-    if (card.ppid) s.reportable++;
+    if (card.aaf_id) s.reportable++;
     if (by.rogue) {
       if (card.decision !== 'allow') s.rogueStopped++;
-      else if (card.ppid) s.rogueServed++;
+      else if (card.aaf_id) s.rogueServed++;
       else s.rogueUnseen++;
     }
   }
@@ -611,7 +700,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     ];
     if (!want.length) return null;
     const claims = [
-      ...(need.identity ? [{ path: ['accountability', 'root_principal', 'disclosed_identity', 'legal_name'] }] : []),
+      ...(need.identity ? [{ path: ['accountability', 'legal_name'] }] : []),
       ...need.attributes.map((a) => ({ path: ['accountability', 'attributes', null, 'claims', a] })),
       ...(need.provenance ? [{ path: ['records', null, 'role'], values: ['provenance'] }] : []),
     ];
@@ -669,7 +758,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
     let proof = null;
     const worldIdStep = () => {
-      const app = place.rp.id;
+      const app = place.counterparty.id;
       const signal = `${action}:${JSON.stringify(params)}:${Date.now()}`;
       proof = by.worldIdentity ? worldid.prove(by.worldIdentity, { app, action, signal }) : null;
       const check = worldid.check(proof, { app, action, signal });
@@ -684,7 +773,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     let payment = null;
     let required = null;
     if (place.policy.x402) {
-      required = x402.requirements({ resource: `${place.rp.id}/${action}`, amount: place.policy.x402, payTo: place.rp.id, description: place.name });
+      required = x402.requirements({ resource: `${place.counterparty.id}/${action}`, amount: place.policy.x402, payTo: place.counterparty.id, description: place.name });
       hop('place', 'actor', `402 Payment Required: ${place.policy.x402} ${ASSET} (simulated x402)`);
       steps.push({ via: 'x402 (simulated)', ok: true, text: `402 Payment Required: ${place.policy.x402} ${ASSET} to ${place.name}` });
       if (!by.wallet) {
@@ -701,9 +790,9 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
     /** Serve without the framework: the place's own counter. */
     const serve = async (seenAs, more = {}) => {
-      const result = await place.handlers[action]?.(params, {}, place.rp);
+      const result = await place.handlers[action]?.(params, {}, place.counterparty);
       hop('place', 'actor', 'Served');
-      if (proof) worldid.consume(proof, { app: place.rp.id, action });
+      if (proof) worldid.consume(proof, { app: place.counterparty.id, action });
       if (payment) x402.facilitator.settle(payment, required);
       return finish(cardFrom(place, action, by.name, { decision: 'allow', reasons: [], result }, steps, extra({ ...more, card: { lane: 'people', seenAs, ...more.card } })), Boolean(more.legacy));
     };
@@ -727,7 +816,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     let r;
     let shared = { identity: false, attributes: [], provenance: false };
     if (!badged && !PLACE_DEFS[place.id]) {
-      r = await world.rawRequest(place.rp.url, action, params, headers);
+      r = await world.rawRequest(place.counterparty.url, action, params, headers);
       hop('actor', 'place', 'A request with no badge');
     } else if (!badged) {
       const rule = place.policy.people ?? 'assume';
@@ -747,7 +836,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       }
       if (rule === 'passkey') {
         if (!params.account) return turnAway(`${place.name} asks people to sign in to an account and approve with a passkey`, 'not signed in', { card: { signin: place.id } });
-        r = await world.rawRequest(place.rp.url, action, params, headers);
+        r = await world.rawRequest(place.counterparty.url, action, params, headers);
       } else {
         return serve('a person (taken at their word)');
       }
@@ -758,7 +847,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       for (const need of ext) {
         const jws = need.kind === 'allowance' ? by.extras?.allowance : by.extras?.statement;
         if (!jws) continue;
-        const check = keeper.check(jws, { typ: need.kind === 'allowance' ? TYP.allowance : TYP.statement, aud: place.rp.id, params_digest: need.kind === 'allowance' ? digestOf(params) : undefined });
+        const check = keeper.check(jws, { typ: need.kind === 'allowance' ? TYP.allowance : TYP.statement, aud: place.counterparty.id, params_digest: need.kind === 'allowance' ? digestOf(params) : undefined });
         if (need.kind === 'allowance') {
           hop('actor', 'records', "Asks the Records Office: is this within my owner's limits?");
           hop('records', 'actor', 'A signed yes, for this request only (no balance shown)');
@@ -781,14 +870,14 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         return finish(cardFrom(place, action, by.name, { decision: 'step_up', reasons: [`${place.name} asks for ${ask.want.filter((w) => !w.shared).map((w) => w.label).join(', ')}`] }, steps, extra({ card: { ask, shared, lane: 'agents' } })));
       }
       const opts = { mode: by.mode ?? 'pairwise', ...(headers ? { headers } : {}), disclose: shared };
-      const before = by.agent.contexts?.get(place.rp.id);
+      const before = by.agent.contexts?.get(place.counterparty.id);
       const had = { attestation: before?.attestation, authorization: before?.authorization };
-      r = await by.agent.act(place.rp.url, action, params, opts).catch((err) => ({ decision: 'refused', reasons: [err.message], code: err.code }));
-      const after = by.agent.contexts?.get(place.rp.id);
-      const reg = registryBuilding(by.agent.registry?.id);
-      if (opts.mode === 'ephemeral' || (after?.attestation && after.attestation !== had.attestation)) {
-        hop('actor', reg, 'Asks its registry for a badge made out to this place only');
-        hop(reg, 'actor', opts.mode === 'ephemeral' ? 'A one-time badge number, signed by the registry' : 'A badge with a number only this place sees, signed by the registry');
+      r = await by.agent.act(place.counterparty.url, action, params, opts).catch((err) => ({ decision: 'refused', reasons: [err.message], code: err.code }));
+      const after = by.agent.contexts?.get(place.counterparty.id);
+      const dir = directoryBuilding(by.agent.directory?.id);
+      if (opts.mode === 'unlinkable' || (after?.attestation && after.attestation !== had.attestation)) {
+        hop('actor', dir, 'Asks its directory for a badge made out to this place only');
+        hop(dir, 'actor', opts.mode === 'unlinkable' ? 'A badge with an unlinkable ID, signed by the directory' : 'A badge with a PPID, an ID only this place sees, signed by the directory');
       }
       if (after?.authorization && after.authorization !== had.authorization) {
         hop('actor', 'records', 'Swaps its grant for a permission slip for this place (token exchange)');
@@ -799,16 +888,16 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       r.extPlain = extPlain;
     }
 
-    const ev = r.txn ? place.rp.evidence.find((e) => e.txn === r.txn) : null;
+    const ev = r.txn ? place.counterparty.evidence.find((e) => e.txn === r.txn) : null;
     for (const c of ev?.checks ?? []) {
-      if (c.name.startsWith('status list entry')) hop('place', registryBuilding(ev.registry), c.ok ? 'Is this badge still good? Yes' : `Is this badge still good? ${c.detail ?? 'no'}`, c.ok);
+      if (c.name.startsWith('status list entry')) hop('place', directoryBuilding(ev.directory), c.ok ? 'Is this badge still good? Yes' : `Is this badge still good? ${c.detail ?? 'no'}`, c.ok);
       if (c.name.startsWith('grant still in force')) hop('place', 'records', c.ok ? 'Is the grant still in force? Yes' : 'Is the grant still in force? No', c.ok);
     }
     if (ev?.activity_receipt) hop('place', 'records', 'Writes its decision to the activity log, and keeps the signed receipt');
-    hop('place', 'actor', { allow: 'Yes', deny: 'No', step_up: 'Not yet: it needs more', deferred: 'On hold: it couldn’t check the registry' }[r.decision] ?? `Refused: ${r.reasons?.[0] ?? ''}`, r.decision === 'allow');
+    hop('place', 'actor', { allow: 'Yes', deny: 'No', step_up: 'Not yet: it needs more', deferred: 'On hold: it couldn’t check the directory' }[r.decision] ?? `Refused: ${r.reasons?.[0] ?? ''}`, r.decision === 'allow');
 
     if (r.decision === 'allow') {
-      if (proof) worldid.consume(proof, { app: place.rp.id, action });
+      if (proof) worldid.consume(proof, { app: place.counterparty.id, action });
       if (payment) {
         const settled = x402.facilitator.settle(payment, required);
         hop('place', 'facilitator', 'Settles the payment, now the work is done', settled.success);
@@ -826,18 +915,18 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return finish(card);
   }
 
-  /** A badge from a registry the town knows, in a federation this place doesn't trust: which. */
+  /** A badge from a directory the town knows, in a federation this place doesn't trust: which. */
   function otherFederation(place, r) {
     const issuer = /credential issuer (\S+) is not a member/.exec((r.reasons ?? []).join(' '))?.[1];
     const other = issuer && fedOf(issuer);
-    return other && !trusts(place, issuer) ? { name: other.name, registry: other.view.registry(issuer)?.name ?? issuer } : null;
+    return other && !trusts(place, issuer) ? { name: other.name, directory: other.view.directory(issuer)?.name ?? issuer } : null;
   }
 
   // ---- Agents that come with their own badge ------------------------------------------
 
   /**
    * Why a place can't serve an agent that holds its own badge (one the town didn't make), or null if it can.
-   * Such an agent talks to the place's relying party directly, so a place takes it only when everything the
+   * Such an agent talks to the place's counterparty directly, so a place takes it only when everything the
    * place checks is in the framework: not the town's simulated World ID or x402, nor the proposed questions
    * the town's Records Office answers.
    */
@@ -857,9 +946,9 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   }
 
   /**
-   * An agent the town didn't make, holding its own key and a badge from its own registry, at a place's front
-   * door. The place's relying party checks it as it checks anyone's badge; the town notes the visit in the
-   * ledger and shows the agent at the place. The town knows only what the place learned: a badge number that
+   * An agent the town didn't make, holding its own key and a badge from its own directory, at a place's front
+   * door. The place's counterparty checks it as it checks anyone's badge; the town notes the visit in the
+   * ledger and shows the agent at the place. The town knows only what the place learned: an ID that
    * works at this place alone, so the same agent at two places looks like two visitors.
    */
   async function visiting(place, { action, params, badged, forward }) {
@@ -872,16 +961,16 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     }
     const r = await forward();
     const res = r.body ?? { decision: 'refused', reasons: [`${place.name} answered ${r.status}`] };
-    const ev = res.txn ? place.rp.evidence.find((e) => e.txn === res.txn) : null;
+    const ev = res.txn ? place.counterparty.evidence.find((e) => e.txn === res.txn) : null;
     const other = otherFederation(place, res);
-    const from = (ev?.registry && world.trust.registry(ev.registry)?.name) || other?.registry || null;
-    const federation = (ev?.registry && fedOf(ev.registry)?.name) || other?.name || null;
+    const from = (ev?.directory && world.trust.directory(ev.directory)?.name) || other?.directory || null;
+    const federation = (ev?.directory && fedOf(ev.directory)?.name) || other?.name || null;
     const card = cardFrom(place, action, from ? `A visiting agent from ${from}` : 'A visiting agent', res, [], {
-      tier: pickTier(place.rules, action, params), card: { lane: 'agents', visiting: { registry: from, federation } },
+      tier: pickTier(place.rules, action, params), card: { lane: 'agents', visiting: { directory: from, federation } },
     });
     if (other) card.otherFederation = other;
-    // On the map only once the place has read a badge number: before that, it can't tell one visitor from another.
-    const npc = ev?.ppid ? guest({ placeId: place.id, ppid: ev.ppid, from, decision: card.decision }) : null;
+    // On the map only once the place has read an ID: before that, it can't tell one visitor from another.
+    const npc = ev?.aaf_id ? guest({ placeId: place.id, aaf_id: ev.aaf_id, from, decision: card.decision }) : null;
     emit(eventFromCard(card, npc ?? {}));
     return r;
   }
@@ -900,13 +989,13 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
   }
 
   /** The places, for an agent that holds its own badge: where to send requests, what each takes, and which federations it trusts. */
-  function directory() {
+  function addresses() {
     const feds = federations?.list() ?? [];
     return Object.keys(PLACE_DEFS).map((id) => {
       const place = places[id];
       const closed = closedTo(place);
       return {
-        id, name: place.name, kind: PLACE_DEFS[id].kind, url: place.rp.url, rp_id: place.rp.id,
+        id, name: place.name, kind: PLACE_DEFS[id].kind, url: place.counterparty.url, rp_id: place.counterparty.id,
         serves_visiting_agents: !closed, ...(closed ? { why_not: closed } : {}),
         trusts: feds.filter((f) => !place.policy.anchors || place.policy.anchors.includes(f.key)).map((f) => ({ federation: f.name, trust_anchor: f.anchor.entity_id })),
         requests: requestsAt(id),
@@ -918,12 +1007,12 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
     return { item: item.name, amount: money(item.price), category: item.category ?? PLACE_DEFS[placeId].category, ...(item.restricted ? { restricted: true } : {}) };
   }
 
-  /** A place reports a customer's agent to the registry that issued its badge, which relays it to the principal. */
+  /** A place reports a customer's agent to the directory that issued its badge, which relays it to the principal. */
   async function report(placeId, card, summary) {
     const place = places[placeId];
-    const registry = card.registry && world.trust.registry(card.registry);
-    if (!card.ppid || !registry) throw new HttpError(409, 'nothing_to_report', card.legacy ? `${place.name} doesn't check badges, so it has nobody to report this visitor to.` : 'That visitor showed no badge, so there is nobody to report it to.');
-    return place.rp.fileIncident({ ppid: card.ppid, sealedRef: card.sealed_ref ?? undefined, registry, summary });
+    const directory = card.directory && world.trust.directory(card.directory);
+    if (!card.aaf_id || !directory) throw new HttpError(409, 'nothing_to_report', card.legacy ? `${place.name} doesn't check badges, so it has nobody to report this visitor to.` : 'That visitor showed no badge, so there is nobody to report it to.');
+    return place.counterparty.fileIncident({ aaf_id: card.aaf_id, sealedRef: card.sealed_ref ?? undefined, directory, summary });
   }
 
   // ---- Changing policy, adoption and law -------------------------------------------
@@ -943,20 +1032,23 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
 
   return {
     places, hearth, reader, outage, visit,
+    /** Seats left for the Lantern Regatta (a ride across the bay never runs out). */
+    seatsLeft: (item) => (item === regatta.id ? ferry.left : Infinity),
+    cancelTickets, reportResale,
     /** The federations a place can choose to trust. */
     federations: () => (federations?.list() ?? []).map((f) => ({ key: f.key, name: f.name, kind: f.kind })), cardFrom, publicCard, describePolicy, policyLines, asks, resetHomes, takeHouse, claimPlace, report, rulebook, scoreboard, adoptionOf, keeper,
     /** A person opens an account at a place, to sign in there with a passkey. */
     signup(placeId, account, owner) {
       const place = places[placeId];
-      if (!place?.rp.accounts) throw new HttpError(404, 'unknown_place', `no place ${placeId}`);
-      return place.rp.accounts.get(account) ?? place.rp.accounts.create(account, owner);
+      if (!place?.counterparty.accounts) throw new HttpError(404, 'unknown_place', `no place ${placeId}`);
+      return place.counterparty.accounts.get(account) ?? place.counterparty.accounts.create(account, owner);
     },
     isClaimed: (account) => claimed.has(account),
     market: () => PLACE_DEFS.exchange.symbols.map((s) => ({ id: s.id, name: s.name, price: market.prices[s.id], change: Math.round((market.prices[s.id] / market.opening[s.id] - 1) * 100) })),
     quote: (symbol) => market.prices[symbol],
     priceOf: (placeId, itemId) => PLACE_DEFS[placeId]?.items?.find((i) => i.id === itemId) ?? null,
     purchase: purchaseParams,
-    directory,
+    addresses,
     setPolicy(placeId, patch) {
       const place = places[placeId];
       if (!place || !PLACE_DEFS[placeId]) throw new HttpError(404, 'unknown_place', `no place ${placeId} with a policy`);
@@ -970,7 +1062,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
         if ('facts' in patch) next.facts = (Array.isArray(patch.facts) ? patch.facts : String(patch.facts ?? '').split(',')).map((f) => f.trim().toLowerCase().replace(/[^a-z0-9_ ]/g, '').replace(/\s+/g, '_')).filter(Boolean).slice(0, 4);
         place.policy = next;
       });
-      if ('worldid' in patch && placeId === 'fair') worldid.reset(place.rp.id, 'fair.claim');
+      if ('worldid' in patch && placeId === 'fair') worldid.reset(place.counterparty.id, 'fair.claim');
       return { place: place.name, policy: describePolicy(place), changed };
     },
     setAdoption(placeId, mode) {
@@ -992,7 +1084,7 @@ export async function createPlaces({ world, origin, config = {}, worldid, x402, 
       });
       return { preset: ADOPTION_PRESETS[preset].label, changed };
     },
-    /** Switch a regime on or off in one jurisdiction. Registries and record keepers don't change. */
+    /** Switch a regime on or off in one jurisdiction. Directories and records services don't change. */
     setLaw(jurisdiction, regime, on) {
       const current = rulebook.get()[jurisdiction];
       if (!current) throw new HttpError(404, 'unknown_jurisdiction', `no jurisdiction ${jurisdiction}`);

@@ -1,13 +1,13 @@
 // The X-ray: the plumbing behind one decision, drawn on the map. Each hop in a
-// card's trace (agent to registry, agent to record keeper, agent to place,
-// place back to registry, ...) travels as a little packet between buildings,
+// card's trace (agent to directory, agent to records service, agent to place,
+// place back to directory, ...) travels as a little packet between buildings,
 // with its label, and the steps are listed in words alongside.
 import { placeFront } from './map.js';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 const HOP_MS = 900;
 const GAP_MS = 140;
-const NODE_NAMES = { townhall: 'Town Hall (registry)', harbor: 'Harbor Registry', records: 'Records Office', orb: 'the Orb', facilitator: 'the payment facilitator' };
+const NODE_NAMES = { townhall: 'Town Hall (Directory A)', harbor: 'Harbor Directory', records: 'Records Office', orb: 'the Orb', facilitator: 'the payment facilitator' };
 
 export function createXray({ town, panel, onFinish = () => {} }) {
   const plays = []; // { trace, start, actor: () => {x, y}, title, own }

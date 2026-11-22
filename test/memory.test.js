@@ -45,19 +45,19 @@ test('a place keeps its latest decisions, and still says what it learned', { tim
 
     // 300 more decisions at the same place: requests with no badge, which it refuses.
     const params = places.purchase('bramble', PLACE_DEFS.bramble.items[0]);
-    for (let i = 0; i < 300; i++) await world.rawRequest(bramble.rp.url, 'commerce.purchase', params);
-    assert.equal(bramble.rp.evidence.length, DECISIONS_KEPT, 'the place keeps its latest decisions, no more');
-    assert.equal(bramble.rp.received.length, DECISIONS_KEPT, 'and the requests that came with them');
+    for (let i = 0; i < 300; i++) await world.rawRequest(bramble.counterparty.url, 'commerce.purchase', params);
+    assert.equal(bramble.counterparty.evidence.length, DECISIONS_KEPT, 'the place keeps its latest decisions, no more');
+    assert.equal(bramble.counterparty.received.length, DECISIONS_KEPT, 'and the requests that came with them');
 
     // The next request's card still finds its own decision: what the place learned, the X-ray, the receipt.
     const guide = await run('buy', { shop: 'bramble', item: 'guide' });
     assert.equal(guide.decision, 'allow');
-    assert.ok(guide.plain.some((x) => x.kind === 'ppid'), 'in plain words: a badge number that only works here');
+    assert.ok(guide.plain.some((x) => x.kind === 'aaf_id'), 'in plain words: a badge number that only works here');
     assert.ok(guide.plain.some((x) => x.kind === 'protected'), 'in plain words: not who they are');
     assert.ok(guide.trace.some((h) => h.from === 'bramble' && h.to === 'townhall'), 'the X-ray shows the status check');
     assert.ok(guide.receipt?.verified, 'the activity-log receipt is there, and verifies');
-    assert.equal(bramble.rp.evidence.length, DECISIONS_KEPT);
-    assert.equal(bramble.rp.evidence.at(-1).decision, 'allow', 'the newest decision is the one just made');
+    assert.equal(bramble.counterparty.evidence.length, DECISIONS_KEPT);
+    assert.equal(bramble.counterparty.evidence.at(-1).decision, 'allow', 'the newest decision is the one just made');
   } finally {
     await game.close();
   }
@@ -66,7 +66,7 @@ test('a place keeps its latest decisions, and still says what it learned', { tim
 test('the court keeps its latest cases, and every petition left has its case', async () => {
   // Someone plays the police and the judge, so nothing is simulated and nothing waits on a timer.
   const justice = createJustice({ world: {}, emit: () => {}, people: () => ({ police: 1, judge: 1 }) });
-  const evidence = (i) => [{ ppid: `ppid-${i}`, registry: 'https://registry-a.test', rp: 'bramble.agenttown.test', place: 'Bramble Books' }];
+  const evidence = (i) => [{ aaf_id: `aaf_id-${i}`, directory: 'https://directory-a.test', counterparty: 'bramble.agenttown.test', place: 'Bramble Books' }];
   const filed = [];
   for (let i = 0; i < CASES_KEPT + 200; i++) filed.push(justice.fileCase({ kind: 'complaint', placeId: 'bramble', title: `Complaint ${i}`, evidence: evidence(i) }));
   // An old case with a petition still before the court, and one refiled and denied again and again.
@@ -108,10 +108,10 @@ test('the Records Office forgets what no longer counts, and nothing is used twic
   // 120 covered and 300 refused: the register shows the latest 40, and today's totals count every covered one.
   for (let i = 0; i < 120; i++) assert.equal(ask(5).covered, true);
   for (let i = 0; i < 300; i++) assert.equal(ask(50).covered, false);
-  const reg = keeper.register(principal.id);
-  assert.equal(reg.version, 50);
-  assert.equal(reg.attempts.length, 40);
-  assert.deepEqual(reg.today, { spent: 600, purchases: 120 });
+  const dir = keeper.register(principal.id);
+  assert.equal(dir.version, 50);
+  assert.equal(dir.attempts.length, 40);
+  assert.deepEqual(dir.today, { spent: 600, purchases: 120 });
 
   // An allowance is good once; after it expires it's refused as expired.
   const { allowance } = ask(5);

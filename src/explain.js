@@ -6,9 +6,16 @@ import { CLASSIFICATION as C } from 'aaf-reference/src/lib/protocol.js';
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const listOf = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
 const dollars = (v) => `$${Number.isInteger(v) ? v : Number(v).toFixed(2)}`;
+/** The framework's optional claims, as a place would ask for them. */
+const CLAIM_WORDS = {
+  principal_type: 'whether a person or a business answers for it', assurance: 'how well its principal was verified',
+  chain_length: 'how many agents are in its chain', identity: 'the name behind it', verification_source: 'who verified its principal',
+};
 
 function gotWhat(card) {
   const r = card.result ?? {};
+  if (card.action === 'commerce.purchase' && r.sold_out) return `Sold out: no seat left for the ${r.sailing}`;
+  if (card.action === 'commerce.purchase' && r.over_limit) return `No: ${r.limit} seats per person, and this badge holds ${r.limit}`;
   if (card.action === 'commerce.purchase' && r.item) return `Bought ${r.item.toLowerCase().replace(/^a /, 'a ')}${card.amount ? ` for ${dollars(card.amount)}` : ''}`;
   if (card.action === 'payments.authorize') return card.placeId === 'toll' ? 'Paid the bridge toll' : `Paid ${r.payee ?? 'the bill'}${card.amount ? ` (${dollars(card.amount)})` : ''}`;
   if (card.action === 'trading.order' && r.item) return cap(r.item);
@@ -23,8 +30,12 @@ function gotWhat(card) {
 
 function learnedLine(card) {
   const kinds = new Set((card.plain ?? []).map((x) => x.kind));
-  if (!card.ppid) return `${card.place} learned nothing about who is behind it.`;
-  const parts = [kinds.has('root') ? 'that someone verified answers for this agent' : 'a badge number'];
+  if (!card.aaf_id) return `${card.place} learned nothing about who is behind it.`;
+  const parts = [kinds.has('accountable') ? 'that someone verified answers for this agent' : 'an ID'];
+  // Each of these is a claim the place asked for; a place that asks nothing learns only the line above.
+  if (kinds.has('principal')) parts.push('whether a person or a business');
+  if (kinds.has('assurance')) parts.push('how well they were verified');
+  if (kinds.has('chain')) parts.push('how many agents are in its chain');
   if (kinds.has('authority')) parts.push('what it may do here');
   if (kinds.has('attribute')) parts.push('a verified fact it asked for');
   if (kinds.has('provenance')) parts.push('its bill of materials');
@@ -42,7 +53,11 @@ function refusedWhy(card) {
   if (units) return { headline: 'Refused: bigger than its grant allows', why: `The grant covers up to ${units[2]} GPU-hours, and this asks for ${units[1]}.` };
   if (/no authorization presented/.test(r)) return { headline: 'Refused: no permission on file', why: 'The agent has a badge, but nobody has said what it may do.' };
   if (/no disclosed permission covers|prohibited/.test(r)) return { headline: 'Refused: it has no permission for this', why: 'Its grant covers other things, not this.' };
-  if (/grant is (revoked|suspended)/.test(r)) return { headline: 'Refused: the grant was withdrawn', why: 'The record keeper says the grant behind this agent is no longer in force.' };
+  if (/grant is (revoked|suspended)/.test(r)) return { headline: 'Refused: the grant was withdrawn', why: 'The records service says the grant behind this agent is no longer in force.' };
+  // A claim the agent showed because the place asked, and it isn't one the place accepts.
+  if (/accepts only (.+) principals/.test(r)) return { headline: 'Refused: not the kind of principal it serves', why: `This is only for agents a ${r.match(/accepts only (.+) principals/)[1]} answers for.` };
+  if (/assurance level (\S+) is not accepted|identity proofing under/.test(r)) return { headline: 'Refused: not verified strongly enough', why: `Its principal was verified, but not to a level this place accepts. ${cap(r)}.` };
+  if (/chains longer than (\d+)/.test(r)) return { headline: 'Refused: too many agents in the chain', why: `This place takes agents at most ${r.match(/chains longer than (\d+)/)[1]} deep from the principal who registered them.` };
   if (/expired/.test(r)) return { headline: 'Refused: something has expired', why: cap(r) };
   return null;
 }
@@ -71,18 +86,22 @@ export function explain(card) {
       return { tone: 'ask', headline: `${place} asks for ${listOf(missing.length ? missing : ask.want.map((w) => w.label))}`, why: `For ${ask.tier}, ${because}. You decide: your agent shows only that, and only to ${place}.` };
     }
     if (card.approval_request) return { tone: 'warn', headline: "Waiting for the owner's OK", why: "The lock sent a request to the owner's phone. It shows who answers for the agent in general terms, never a name." };
+    if (card.missing_claims?.length) {
+      const words = card.missing_claims.map((c) => CLAIM_WORDS[c] ?? c.replace(/_/g, ' '));
+      return { tone: 'ask', headline: `${place} asks to see ${listOf(words)}`, why: `A badge on its own says only that someone its directory verified answers for the agent. For ${card.tier?.label ?? 'this'}, ${place} wants to see more, and the agent didn't show it. An agent shows a claim like this only when a place asks.` };
+    }
     return { tone: 'warn', headline: 'Needs more', why: cap(card.reasons?.[0] ?? '') };
   }
 
-  if (card.decision === 'deferred') return { tone: 'warn', headline: "On hold: the registry can't be reached", why: `${place} couldn't check the badge's status, so it waits instead of guessing. That isn't a sign anyone did anything wrong.` };
+  if (card.decision === 'deferred') return { tone: 'warn', headline: "On hold: the directory can't be reached", why: `${place} couldn't check the badge's status, so it waits instead of guessing. That isn't a sign anyone did anything wrong.` };
 
   // Refusals
   if (card.decision === 'refused' && /registration is expired/.test(card.reasons?.[0] ?? '')) {
-    return { tone: 'bad', headline: 'Refused: this agent has lapsed', why: 'It was registered for a short time only, and that time is up. Its registry no longer issues it badges.' };
+    return { tone: 'bad', headline: 'Refused: this agent has lapsed', why: 'It was registered for a short time only, and that time is up. Its directory no longer issues it badges.' };
   }
   if (card.decision === 'refused' && /registration is (revoked|suspended)/.test(card.reasons?.[0] ?? '')) {
     const suspended = /suspended/.test(card.reasons[0]);
-    return { tone: 'bad', headline: suspended ? 'Refused: this agent is suspended' : 'Refused: this agent has been revoked', why: suspended ? "Its principal's verification was withdrawn, so its registry won't issue it a badge for anywhere." : "Its registry won't issue it a badge any more, so it can't show one anywhere." };
+    return { tone: 'bad', headline: suspended ? 'Refused: this agent is suspended' : 'Refused: this agent has been revoked', why: suspended ? "Its principal's verification was withdrawn, so its directory won't issue it a badge for anywhere." : "Its directory won't issue it a badge any more, so it can't show one anywhere." };
   }
   if (card.legacy === 'block') return { tone: 'bad', headline: 'Turned away: no agents served', why: `${place} blocks anything that says it is an agent. An agent that hid its badge would have walked in: blocking stops only the honest ones.` };
   const r = card.reasons?.[0] ?? '';
@@ -96,12 +115,12 @@ export function explain(card) {
     case C.UNLABELED:
       return { tone: 'bad', headline: 'Refused: no badge shown', why: `${place} only deals with agents someone answers for, and this request showed no badge.` };
     case C.REVOKED:
-      return { tone: 'bad', headline: 'Refused: this agent has been revoked', why: "Its registry says the registration is no longer active, so every place that checks refuses it at once." };
+      return { tone: 'bad', headline: 'Refused: this agent has been revoked', why: "Its directory says the registration is no longer active, so every place that checks refuses it at once." };
     case C.UNSUPPORTED: {
-      if (/self-asserted/.test(r)) return { tone: 'bad', headline: 'Refused: saying so is not proof', why: '"Someone stands behind me" means nothing until a registry vouches for it.' };
+      if (/self-asserted/.test(r)) return { tone: 'bad', headline: 'Refused: saying so is not proof', why: '"Someone stands behind me" means nothing until a directory vouches for it.' };
       if (/issued for someone else/.test(r)) return { tone: 'bad', headline: 'Refused: badge made out to another place', why: 'Every badge works at one place only. This one proves nothing here.' };
-      if (card.otherFederation) return { tone: 'bad', headline: 'Refused: a badge from a federation it doesn’t trust', why: `This badge comes from ${card.otherFederation.registry}, in ${card.otherFederation.name}. ${place} hasn't chosen to trust that federation, so for ${place} no registry it trusts vouches for this agent.` };
-      if (/not a member of the federation|could not be verified/.test(r)) return { tone: 'bad', headline: 'Refused: no registry it trusts signed this badge', why: card.policy?.includes(' only') ? `${place} takes badges from some registries only.` : 'The signature doesn\'t lead back to any registry in the federation.' };
+      if (card.otherFederation) return { tone: 'bad', headline: 'Refused: a badge from a federation it doesn’t trust', why: `This badge comes from ${card.otherFederation.directory}, in ${card.otherFederation.name}. ${place} hasn't chosen to trust that federation, so for ${place} no directory it trusts vouches for this agent.` };
+      if (/not a member of the federation|could not be verified/.test(r)) return { tone: 'bad', headline: 'Refused: no directory it trusts signed this badge', why: card.policy?.includes(' only') ? `${place} takes badges from some directories only.` : 'The signature doesn\'t lead back to any directory in the federation.' };
       if (/does not hold the credential's key/.test(r)) return { tone: 'bad', headline: 'Refused: a copied badge', why: 'The request wasn\'t signed by the key the badge is bound to. A copy of a badge is useless without it.' };
       return { tone: 'bad', headline: 'Refused: the badge proves nothing here', why: cap(r) };
     }
@@ -110,7 +129,7 @@ export function explain(card) {
   }
   const authority = refusedWhy(card);
   if (authority) return { tone: 'bad', ...authority };
-  if (/not established/.test(r) || /not trusted|accept/.test(r)) return { tone: 'bad', headline: 'Refused: not a registry this place accepts', why: cap(r) };
+  if (/not established/.test(r) || /not trusted|accept/.test(r)) return { tone: 'bad', headline: 'Refused: not a directory this place accepts', why: cap(r) };
   return { tone: 'bad', headline: 'Refused', why: cap(r || card.classification || '') };
 }
 
@@ -141,8 +160,10 @@ export function eventFromCard(card, by = {}) {
   if (plain && !card.headline) Object.assign(card, { headline: plain.headline, why: plain.why, tone: plain.tone });
   return {
     kind: 'check', who: by.id ?? null, actor: card.actor, place: card.place, placeId: card.placeId,
-    decision: card.decision, classification: card.classification, badge: card.ppid ? `…${card.ppid.slice(-6)}` : null,
+    decision: card.decision, classification: card.classification, badge: card.aaf_id ? `…${card.aaf_id.slice(-6)}` : null,
     lane: card.lane ?? null, posing: card.lane === 'people' && card.truth === 'agent' && card.decision === 'allow',
+    // In the Harbor an agent that deals with people must make clear it's an agent (public/laws.js).
+    unlawful: card.lane === 'people' && card.truth === 'agent' && card.decision === 'allow' && card.jurisdiction === 'eu',
     tone: card.decision === 'allow' ? 'ok' : card.decision === 'deny' || card.decision === 'refused' ? 'bad' : 'warn',
     text: `${card.place} → ${card.actor}: ${card.headline ?? card.decision}`, owner: by.owner ?? null, card,
   };

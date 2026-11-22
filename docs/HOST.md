@@ -86,16 +86,16 @@ A suggestion, for about an hour:
 2. **Half an hour of play.** Everyone plays the day's list. Ask a few people to take roles: a **shopkeeper** decides what their place asks for and sees what each customer proves; the **police** and **the judge** take cases to court; the **town council** makes laws.
 3. **Ten minutes of cues**, from the director (🎬):
    - **Rogue swarm from the Old Mill**: who stops it, and who doesn't?
-   - **Registry A outage (45 s)**: places defer instead of refusing.
-   - **The law**: switch a law on, and watch what places must ask for change, while the registries stay as they are.
+   - **Directory A outage (45 s)**: places defer instead of refusing.
+   - **The law**: switch a law on, and watch what places must ask for change, while the directories stay as they are.
    - **Each place**: change what a place accepts, live.
    - **Presenter view** for the big screen.
 4. **Errand races**, on the notice board in the square: players' agents against each other, within each player's record. Players who connected Claude or Codex can enter theirs.
 5. **Ten minutes to talk it over.** The town ledger (bottom left) and each result card's **Compare** fold are good places to start.
 
-## Teams bringing their own registry or record keeper
+## Teams bringing their own directory or records service
 
-If a team has built a registry, a record keeper or a whole federation, they can bring it: see [Bring your implementation to AgentTown](EVENT.md). It also says what the host has to do: share the trust anchor's key thumbprint (the startup log prints it), and admit services in the **Hall of Registries**, or let the teams do it themselves.
+If a team has built a directory, a records service or a whole federation, they can bring it: see [Bring your implementation to AgentTown](EVENT.md). It also says what the host has to do: share the trust anchor's key thumbprint (the startup log prints it), and admit services in the **Hall of Directories**, or let the teams do it themselves.
 
 ## On a public server
 

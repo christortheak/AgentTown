@@ -85,19 +85,19 @@ const OTHERS = [
 /** The framework's answers, from what this place actually checked and learned. */
 function framework(c) {
   const kinds = new Set((c.plain ?? []).map((x) => x.kind));
-  if (c.legacy || !c.ppid) {
+  if (c.legacy || !c.aaf_id) {
     const why = c.legacy ? `${c.place} doesn't use the framework, so it learned nothing.` : 'No badge was shown, so there is nothing to rely on.';
     return Object.fromEntries(QUESTIONS.map((q) => [q.id, [N, why]]));
   }
   const revoked = c.classification === 'REVOKED';
   return {
-    agent: [Y, 'The badge says an agent is acting, and which registry stands behind it.'],
-    answers: kinds.has('root') ? [Y, kinds.has('identity') ? 'A verified person or organization, named because they agreed.' : 'A verified person or organization. Not who: only the registry knows.'] : [P, 'The badge did not check out here.'],
+    agent: [Y, 'The badge says an agent is acting, and which directory stands behind it.'],
+    answers: kinds.has('accountable') ? [Y, kinds.has('identity') ? 'A verified person or organization, named because they agreed.' : kinds.has('principal') ? 'A verified person or organization, because the place asked which. Not who: only the directory knows.' : 'Someone the directory verified. Not who, and not even whether a person or a business, unless the place asks.'] : [P, 'The badge did not check out here.'],
     may: kinds.has('authority') ? [Y, 'A permission slip covering only this place and this kind of action, with its limits.'] : [N, 'No permission was shown for this.'],
     stop: [Y, revoked ? 'It was stopped: every place that checks now refuses it.' : 'The place checks live status, so a revocation reaches every place at once.'],
-    report: [Y, 'The place can file a report with the registry, which passes it to whoever answers for the agent.'],
-    court: [Y, "A court order makes the registry say who. The lookup goes in the registry's public transparency log."],
-    private: [Y, 'A different badge number at every place, so places can’t link visits.'],
+    report: [Y, 'The place can file a report with the directory, which passes it to whoever answers for the agent.'],
+    court: [Y, "A court order makes the directory say who. The lookup goes in the directory's public transparency log."],
+    private: [Y, 'A different ID at every place (a PPID), or a fresh one every visit (an unlinkable ID), so places can’t link visits.'],
   };
 }
 
