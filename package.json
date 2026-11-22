@@ -1,6 +1,6 @@
 {
   "name": "agenttown",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "AgentTown: a cozy town where you play an accountable agent. Every door, shop and records office is a real relying party in the Accountable Agents Framework reference implementation.",
   "type": "module",
   "private": true,
