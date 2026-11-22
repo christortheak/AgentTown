@@ -13,7 +13,7 @@
     "test": "node --test --test-concurrency=1 \"test/*.test.js\""
   },
   "dependencies": {
-    "aaf-reference": "github:christortheak/accountable-agents-sample-implementation#20d2c42"
+    "aaf-reference": "github:christortheak/accountable-agents-sample-implementation#v0.4.0"
   },
   "license": "Apache-2.0",
   "bin": {

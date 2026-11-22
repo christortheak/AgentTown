@@ -11,7 +11,7 @@ About half an hour, start to finish. You play a resident of a small town: you sh
 
 ## 1. Get the code
 
-AgentTown runs on the framework's sample implementation. `npm install` fetches it from GitHub, at the commit AgentTown names, so there's nothing else to clone.
+AgentTown runs on the framework's sample implementation. `npm install` fetches it from GitHub, at the version AgentTown names, so there's nothing else to clone.
 
 ```bash
 git clone https://github.com/christortheak/AgentTown.git

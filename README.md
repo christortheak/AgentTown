@@ -1,6 +1,6 @@
 # AgentTown
 
-A cozy town where you play an accountable agent. It is a launch demo for the **Accountable Agents Framework (AAF)**, set out in the paper *The Accountable Agents Framework (AAF): A Blueprint for AI Agent IDs*. It is a separate project from the framework's [sample implementation](https://github.com/christortheak/accountable-agents-sample-implementation), which it uses as a dependency, pinned to one commit. AgentTown's version follows the framework's: AgentTown 0.4 runs on the sample implementation's profile 0.4.
+A cozy town where you play an accountable agent. It is a launch demo for the **Accountable Agents Framework (AAF)**, set out in the paper *The Accountable Agents Framework (AAF): A Blueprint for AI Agent IDs*. It is a separate project from the framework's [sample implementation](https://github.com/christortheak/accountable-agents-sample-implementation), which it uses as a dependency, pinned to one tagged version (`v0.4.0`). AgentTown's version follows the framework's: AgentTown 0.4 runs on the sample implementation's profile 0.4.
 
 The town uses the paper's words wherever it explains the framework: **directories** verify principals and issue **IDs**; an agent's **badge** is its **presentation**, an ID plus whatever **claims** it shows; each place is a **counterparty**; and a court has a directory trace an ID to its principal (**attribution**, through **identity escrow**). An ID is a **PPID**, the same at every visit to one place, or **unlinkable**, new every time. A directory can be several firms working together: here Town Hall issues the IDs, VerityCheck verifies people, and **records services** at the Records Office keep the directory's records. Since profile 0.4 the sample implementation uses these words in its code and on the wire, and so does the town's code. In the game, **Actions → The framework's words** lists them all.
 
@@ -20,7 +20,7 @@ What the town is built to show: the framework is neutral infrastructure for one 
 
 ## Run it
 
-Needs Node.js 22 or later and git ([the step-by-step guide](docs/TRY-IT.md) has the details). `npm install` fetches the framework's sample implementation from GitHub at the commit `package.json` names; the repository's `.npmrc` lets npm 12 and later install that one dependency from git.
+Needs Node.js 22 or later and git ([the step-by-step guide](docs/TRY-IT.md) has the details). `npm install` fetches the framework's sample implementation from GitHub at the version `package.json` names (a tag; `package-lock.json` records its commit); the repository's `.npmrc` lets npm 12 and later install that one dependency from git.
 
 ```bash
 git clone https://github.com/christortheak/AgentTown.git

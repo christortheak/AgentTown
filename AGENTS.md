@@ -6,7 +6,7 @@ AgentTown is the launch demo for the Accountable Agents Framework (AAF), as the 
 
 ## Run and test
 
-Needs Node.js 22 or later and git. `package.json` depends on the framework's [sample implementation](https://github.com/christortheak/accountable-agents-sample-implementation) at one commit, under its package name `aaf-reference`, and `npm install` fetches it from GitHub. npm 12 and later fetch nothing from git by default; `.npmrc` (`allow-git=root`) lets them fetch this one dependency.
+Needs Node.js 22 or later and git. `package.json` depends on the framework's [sample implementation](https://github.com/christortheak/accountable-agents-sample-implementation) at one tagged version, under its package name `aaf-reference`, and `npm install` fetches it from GitHub. npm 12 and later fetch nothing from git by default; `.npmrc` (`allow-git=root`) lets them fetch this one dependency.
 
 ```bash
 npm install
@@ -22,7 +22,7 @@ npm test         # the whole suite, one test file at a time; a few minutes
 
 ## The framework
 
-- **The framework is pinned.** `package.json` names one commit of the sample implementation (profile 0.4, `20d2c42`), and AgentTown's own version matches the profile it runs on (0.4.0, tagged `v0.4.0`); move both together. To move to a newer one, change the commit there and run `npm install github:christortheak/accountable-agents-sample-implementation#<commit>` (npm 12 won't replace an installed git dependency in place: if it refuses, `npm uninstall aaf-reference` first, then that), and run the tests; then bring the town's code and text in line with what changed.
+- **The framework is pinned.** `package.json` names one tagged version of the sample implementation (`v0.4.0`, profile 0.4), and `package-lock.json` records its commit (`20d2c42`). AgentTown's own version matches the profile it runs on (0.4.0, tagged `v0.4.0` here too); move both together. To move to a newer one, run `npm install github:christortheak/accountable-agents-sample-implementation#<tag>` (npm 12 won't replace an installed git dependency in place: if it refuses, `npm uninstall aaf-reference` first, then that), and run the tests; then bring the town's code and text in line with what changed.
 - **Don't edit the framework from here**, in `node_modules/aaf-reference` or anywhere else. If the town needs something from it, prototype it in `src/proposed/` and write it up in [docs/PROPOSED.md](docs/PROPOSED.md).
 - **Check a fresh clone too.** Before telling anyone the guides work, clone this repository into a scratch folder, `npm install` and run the tests there, as a newcomer would ([docs/TRY-IT.md](docs/TRY-IT.md)).
 - **Words.** The town uses the paper's terms wherever it explains the framework, to players or in the guides: directory, records service (a part of a directory), counterparty, ID, PPID (only the kind that stays the same at one place), unlinkable ID, presentation and claims, attribution and identity escrow, designated authority, delegating agent. A badge is the town's own word for an agent's presentation. Code uses the same words, as the framework's does since profile 0.4 (`directory`, `aaf_id`, `counterparty`, `rs`, `trace`); never `registry`. WebAuthn's own *counterparty* (`rpId`) keeps its name. The town's own directories have ids and names in the paper's terms (`src/federation.js`). **Actions → The framework's words** is the list players see; keep it, `src/guide.js` and the README in step.

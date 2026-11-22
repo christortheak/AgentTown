@@ -1,6 +1,6 @@
 # Proposed extensions, prototyped in AgentTown
 
-Status: a prototype for discussion. Nothing here is part of the framework's sample implementation (profile 0.4, which the town runs on, at `20d2c42`); the words follow the paper's 21 November 2026 draft, as the implementation's do since 0.4; it lives in `src/proposed/` and is wired into the game so it can be tried. If it holds up, it would be proposed as a change to the profile and the reference implementation.
+Status: a prototype for discussion. Nothing here is part of the framework's sample implementation (profile 0.4, which the town runs on, at `v0.4.0`); the words follow the paper's 21 November 2026 draft, as the implementation's do since 0.4; it lives in `src/proposed/` and is wired into the game so it can be tried. If it holds up, it would be proposed as a change to the profile and the reference implementation.
 
 The framework's central claim is that a counterparty can ask for information and the other side can decide whether to provide it, reliably. AgentTown prototypes four things that make that loop richer, one that makes its limits visible, and one about who gets to run the infrastructure at all (§6).
 
@@ -81,7 +81,7 @@ The game knows who was really a person and who wasn't, and counts agents taken f
 
 The paper counts it among the framework's advantages that "both principals and counterparties can choose which directories to trust", and that directories may be run by anyone from identity providers to public agencies. Anyone may run a directory, and each counterparty decides which ones to accept.
 
-The sample implementation assumes one trust anchor (as of profile 0.4, `20d2c42`; its spec lists this among its limits, §16 item 3):
+The sample implementation assumes one trust anchor (as of profile 0.4, `v0.4.0`; its spec lists this among its limits, §16 item 3):
 
 - every party is configured with exactly one anchor (`trust-anchor.json`; `aaf init <url> --pin`) and builds one view of one federation;
 - credential types and trust-mark types are named after that anchor (`<anchor>/vct/accountability/1`, `<anchor>/trust-marks/record-keeper/<role>`), and directories, records services and counterparties check those names against their own anchor;
