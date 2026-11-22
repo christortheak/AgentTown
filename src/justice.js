@@ -51,7 +51,10 @@ export const CASES_KEPT = 300;
 const PETITIONS_PER_CASE = 3;
 const NO_HARM = 'No harm on record. A court makes a directory name someone only when there is harm to answer for: a place’s report, or someone trying your door. Checking a badge, or not liking a visit, is not enough.';
 
-/** remedies: what a court can have a place do besides trace and judge (cancelTickets(aaf_ids): the ferry's extra seats). */
+/**
+ * remedies: what a court can have the town do besides trace and judge: cancelTickets(aaf_ids), the ferry's extra
+ * seats; revoked(registration ids), so the town's own agents under them stop where they are.
+ */
 export function createJustice({ world, emit, people = () => ({ police: 0, judge: 0 }), timeScale = 1, casesKept = CASES_KEPT, remedies = {} }) {
   const cases = [];
   const petitions = [];
@@ -286,6 +289,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
   async function remove(c, judge) {
     let cascaded = 0;
     const done = [];
+    const revoked = [];
     const short = [];
     if (!(c.findings.tops ?? []).some((t) => t.status === 'active')) throw new HttpError(409, 'already_revoked', 'Those agents are already revoked.');
     for (const top of (c.findings.tops ?? [c.findings.chain.at(-1)]).filter((t) => t.status === 'active')) {
@@ -297,6 +301,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
         top.status = 'revoked';
         cascaded += res.cascades_to ?? 0;
         done.push(top.label);
+        revoked.push(top.registration_id);
         continue;
       }
       const ended = [];
@@ -305,6 +310,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
         const res = await world.court.revoke(directory, { order, aaf_id: b.aaf_id, sealedRef: b.sealed_ref ?? undefined });
         if (res.already) continue;
         ended.push(res.registration_id);
+        revoked.push(res.registration_id);
         cascaded += res.cascades_to ?? 0;
         if (res.registration_id === top.registration_id) top.status = 'revoked';
       }
@@ -312,6 +318,7 @@ export function createJustice({ world, emit, people = () => ({ police: 0, judge:
       done.push(top.status === 'revoked' ? top.label : `${ended.length} agent${ended.length === 1 ? '' : 's'} under ${top.label}`);
       if (top.status !== 'revoked') short.push(`${top.label}, above them, is still registered: an order names a badge, and ends only the agent behind it`);
     }
+    remedies.revoked?.(revoked);
     c.status = 'agents deleted';
     c.outcome.push(`agents deleted by order of ${judge}`);
     const { name, note } = published(c);

@@ -454,7 +454,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
       }
       // Each one may trade a little: together they can move a market.
       await gloam.hub.delegate(child, { permissions: [{ action: 'trading.order', constraints: { max_amount: money(150) } }], validForDays: 1 }).catch(() => {});
-      const npc = spawn({ id: `runner-${i}-${Date.now()}`, name: `runner-${i}`, kind: 'swarm', look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `runner-${i}` });
+      const npc = spawn({ id: `runner-${i}-${Date.now()}`, name: `runner-${i}`, kind: 'swarm', under: gloam.hub.registrationId, look: LOOKS.swarm, agent: child, pos: { x: mill.x + between(-20, 20), y: mill.y + between(0, 16) }, speed: 105, wallet: `runner-${i}` });
       x402.wallet(npc.wallet, 20);
       children.push(npc);
     }
@@ -565,7 +565,7 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
           continue;
         }
         await hub.delegate(child, { permissions: [{ action: 'commerce.purchase', constraints: { max_amount: money(12), categories: ['travel'] } }], validForDays: 1 }).catch(() => {});
-        const npc = spawn({ id: `seat-${i}-${Date.now()}`, name: `seat-${i}`, kind: 'tout', rogue: true, look: LOOKS.tout, agent: child, pos: { x: quay.x + between(-24, 24), y: quay.y + between(-6, 10) }, speed: 115, wallet: `seat-${i}` });
+        const npc = spawn({ id: `seat-${i}-${Date.now()}`, name: `seat-${i}`, kind: 'tout', rogue: true, under: hub.registrationId, look: LOOKS.tout, agent: child, pos: { x: quay.x + between(-24, 24), y: quay.y + between(-6, 10) }, speed: 115, wallet: `seat-${i}` });
         x402.wallet(npc.wallet, 30);
         crew.push(npc);
       }
@@ -642,6 +642,12 @@ export function createSim({ world, places, emit, worldid, x402, origin, keys, ti
 
   return {
     map, npcs, snapshot, swarm, scalpers, newcomer, addHelper, errand, act, byFor, visitorFrom, guest,
+    /** A court revoked these registrations: the town's agents that hold them, or were registered under them, stop. */
+    revoked(ids) {
+      for (const npc of npcs.values()) {
+        if (npc.status === 'active' && npc.agent && (ids.includes(npc.agent.registrationId) || ids.includes(npc.under))) npc.status = 'revoked';
+      }
+    },
     /** Walk someone to a place (by id) or a point, on the shared routes; they stay there. */
     walkTo: (npc, target) => {
       npc.follow = false;

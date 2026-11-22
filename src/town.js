@@ -67,7 +67,7 @@ export async function createTown({ origin, portOffset = 7000, config = loadConfi
 
   let sessions = null;
   // What a court can have a place do, besides trace and judge: the ferry cancels seats one principal bought over its limit.
-  const remedies = { cancelTickets: (aaf_ids) => places.cancelTickets(aaf_ids) };
+  const remedies = { cancelTickets: (aaf_ids) => places.cancelTickets(aaf_ids), revoked: (ids) => sim?.revoked(ids) };
   const justice = createJustice({ world, emit, people: () => sessions?.counts() ?? { police: 0, judge: 0 }, timeScale, remedies });
   const worldid = createWorldId();
   const x402 = createX402();
